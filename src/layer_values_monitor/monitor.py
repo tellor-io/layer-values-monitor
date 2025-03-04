@@ -1,3 +1,5 @@
+"""Values monitor."""
+
 import asyncio
 import json
 import logging
@@ -5,6 +7,17 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from layer_values_monitor.discord import generic_alert
+from layer_values_monitor.evm_call import get_evm_call_trusted_value
+from layer_values_monitor.logger import logger
+from layer_values_monitor.propose_dispute import (
+    DisputeCategory,
+    determine_dispute_category,
+    determine_dispute_fee,
+    propose_msg,
+)
+from layer_values_monitor.types_metric import GlobalMetric
 
 import pandas as pd
 import websockets
@@ -17,17 +30,6 @@ from telliot_feeds.queries.abi_query import AbiQuery
 from telliot_feeds.queries.json_query import JsonQuery
 from telliot_feeds.queries.query_catalog import query_catalog
 
-from layer_values_monitor.discord import generic_alert, send_discord_msg
-from layer_values_monitor.evm_call import get_evm_call_trusted_value
-from layer_values_monitor.logger import logger
-from layer_values_monitor.propose_dispute import (
-    DisputeCategory,
-    determine_dispute_category,
-    determine_dispute_fee,
-    propose_msg,
-)
-from layer_values_monitor.types_metric import GlobalMetric
-
 for logger_name in logging.root.manager.loggerDict:
     if logger_name.startswith("telliot_feeds"):
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
@@ -39,8 +41,11 @@ log_file = "table.csv"
 Metric = Literal["percentage", "range", "equality"]
 DENOM = "loya"
 
+
 @dataclass
 class NewReport:
+    """Store information about a newly submitted report."""
+
     query_type: str
     query_data: str
     query_id: str
@@ -56,14 +61,19 @@ class NewReport:
 
 @dataclass
 class Msg:
+    """Represent a dispute message."""
+
     reporter: str
     query_id: str
     meta_id: str
     category: DisputeCategory
     fee: str
 
+
 @dataclass
 class Metrics:
+    """Define threshold metrics for setting user configured metrics."""
+
     metric: str
     alert_threshold: float
     warning_threshold: float
@@ -71,7 +81,8 @@ class Metrics:
     major_threshold: float
 
 
-async def listen_to_new_report_events(uri: str, q: asyncio.Queue):
+async def listen_to_new_report_events(uri: str, q: asyncio.Queue) -> None:
+    """Connect to a layer websocket and fetch new reports and add them to reports queue for monitoring."""
     print("Connecting to WebSocket...")
     query = json.dumps(
         {
@@ -98,7 +109,7 @@ async def inspect_reports(
     reports_q: asyncio.Queue,
     disputes_q: asyncio.Queue,
     config: dict[str, Any],
-    max_iterations: float = float('inf'),  # use iterations var for testing purposes instead of using a while loop
+    max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
     global_percentage_alert_threshold: float | None = None,
     global_percentage_warning_threshold: float | None = None,
     global_percentage_minor_threshold: float | None = None,
@@ -110,10 +121,11 @@ async def inspect_reports(
     global_equality_warning_threshold: float | None = None,
     global_equality_minor_threshold: float | None = None,
     global_equality_major_threshold: float | None = None,
-):
+) -> None:
+    """Inspect reports in reports queue and process to see if they should disputed."""
     print("Inspecting reports...")
     iterations = 0
-    
+
     while iterations < max_iterations:
         iterations += 1
         display = {}
@@ -128,7 +140,7 @@ async def inspect_reports(
         events = result.get("events")
         if events is None:
             continue
-        
+
         try:
             report = NewReport(
                 query_type=events["new_report.query_type"][0],
@@ -160,7 +172,6 @@ async def inspect_reports(
         # check if this query has a custom config
         _config: dict[str, str] = config.get(report.query_id.lower())
 
-
         if _config is None:
             # use globals if no specific config for query id
             metrics = get_metric(
@@ -183,17 +194,22 @@ async def inspect_reports(
                 continue
         else:
             metrics = Metrics(
-                metric = _config.get("metric"),
-                alert_threshold = _config.get("alert_threshold"),
-                warning_threshold = _config.get("warning_threshold"),
-                minor_threshold = _config.get("minor_threshold"),
-                major_threshold = _config.get("major_threshold"),
+                metric=_config.get("metric"),
+                alert_threshold=_config.get("alert_threshold"),
+                warning_threshold=_config.get("warning_threshold"),
+                minor_threshold=_config.get("minor_threshold"),
+                major_threshold=_config.get("major_threshold"),
             )
-          
-            if any([
-                not metrics.metric, not metrics.alert_threshold, 
-                not metrics.warning_threshold, not metrics.minor_threshold, not metrics.major_threshold,
-            ]):
+
+            if any(
+                [
+                    not metrics.metric,
+                    not metrics.alert_threshold,
+                    not metrics.warning_threshold,
+                    not metrics.minor_threshold,
+                    not metrics.major_threshold,
+                ]
+            ):
                 logger.error(f"config for {report.query_id} not set properly")
                 continue
 
@@ -231,7 +247,7 @@ async def inspect_reports(
         if alertable:
             msg = f"found an alertable value. trusted value: {trusted_value}, reported value: {reported_value}"
             logger.info(msg)
-            generic_alert(msg+f" tx hash: {report.tx_hash}")
+            generic_alert(msg + f" tx hash: {report.tx_hash}")
 
         display["DISPUTABLE"] = disputable
 
@@ -239,8 +255,12 @@ async def inspect_reports(
             logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
             # if dispute add message to dispute queue
             category = determine_dispute_category(
-                category_thresholds={"major": metrics.major_threshold, "minor": metrics.minor_threshold, "warning": metrics.warning_threshold},
-                percent_diff=diff
+                category_thresholds={
+                    "major": metrics.major_threshold,
+                    "minor": metrics.minor_threshold,
+                    "warning": metrics.warning_threshold,
+                },
+                percent_diff=diff,
             )
             if category is not None:
                 fee = determine_dispute_fee(category, int(report.power))
@@ -250,6 +270,7 @@ async def inspect_reports(
 
 
 def get_query_from_data(query_data: bytes) -> AbiQuery | JsonQuery | None:
+    """Get query give query data from telliot-feeds."""
     for q_type in (JsonQuery, AbiQuery):
         try:
             return q_type.get_query_from_data(query_data)
@@ -259,7 +280,7 @@ def get_query_from_data(query_data: bytes) -> AbiQuery | JsonQuery | None:
 
 
 def get_source_from_data(query_data: bytes) -> DataSource | None:
-    """Recreate data source using query type thats decoded from query data field"""
+    """Recreate data source using query type thats decoded from query data field."""
     try:
         query_type, encoded_param_values = decode(["string", "bytes"], query_data)
     except OverflowError:
@@ -290,29 +311,25 @@ def get_source_from_data(query_data: bytes) -> DataSource | None:
 
 
 def get_feed_from_catalog(tag: str) -> DataFeed | None:
+    """Get feed from telliot-feeds mapping if exists."""
     return CATALOG_FEEDS.get(tag)
 
 
 def is_disputable(
     metric: str, alert_threshold: float, dispute_threshold: float, reported_value: Any, trusted_value: Any
 ) -> tuple[bool, bool, float] | tuple[None, None, None]:
+    """Determine if a value is disputable based on comparison with a trusted value using specified metrics and thresholds."""
     if metric.lower() == "percentage":
         percent_diff: float = (reported_value - trusted_value) / trusted_value
         logger.debug(f"percent diff: {percent_diff}, reported value: {reported_value} - trusted value: {trusted_value}")
         if dispute_threshold == 0:
             return float(abs(percent_diff)) >= alert_threshold, False, percent_diff
-        return float(abs(percent_diff)) >= alert_threshold, float(
-            abs(percent_diff)
-        ) >= dispute_threshold, percent_diff
+        return float(abs(percent_diff)) >= alert_threshold, float(abs(percent_diff)) >= dispute_threshold, percent_diff
 
     if metric.lower() == "equality":
-        logger.info(
-            f"checking equality of values, reported value: {reported_value}, trusted value: {trusted_value}"
-        )
+        logger.info(f"checking equality of values, reported value: {reported_value}, trusted value: {trusted_value}")
         # TODO: should this be a string comparison?
-        is_not_equal = remove_0x_prefix(str(reported_value)).lower() != remove_0x_prefix(
-            str(trusted_value).lower()
-        )
+        is_not_equal = remove_0x_prefix(str(reported_value)).lower() != remove_0x_prefix(str(trusted_value).lower())
         if dispute_threshold == 0:
             return is_not_equal, False, float(is_not_equal)
         return is_not_equal, is_not_equal, float(is_not_equal)
@@ -328,19 +345,20 @@ def is_disputable(
 
 
 def get_metric(
-        query_type: str,
-        global_percentage_alert_threshold: float,
-        global_percentage_warning_threshold: float,
-        global_percentage_minor_threshold: float,
-        global_percentage_major_threshold: float,
-        global_range_alert_threshold: float,
-        global_range_warning_threshold: float,
-        global_range_minor_threshold: float,
-        global_range_major_threshold: float,
-        global_equality_warning_threshold: float,
-        global_equality_minor_threshold: float,
-        global_equality_major_threshold: float,
-    ) -> Metrics | None:
+    query_type: str,
+    global_percentage_alert_threshold: float,
+    global_percentage_warning_threshold: float,
+    global_percentage_minor_threshold: float,
+    global_percentage_major_threshold: float,
+    global_range_alert_threshold: float,
+    global_range_warning_threshold: float,
+    global_range_minor_threshold: float,
+    global_range_major_threshold: float,
+    global_equality_warning_threshold: float,
+    global_equality_minor_threshold: float,
+    global_equality_major_threshold: float,
+) -> Metrics | None:
+    """Return Metrics/Thresholds given a query type."""
     try:
         metric = GlobalMetric[query_type.upper()].value
     except KeyError:
@@ -349,19 +367,19 @@ def get_metric(
         return None
     if metric == "percentage":
         return Metrics(
-            metric = metric, 
-            alert_threshold = global_percentage_alert_threshold,
-            warning_threshold=global_percentage_warning_threshold, 
-            minor_threshold=global_percentage_minor_threshold, 
-            major_threshold = global_percentage_major_threshold,
+            metric=metric,
+            alert_threshold=global_percentage_alert_threshold,
+            warning_threshold=global_percentage_warning_threshold,
+            minor_threshold=global_percentage_minor_threshold,
+            major_threshold=global_percentage_major_threshold,
         )
     elif metric == "range":
         return Metrics(
-            metric = metric, 
-            alert_threshold = global_range_alert_threshold,
-            warning_threshold=global_range_warning_threshold, 
-            minor_threshold=global_range_minor_threshold, 
-            major_threshold = global_range_major_threshold,
+            metric=metric,
+            alert_threshold=global_range_alert_threshold,
+            warning_threshold=global_range_warning_threshold,
+            minor_threshold=global_range_minor_threshold,
+            major_threshold=global_range_major_threshold,
         )
     elif metric == "equality":
         return Metrics(
@@ -374,12 +392,14 @@ def get_metric(
 
 
 def remove_0x_prefix(s: str) -> str:
+    """Remove 0x prefix if there from hex string."""
     if s.startswith("0x"):
         return s[2:]
     return s
 
 
-def add_to_table(entry):
+def add_to_table(entry: dict[str, str]) -> None:
+    """Add entry to table and clear old line."""
     global table
     table.append(entry)
     os.system("clear")
@@ -403,15 +423,18 @@ async def process_disputes(
     rpc: str,
     kb: str,
     kdir: str,
-):
+) -> None:
+    """Process dispute messages from queue and submit them to the blockchain."""
     while True:
         dispute: Msg = await disputes_q.get()
         if dispute is None:
             continue
-        logger.info(f"sending a dispute msg to layer:\n \
+        logger.info(
+            f"sending a dispute msg to layer:\n \
                     Reporter: {dispute.reporter}\n \
                     Query ID: {dispute.query_id} \
-                    ")
+                    "
+        )
         tx_hash = propose_msg(
             binary_path=binary_path,
             key_name=key_name,

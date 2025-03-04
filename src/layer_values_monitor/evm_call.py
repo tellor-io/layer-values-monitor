@@ -1,4 +1,9 @@
+"""Trusted value for EVMCall query type."""
+
 import math
+from typing import Any
+
+from layer_values_monitor.logger import logger
 
 from hexbytes import HexBytes
 from telliot_core.apps.telliot_config import TelliotConfig
@@ -7,10 +12,9 @@ from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
 from web3.middleware import geth_poa_middleware
 
-from layer_values_monitor.logger import logger
 
-
-async def get_evm_call_trusted_value(reported_val, feed: DataFeed) -> HexBytes:
+async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed) -> HexBytes:
+    """Get trusted value for EVMCall query type."""
     if not isinstance(reported_val, tuple):
         return True
     block_timestamp = reported_val[1]
@@ -29,16 +33,15 @@ async def get_evm_call_trusted_value(reported_val, feed: DataFeed) -> HexBytes:
     return HexBytes(trusted_val[0])
 
 
-def get_block_number_at_timestamp(chain_id: int, timestamp: int):
+def get_block_number_at_timestamp(chain_id: int, timestamp: int) -> int | None:
+    """Get block number for a given timestamp from the identified rpc."""
     cfg = TelliotConfig()
     cfg.main.chain_id = chain_id
     try:
         endpoint = cfg.get_endpoint()
         endpoint.connect()
     except ValueError as e:
-        logger.error(
-            f"Unable to connect to endpoint on chain_id {cfg.main.chain_id}: {e}"
-        )
+        logger.error(f"Unable to connect to endpoint on chain_id {cfg.main.chain_id}: {e}")
         return None
 
     w3: Web3 = endpoint.web3

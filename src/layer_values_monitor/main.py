@@ -1,12 +1,12 @@
+"""Layer values monitor."""
+
 import argparse
 import asyncio
 import os
 import tomllib
 from functools import wraps
 from pathlib import Path
-
-from dotenv import load_dotenv
-from telliot_core.apps.telliot_config import TelliotConfig
+from typing import Any
 
 from layer_values_monitor.monitor import (
     inspect_reports,
@@ -14,14 +14,19 @@ from layer_values_monitor.monitor import (
     process_disputes,
 )
 
+from dotenv import load_dotenv
+from telliot_core.apps.telliot_config import TelliotConfig
+
 loaded = load_dotenv(override=True)
 if not loaded:
     raise ValueError("Failed to load environment variables")
 
 
-def async_run(f):
+def async_run(f: Any) -> Any:
+    """Wrap an async function to be called synchronously and handle keyboard interrupts."""
+
     @wraps(f)
-    def wrapper(*args, **kwargs):  # type: ignore
+    def wrapper(*args, **kwargs):  # noqa: ANN202
         try:
             return asyncio.run(f(*args, **kwargs))
         except KeyboardInterrupt:
@@ -31,7 +36,8 @@ def async_run(f):
 
 
 @async_run
-async def start():
+async def start() -> None:
+    """Start layer values monitor."""
     uri = os.getenv("URI")
     if uri is None:
         raise ValueError("URI not found in environment variables")
@@ -40,41 +46,21 @@ async def start():
         raise ValueError("CHAIN_ID not found in environment variables")
     parser = argparse.ArgumentParser(description="Start values monitor")
     parser.add_argument("binary_path", type=str, help="Path to the layer binary")
-    parser.add_argument(
-        "key_name", type=str, help="Name of the key to use for transactions"
-    )
+    parser.add_argument("key_name", type=str, help="Name of the key to use for transactions")
     parser.add_argument("keyring_backend", type=str, help="Keyring backend")
     parser.add_argument("keyring_dir", type=str, help="Keyring directory")
-    parser.add_argument(
-        "--use-custom-config", action="store_true", help="Use custom config.toml"
-    )
-    parser.add_argument(
-        "--global-percentage-alert-threshold", type=float, help="Global percent threshold"
-    )
+    parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
+    parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
         "--global-percentage-warning-threshold", type=float, help="Global percentage for a warning dispute cat"
     )
-    parser.add_argument(
-        "--global-percentage-minor-threshold", type=float, help="Global percentage for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-percentage-major-threshold", type=float, help="Global percentage for a major dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-alert-threshold", type=float, help="Global range threshold"
-    )
-    parser.add_argument(
-        "--global-range-warning-threshold", type=float, help="Global range for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-minor-threshold", type=float, help="Global range for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-major-threshold", type=float, help="Global range for a major dispute cat"
-    )
-    parser.add_argument(
-        "--global-equality-threshold", type=bool, help="Global equality threshold"
-    )
+    parser.add_argument("--global-percentage-minor-threshold", type=float, help="Global percentage for a minor dispute cat")
+    parser.add_argument("--global-percentage-major-threshold", type=float, help="Global percentage for a major dispute cat")
+    parser.add_argument("--global-range-alert-threshold", type=float, help="Global range threshold")
+    parser.add_argument("--global-range-warning-threshold", type=float, help="Global range for a warning dispute cat")
+    parser.add_argument("--global-range-minor-threshold", type=float, help="Global range for a minor dispute cat")
+    parser.add_argument("--global-range-major-threshold", type=float, help="Global range for a major dispute cat")
+    parser.add_argument("--global-equality-threshold", type=bool, help="Global equality threshold")
     args = parser.parse_args()
 
     if args.use_custom_config:
@@ -90,16 +76,18 @@ async def start():
         global_equality_minor_threshold = None
         global_equality_major_threshold = None
     else:
-        if any([
-            not args.global_percentage_alert_threshold, 
-            not args.global_range_alert_threshold,
-            not args.global_percentage_warning_threshold,
-            not args.global_percentage_minor_threshold,
-            not args.global_percentage_major_threshold,
-            not args.global_range_warning_threshold,
-            not args.global_range_minor_threshold,
-            not args.global_range_major_threshold,
-        ]):
+        if any(
+            [
+                not args.global_percentage_alert_threshold,
+                not args.global_range_alert_threshold,
+                not args.global_percentage_warning_threshold,
+                not args.global_percentage_minor_threshold,
+                not args.global_percentage_major_threshold,
+                not args.global_range_warning_threshold,
+                not args.global_range_minor_threshold,
+                not args.global_range_major_threshold,
+            ]
+        ):
             raise ValueError("Global flags required if not using custom config")
 
         global_percentage_alert_threshold = args.global_percentage_alert_threshold
@@ -156,7 +144,8 @@ async def start():
         raise
 
 
-def load_config():
+def load_config() -> dict[str, Any]:
+    """Load config.toml."""
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     with open(config_path, "rb") as f:
         data = tomllib.load(f)

@@ -1,3 +1,5 @@
+"""Propose dispute."""
+
 import json
 import subprocess
 from typing import Literal
@@ -6,10 +8,22 @@ from layer_values_monitor.logger import logger
 
 DisputeCategory = Literal["warning", "minor", "major"]
 
+
 def propose_msg(
-    binary_path, reporter, query_id, meta_id, dispute_category: DisputeCategory,
-    fee: str, key_name, chain_id, rpc, kb, kdir: str, payfrom_bond: bool = False,
+    binary_path: str,
+    reporter: str,
+    query_id: str,
+    meta_id: str,
+    dispute_category: DisputeCategory,
+    fee: str,
+    key_name: str,
+    chain_id: str,
+    rpc: str,
+    kb: str,
+    kdir: str,
+    payfrom_bond: bool = False,
 ) -> str | None:
+    """Execute propose-dispute message using layer's binary."""
     cmd = [
         binary_path,
         "tx",
@@ -49,9 +63,9 @@ def propose_msg(
 def determine_dispute_category(
     diff: float,
     # should be already manually sorted
-    category_thresholds: dict[DisputeCategory, float]
+    category_thresholds: dict[DisputeCategory, float],
 ) -> DisputeCategory | None:
-    
+    """Determine dispute category based on difference value and category thresholds."""
     # Return the most severe category whose threshold is met
     for category, threshold in category_thresholds:
         if diff >= threshold:
@@ -59,10 +73,12 @@ def determine_dispute_category(
 
     return None
 
+
 def determine_dispute_fee(
-        category: DisputeCategory,
-        reporter_power: int,
-):
+    category: DisputeCategory,
+    reporter_power: int,
+) -> int:
+    """Calculate dispute fee based on category and reporter power."""
     if category == "warning":
         percentage = 0.01
     elif category == "minor":
@@ -70,4 +86,4 @@ def determine_dispute_fee(
     else:
         percentage = 1
 
-    return int((reporter_power * 1_000_000) * percentage )
+    return int((reporter_power * 1_000_000) * percentage)

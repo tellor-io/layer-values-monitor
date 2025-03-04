@@ -1,7 +1,6 @@
 """Send messages using Discord."""
 
 import os
-from typing import Any
 
 import click
 from discordwebhook import Discord
@@ -17,18 +16,18 @@ def get_alert_bot_1() -> Discord:
     """Read the Discord webhook url from the environment."""
     DISCORD_WEBHOOK_URL_1 = os.getenv("DISCORD_WEBHOOK_URL_1")
     if DISCORD_WEBHOOK_URL_1 is None:
-        raise Exception(
-            "At least one DISCORD_WEBHOOK_URL is required. See docs or try source 'vars.sh'."
-        )
+        raise Exception("At least one DISCORD_WEBHOOK_URL is required.")
     alert_bot_1 = Discord(url=DISCORD_WEBHOOK_URL_1)
     return alert_bot_1
 
 
 def get_alert_bot_2() -> Discord:
+    """Read the Discord webhook url from the environment."""
     return Discord(url=os.getenv("DISCORD_WEBHOOK_URL_2"))
 
 
 def get_alert_bot_3() -> Discord:
+    """Read the Discord webhook url from the environment."""
     return Discord(url=os.getenv("DISCORD_WEBHOOK_URL_3"))
 
 

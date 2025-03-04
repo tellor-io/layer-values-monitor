@@ -31,6 +31,10 @@ allow-direct-references = true
 # Target Python version
 target-version = "py312"
 
+# Line length
+line-length = 125
+
+[tool.ruff.lint]
 # Enable specific linting rules
 select = [
     "E",    # pycodestyle errors
@@ -43,15 +47,22 @@ select = [
     "D",    # pydocstyle
     "C4",   # flake8-comprehensions
 ]
-
+per-file-ignores = { "tests/*" = ["ANN", "D"] }
 # Ignore specific rules
-ignore = []
-
-# Line length
-line-length = 88
+ignore = [
+    "D203",
+    "D213",
+    "ANN401",
+    "N806",
+    "ANN002",
+    "ANN003"
+]
 
 [dependency-groups]
 dev = [
     "pytest-asyncio>=0.25.3",
     "pytest>=8.3.5",
 ]
+[tool.ruff.lint.isort]
+relative-imports-order = "closest-to-furthest"
+section-order = ["future", "standard-library", "first-party", "local-folder", "third-party"]
