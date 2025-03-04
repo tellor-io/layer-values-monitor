@@ -423,6 +423,7 @@ async def process_disputes(
     rpc: str,
     kb: str,
     kdir: str,
+    payfrom_bond: bool,
 ) -> None:
     """Process dispute messages from queue and submit them to the blockchain."""
     while True:
@@ -447,6 +448,6 @@ async def process_disputes(
             meta_id=dispute.meta_id,
             dispute_category=dispute.category,
             fee=dispute.fee,
-            # payfrom_bond=
+            payfrom_bond=payfrom_bond,
         )
         print("tx hash: ", tx_hash)

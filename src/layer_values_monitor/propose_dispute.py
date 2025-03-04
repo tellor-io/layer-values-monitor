@@ -21,7 +21,7 @@ def propose_msg(
     rpc: str,
     kb: str,
     kdir: str,
-    payfrom_bond: bool = False,
+    payfrom_bond: bool,
 ) -> str | None:
     """Execute propose-dispute message using layer's binary."""
     cmd = [

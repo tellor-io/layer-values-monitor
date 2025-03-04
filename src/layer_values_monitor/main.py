@@ -49,6 +49,7 @@ async def start() -> None:
     parser.add_argument("key_name", type=str, help="Name of the key to use for transactions")
     parser.add_argument("keyring_backend", type=str, help="Keyring backend")
     parser.add_argument("keyring_dir", type=str, help="Keyring directory")
+    parser.add_argument("payfrom_bond", type=bool, help="Pay dispute fee from bond")
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
     parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
@@ -137,6 +138,7 @@ async def start() -> None:
                 kdir=args.keyring_dir,
                 rpc=uri,
                 chain_id=chain_id,
+                payfrom_bond=args.payfrom_bond,
             ),
         )
     except asyncio.CancelledError:
