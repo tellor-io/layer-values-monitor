@@ -1,0 +1,57 @@
+[project]
+name = "layer-values-monitor"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tellor Development Community" }
+]
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "discordwebhook>=1.0.3",
+    "eth-abi==5.2.0",
+    "pandas>=2.2.3",
+    "python-dotenv>=1.0.1",
+    "telliot-feeds @ git+https://github.com/tellor-io/telliot-feeds.git@update-deps-and-fix-tests",
+    "websockets==13.1",
+]
+[project.scripts]
+layer-values-monitor = "layer_values_monitor.main:start"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# In pyproject.toml
+[tool.ruff]
+# Target Python version
+target-version = "py312"
+
+# Enable specific linting rules
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "ANN",  # flake8-annotations
+    "B",    # flake8-bugbear
+    "D",    # pydocstyle
+    "C4",   # flake8-comprehensions
+]
+
+# Ignore specific rules
+ignore = []
+
+# Line length
+line-length = 88
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=0.25.3",
+    "pytest>=8.3.5",
+]
