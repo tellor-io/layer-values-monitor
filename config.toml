@@ -1,0 +1,30 @@
+#ETH/USD
+[83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992]
+metric = "percentage"
+alert_threshold = 0.75
+# setting warning to 0 means don't dispute
+warning = 0.75
+minor = 0.50
+major = 0.25
+
+#BTC/USD
+[a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
+metric = "percentage"
+alert_threshold = 0.5
+warning_threshold = 0.75
+minor_threshold = 0.50
+major_threshold = 0.25
+#TRB/USD
+[5C13CD9C97DBB98F2429C101A2A8150E6C7A0DDAFF6124EE176A3A411067DED0]
+metric = "range"
+alert_threshold = 200
+warning = 200
+minor = 700
+major = 5000
+
+[some_random_query_id]
+metric = "equality"
+alert_threshold = 1.0
+warning_threshold = 0.0
+minor_threshold = 0.0
+major_threshold = 0.0
