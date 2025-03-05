@@ -4,6 +4,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from dotenv import load_dotenv
 
 
 @pytest.fixture
@@ -44,3 +45,8 @@ def test_report_messages():
 
     with open(json_path) as f:
         return [json.dumps(msg) for msg in json.load(f)]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def load_env():
+    load_dotenv(".env", override=True)

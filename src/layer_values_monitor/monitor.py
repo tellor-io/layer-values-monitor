@@ -260,7 +260,7 @@ async def inspect_reports(
                     "minor": metrics.minor_threshold,
                     "warning": metrics.warning_threshold,
                 },
-                percent_diff=diff,
+                diff=diff,
             )
             if category is not None:
                 fee = determine_dispute_fee(category, int(report.power))

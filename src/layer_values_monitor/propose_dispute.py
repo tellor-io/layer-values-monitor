@@ -67,7 +67,9 @@ def determine_dispute_category(
 ) -> DisputeCategory | None:
     """Determine dispute category based on difference value and category thresholds."""
     # Return the most severe category whose threshold is met
-    for category, threshold in category_thresholds:
+    for category, threshold in category_thresholds.items():
+        if threshold == 0:
+            continue
         if diff >= threshold:
             return category
 
