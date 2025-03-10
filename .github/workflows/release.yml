@@ -27,7 +27,6 @@ jobs:
     
     - name: Build package
       run: |
-        cd python/
         uv build
     
     - name: Publish package
