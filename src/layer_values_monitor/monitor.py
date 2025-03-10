@@ -428,6 +428,7 @@ async def process_disputes(
     """Process dispute messages from queue and submit them to the blockchain."""
     while True:
         dispute: Msg = await disputes_q.get()
+        disputes_q.task_done()
         if dispute is None:
             continue
         logger.info(

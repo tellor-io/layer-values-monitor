@@ -30,8 +30,8 @@ def propose_msg(
         "dispute",
         "propose-dispute",
         reporter,
-        query_id,
         meta_id,
+        query_id,
         dispute_category,
         fee,
         payfrom_bond,
@@ -45,19 +45,28 @@ def propose_msg(
         kb,
         "--keyring-dir",
         kdir,
+        "--fees",
+        "500loya",
         "-y",
+        "--output",
+        "json",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            logger.error("Error calling dispute transaction in cli:", result.stderr)
+            return None
+        signed_tx = json.loads(result.stdout)
+        code = signed_tx["code"]
+        if code != 0:
+            print(signed_tx)
+            logger.error(f"failed to execute dispute msg: {signed_tx['raw_log']}")
+            return None
+        logger.info(f"dispute msg executed successfully: {signed_tx['txhash']}")
+        return signed_tx["txhash"]
     except Exception as e:
         logger.error(f"failed to execute dispute msg: {e.__str__()}")
-    if result.returncode != 0:
-        print("Error sending transaction:", result.stderr)
         return None
-    else:
-        signed_tx = json.loads(result.stdout)
-        print("Transaction Hash: ", signed_tx["txhash"])
-        return signed_tx["txhash"]
 
 
 def determine_dispute_category(
@@ -89,3 +98,23 @@ def determine_dispute_fee(
         percentage = 1
 
     return int((reporter_power * 1_000_000) * percentage)
+
+
+if __name__ == "__main__":
+    import shutil
+
+    tx_hash = propose_msg(
+        binary_path=shutil.which("layerd"),
+        reporter="tellor1atxszkp3ar3gshqklhafd6rtumndz73zwfe0dx",
+        meta_id="1",
+        query_id="0xasdk",
+        dispute_category="warning",
+        fee="1000000loya",
+        key_name="alice",
+        chain_id="layer-1",
+        rpc="http://localhost:26657",
+        kb="test",
+        kdir="~/.layer",
+        payfrom_bond="True",
+    )
+    print(tx_hash)
