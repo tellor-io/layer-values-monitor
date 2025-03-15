@@ -1,7 +1,7 @@
 [project]
 name = "layer-values-monitor"
 version = "0.1.0"
-description = "Add your description here"
+description = "Layer values monitor"
 readme = "README.md"
 authors = [
     { name = "Tellor Development Community" }
@@ -13,7 +13,7 @@ dependencies = [
     "eth-abi==5.2.0",
     "pandas>=2.2.3",
     "python-dotenv>=1.0.1",
-    "telliot-feeds @ git+https://github.com/tellor-io/telliot-feeds.git@update-deps-and-fix-tests",
+    "telliot-feeds>=0.2.2",
     "websockets==13.1",
 ]
 [project.scripts]
