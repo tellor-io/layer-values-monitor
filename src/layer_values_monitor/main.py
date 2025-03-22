@@ -17,10 +17,6 @@ from layer_values_monitor.monitor import (
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
 
-loaded = load_dotenv(override=True)
-if not loaded:
-    raise ValueError("Failed to load environment variables")
-
 
 def async_run(f: Any) -> Any:
     """Wrap an async function to be called synchronously and handle keyboard interrupts."""
@@ -38,6 +34,9 @@ def async_run(f: Any) -> Any:
 @async_run
 async def start() -> None:
     """Start layer values monitor."""
+    loaded = load_dotenv(override=True)
+    if not loaded:
+        raise ValueError("Failed to load environment variables")
     uri = os.getenv("URI")
     if uri is None:
         raise ValueError("URI not found in environment variables")
