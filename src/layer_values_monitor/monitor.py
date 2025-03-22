@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.discord import generic_alert
 from layer_values_monitor.evm_call import get_evm_call_trusted_value
 from layer_values_monitor.logger import logger
@@ -134,7 +135,7 @@ async def listen_to_new_report_events(uri: str, q: asyncio.Queue) -> None:
 async def inspect_reports(
     reports_q: asyncio.Queue,
     disputes_q: asyncio.Queue,
-    config: dict[str, Any],
+    config_watcher: ConfigWatcher,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
     global_percentage_alert_threshold: float | None = None,
     global_percentage_warning_threshold: float | None = None,
@@ -196,7 +197,7 @@ async def inspect_reports(
 
         query_data_bytes = bytes.fromhex(report.query_data)
         # check if this query has a custom config
-        _config: dict[str, str] = config.get(report.query_id.lower())
+        _config: dict[str, str] = config_watcher.get_config().get(report.query_id.lower())
 
         if _config is None:
             # use globals if no specific config for query id

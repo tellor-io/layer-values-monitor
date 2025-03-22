@@ -120,7 +120,7 @@ async def start() -> None:
             inspect_reports(
                 reports_queue,
                 disputes_queue,
-                config_watcher.get_config(),
+                config_watcher,
                 global_percentage_alert_threshold=global_percentage_alert_threshold,
                 global_percentage_warning_threshold=global_percentage_warning_threshold,
                 global_percentage_minor_threshold=global_percentage_minor_threshold,

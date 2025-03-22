@@ -1,44 +1,9 @@
 import asyncio
-import os
-import tempfile
 import time
-from pathlib import Path
 
 from layer_values_monitor.main import ConfigWatcher, watch_config
 
 import pytest
-
-
-@pytest.fixture
-def config_file():
-    """Create a temporary config file for testing."""
-    # Create a temporary file for testing
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".toml")
-    temp_file_path = Path(temp_file.name)
-
-    # Write initial config to the file
-    with open(temp_file_path, "w") as f:
-        f.write("""
-            [Feed]
-            test = "initial_value"
-            
-            [Settings]
-            interval = 5
-        """)
-
-    # Allow filesystem to register the file
-    time.sleep(0.1)
-
-    yield temp_file_path
-
-    # Clean up after test
-    os.unlink(temp_file_path)
-
-
-@pytest.fixture
-def config_watcher(config_file):
-    """Create a ConfigWatcher instance for testing."""
-    return ConfigWatcher(config_file)
 
 
 def test_init(config_file, config_watcher):

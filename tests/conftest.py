@@ -1,7 +1,12 @@
 import asyncio
 import json
 import os
+import tempfile
+import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from layer_values_monitor.config_watcher import ConfigWatcher
 
 import pytest
 from dotenv import load_dotenv
@@ -50,3 +55,35 @@ def test_report_messages():
 @pytest.fixture(scope="session", autouse=True)
 def load_env():
     load_dotenv(".env", override=True)
+
+
+@pytest.fixture
+def config_file():
+    """Create a temporary config file for testing."""
+    # Create a temporary file for testing
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".toml")
+    temp_file_path = Path(temp_file.name)
+
+    # Write initial config to the file
+    with open(temp_file_path, "w") as f:
+        f.write("""
+            [Feed]
+            test = "initial_value"
+            
+            [Settings]
+            interval = 5
+        """)
+
+    # Allow filesystem to register the file
+    time.sleep(0.1)
+
+    yield temp_file_path
+
+    # Clean up after test
+    os.unlink(temp_file_path)
+
+
+@pytest.fixture
+def config_watcher(config_file):
+    """Create a ConfigWatcher instance for testing."""
+    return ConfigWatcher(config_file)

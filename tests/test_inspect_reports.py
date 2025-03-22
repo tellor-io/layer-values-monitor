@@ -14,8 +14,8 @@ import websockets
 
 
 @pytest.fixture
-def sample_config():
-    return {
+def sample_config(config_watcher):
+    config_watcher.config = {
         "query1": {
             "metric": "percentage",
             "alert_threshold": 0.1,
@@ -24,6 +24,7 @@ def sample_config():
             "major_threshold": 0.4,
         }
     }
+    return config_watcher
 
 
 @pytest.fixture
@@ -370,7 +371,9 @@ async def test_inspect_reports_trusted_value_none(sample_config, global_threshol
 
 
 @pytest.mark.asyncio
-async def test_inspect_reports(mock_websockets_connect, test_report_messages, mock_websocket, event_queue, disputes_queue):
+async def test_inspect_reports(
+    mock_websockets_connect, test_report_messages, mock_websocket, event_queue, disputes_queue, config_watcher
+):
     uri = "ws://test-server.com/ws"
 
     message_index = 0
@@ -396,6 +399,7 @@ async def test_inspect_reports(mock_websockets_connect, test_report_messages, mo
             "major_threshold": 0.25,
         }
     }
+    config_watcher.config = config
     with (
         patch("layer_values_monitor.monitor.get_feed_from_catalog") as mock_get_feed,
         patch("layer_values_monitor.monitor.generic_alert") as mock_generate_msg,
@@ -405,7 +409,7 @@ async def test_inspect_reports(mock_websockets_connect, test_report_messages, mo
         mock_source.fetch_new_datapoint.return_value = (350.0, None)
         mock_feed.source = mock_source
         mock_get_feed.return_value = mock_feed
-        await inspect_reports(event_queue, disputes_queue, config, len(test_report_messages))
+        await inspect_reports(event_queue, disputes_queue, config_watcher, len(test_report_messages))
         assert not disputes_queue.empty()
         mock_generate_msg.assert_called()
     listener_task.cancel()
