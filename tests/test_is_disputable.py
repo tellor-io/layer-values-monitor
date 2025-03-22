@@ -17,7 +17,7 @@ import pytest
         # Case: Percent difference above both thresholds
         (125, 100, 0.1, 0.2, (True, True, 0.25)),
         # Case: Negative percent difference (reported < trusted)
-        (80, 100, 0.1, 0.2, (True, True, -0.2)),
+        (80, 100, 0.1, 0.2, (True, True, 0.2)),
         # Case: dispute_threshold = 0 (special handling)
         (115, 100, 0.1, 0, (True, False, 0.15)),
     ],

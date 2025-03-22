@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 from typing import Literal
 
 from layer_values_monitor.logger import logger
@@ -21,7 +22,7 @@ def propose_msg(
     rpc: str,
     kb: str,
     kdir: str,
-    payfrom_bond: bool,
+    payfrom_bond: str,
 ) -> str | None:
     """Execute propose-dispute message using layer's binary."""
     cmd = [
@@ -45,12 +46,18 @@ def propose_msg(
         kb,
         "--keyring-dir",
         kdir,
-        "--fees",
-        "500loya",
+        "--gas-prices",
+        "1loya",
+        "--gas",
+        "auto",
+        "--gas-adjustment",
+        "1.3",
         "-y",
         "--output",
         "json",
     ]
+
+    time.sleep(5)
     try:
         result = subprocess.run(cmd, capture_output=True)
         if result.returncode != 0:

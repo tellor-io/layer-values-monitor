@@ -77,7 +77,7 @@ Do both option 1 and 2.  Set the global thresholds without the `--use-custom-con
 | Variables | Description |
 |-----------|-------------|
 | `CHAIN_ID` | Chain ID of the Layer network (ie `layer-testnet`) |
-| `URI` | URI of the Layer node to connect to (ie `http://localhost:26657`) |
+| `URI` | URI of the Layer node to connect to (ie `localhost:26657`) |
 | `DISCORD_WEBHOOK_URL_1` | Discord webhook url to recieve to notifications on |
 
 #### Threshold Settings
@@ -88,9 +88,9 @@ The configuration file also allows you to set thresholds for monitoring values. 
 |-----------|-------------|
 | `metric` | The metric to use for a specific query (percentage, range, equality) |
 | `alert_threshold` | the threshold for alerts only |
-| `warning` | Lowest level dispute category threshold |
-| `minor` | Middle level dispute category threshold |
-| `major` | Highest level in  dispute category threshold |
+| `warning_threshold` | Lowest level dispute category threshold |
+| `minor_threshold` | Middle level dispute category threshold |
+| `major_threshold` | Highest level in  dispute category threshold |
 
 **NOTE** For disputing at minimum the warning category has to be set greater than 0. The thresholds should `float` types. The equality metric is 1.0 for True and 0.0 for False.
 

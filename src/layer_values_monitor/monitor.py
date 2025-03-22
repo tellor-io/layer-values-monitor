@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import random
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -83,7 +85,7 @@ class Metrics:
 
 async def listen_to_new_report_events(uri: str, q: asyncio.Queue) -> None:
     """Connect to a layer websocket and fetch new reports and add them to reports queue for monitoring."""
-    print("Connecting to WebSocket...")
+    logger.info("Starting WebSocket connection...")
     query = json.dumps(
         {
             "jsonrpc": "2.0",
@@ -92,17 +94,41 @@ async def listen_to_new_report_events(uri: str, q: asyncio.Queue) -> None:
             "params": {"query": "new_report.reporter_power > 0"},
         }
     )
-    async with websockets.connect(uri) as websocket:
-        await websocket.send(query)
-        print("Subscribed to events.")
+    uri = f"ws://{uri}/websocket"
+    retry_count = 0
+    base_delay = 1
+    max_delay = 60
 
+    while True:
         try:
-            while True:
-                response = await websocket.recv()
-                await q.put(response)  # Add message to queue
-        except websockets.ConnectionClosed:
-            # TODO: add retries
-            print("WebSocket connection closed.")
+            logger.info(f"Connecting to WebSocket at {uri}... (Attempt {retry_count + 1})")
+            async with websockets.connect(uri) as websocket:
+                await websocket.send(query)
+                logger.info("Successfully subscribed to events.")
+
+                # Reset retry count on successful connection
+                retry_count = 0
+
+                while True:
+                    response = await websocket.recv()
+                    await q.put(response)  # Add message to queue
+
+        except websockets.ConnectionClosed as e:
+            logger.warning(f"WebSocket connection closed: {e}")
+        except websockets.WebSocketException as e:
+            logger.error(f"WebSocket error: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}", exc_info=True)
+        logger.info("going through the retry phase since connection was closed")
+        # Calculate delay with exponential backoff and jitter for reconnection
+        delay = min(base_delay * (2**retry_count), max_delay)
+        # Add jitter to prevent thundering herd problem
+        jitter = random.uniform(0, 0.1 * delay)
+        actual_delay = delay + jitter
+
+        retry_count += 1
+        logger.info(f"Reconnecting in {actual_delay:.2f} seconds (retry {retry_count})")
+        await asyncio.sleep(actual_delay)
 
 
 async def inspect_reports(
@@ -123,7 +149,7 @@ async def inspect_reports(
     global_equality_major_threshold: float | None = None,
 ) -> None:
     """Inspect reports in reports queue and process to see if they should disputed."""
-    print("Inspecting reports...")
+    logger.info("Inspecting reports...")
     iterations = 0
 
     while iterations < max_iterations:
@@ -321,10 +347,11 @@ def is_disputable(
     """Determine if a value is disputable based on comparison with a trusted value using specified metrics and thresholds."""
     if metric.lower() == "percentage":
         percent_diff: float = (reported_value - trusted_value) / trusted_value
+        percent_diff = abs(percent_diff)
         logger.debug(f"percent diff: {percent_diff}, reported value: {reported_value} - trusted value: {trusted_value}")
         if dispute_threshold == 0:
-            return float(abs(percent_diff)) >= alert_threshold, False, percent_diff
-        return float(abs(percent_diff)) >= alert_threshold, float(abs(percent_diff)) >= dispute_threshold, percent_diff
+            return percent_diff >= alert_threshold, False, percent_diff
+        return percent_diff >= alert_threshold, percent_diff >= dispute_threshold, percent_diff
 
     if metric.lower() == "equality":
         logger.info(f"checking equality of values, reported value: {reported_value}, trusted value: {trusted_value}")
@@ -431,13 +458,14 @@ async def process_disputes(
         disputes_q.task_done()
         if dispute is None:
             continue
+        time.sleep(2)
         logger.info(
             f"sending a dispute msg to layer:\n \
                     Reporter: {dispute.reporter}\n \
                     Query ID: {dispute.query_id} \
                     "
         )
-        tx_hash = propose_msg(
+        _ = propose_msg(
             binary_path=binary_path,
             key_name=key_name,
             chain_id=chain_id,
@@ -449,6 +477,5 @@ async def process_disputes(
             meta_id=dispute.meta_id,
             dispute_category=dispute.category,
             fee=dispute.fee,
-            payfrom_bond=payfrom_bond,
+            payfrom_bond=str(payfrom_bond),
         )
-        print("tx hash: ", tx_hash)

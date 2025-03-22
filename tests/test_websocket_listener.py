@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -9,7 +10,7 @@ import websockets
 
 @pytest.mark.asyncio
 async def test_websocket_connection(mock_websockets_connect, mock_websocket, event_queue):
-    uri = "ws://test-server.com/ws"
+    uri = "test-server.com"
     expected_query = json.dumps(
         {
             "jsonrpc": "2.0",
@@ -21,15 +22,22 @@ async def test_websocket_connection(mock_websockets_connect, mock_websocket, eve
 
     mock_websocket.recv.side_effect = websockets.ConnectionClosed(None, None)
 
-    await listen_to_new_report_events(uri, event_queue)
+    listener_task = asyncio.create_task(listen_to_new_report_events(uri, event_queue))
+    await asyncio.sleep(0.1)
 
-    mock_websockets_connect.assert_called_once_with(uri)
+    mock_websockets_connect.assert_called_once_with("ws://test-server.com/websocket")
     mock_websocket.send.assert_called_once_with(expected_query)
+
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
 
 
 @pytest.mark.asyncio
 async def test_message_processing(mock_websockets_connect, mock_websocket, event_queue, test_report_messages):
-    uri = "ws://test-server.com/ws"
+    uri = "test-server.com"
     test_messages = test_report_messages[:3]
     message_index = 0
 
@@ -44,7 +52,14 @@ async def test_message_processing(mock_websockets_connect, mock_websocket, event
 
     mock_websocket.recv.side_effect = mock_recv
 
-    await listen_to_new_report_events(uri, event_queue)
+    listener_task = asyncio.create_task(listen_to_new_report_events(uri, event_queue))
+    await asyncio.sleep(0.1)
+
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
 
     assert event_queue.qsize() == len(test_messages)
 
@@ -55,25 +70,39 @@ async def test_message_processing(mock_websockets_connect, mock_websocket, event
 
 @pytest.mark.asyncio
 async def test_connection_closed_handling(mock_websockets_connect, mock_websocket, event_queue):
-    uri = "ws://test-server.com/ws"
+    uri = "test-server.com"
 
     mock_websocket.recv.side_effect = websockets.ConnectionClosed(None, None)
 
-    with patch("builtins.print") as mock_print:
-        await listen_to_new_report_events(uri, event_queue)
+    with patch("layer_values_monitor.monitor.logger") as mock_logger:
+        listener_task = asyncio.create_task(listen_to_new_report_events(uri, event_queue))
+        await asyncio.sleep(0.1)
 
-        mock_print.assert_any_call("WebSocket connection closed.")
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+        mock_logger.warning.assert_called_with("WebSocket connection closed: no close frame received or sent")
+
+        mock_logger.info.assert_any_call("going through the retry phase since connection was closed")
 
 
 @pytest.mark.asyncio
 async def test_multiple_messages_before_close(mock_websockets_connect, mock_websocket, event_queue, test_report_messages):
-    uri = "ws://test-server.com/ws"
+    uri = "test-server.com"
     test_messages = test_report_messages
 
     mock_websocket.recv.side_effect = test_messages + [websockets.ConnectionClosed(None, None)]
+    listener_task = asyncio.create_task(listen_to_new_report_events(uri, event_queue))
+    await asyncio.sleep(0.1)
 
-    await listen_to_new_report_events(uri, event_queue)
-
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
     assert event_queue.qsize() == len(test_messages)
 
     for expected_message in test_messages:

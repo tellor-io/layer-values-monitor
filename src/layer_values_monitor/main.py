@@ -3,11 +3,11 @@
 import argparse
 import asyncio
 import os
-import tomllib
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.monitor import (
     inspect_reports,
     listen_to_new_report_events,
@@ -45,11 +45,11 @@ async def start() -> None:
     if chain_id is None:
         raise ValueError("CHAIN_ID not found in environment variables")
     parser = argparse.ArgumentParser(description="Start values monitor")
-    parser.add_argument("binary_path", type=str, help="Path to the layer binary")
+    parser.add_argument("binary_path", type=str, help="Path to the Layer binary executable")
     parser.add_argument("key_name", type=str, help="Name of the key to use for transactions")
     parser.add_argument("keyring_backend", type=str, help="Keyring backend")
     parser.add_argument("keyring_dir", type=str, help="Keyring directory")
-    parser.add_argument("payfrom_bond", type=bool, help="Pay dispute fee from bond")
+    parser.add_argument("--payfrom-bond", action="store_true", help="Pay dispute fee from bond")
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
     parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
@@ -104,9 +104,12 @@ async def start() -> None:
         global_equality_minor_threshold = args.global_equality_minor_threshold
         global_equality_major_threshold = args.global_equality_major_threshold
 
+    # Initialize config watcher
+    config_path = Path(__file__).resolve().parents[2] / "config.toml"
+    config_watcher = ConfigWatcher(config_path)
+
     reports_queue = asyncio.Queue()
     disputes_queue = asyncio.Queue()
-    config = load_config()
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
 
@@ -117,7 +120,7 @@ async def start() -> None:
             inspect_reports(
                 reports_queue,
                 disputes_queue,
-                config,
+                config_watcher.get_config(),
                 global_percentage_alert_threshold=global_percentage_alert_threshold,
                 global_percentage_warning_threshold=global_percentage_warning_threshold,
                 global_percentage_minor_threshold=global_percentage_minor_threshold,
@@ -136,25 +139,15 @@ async def start() -> None:
                 key_name=args.key_name,
                 kb=args.keyring_backend,
                 kdir=args.keyring_dir,
-                rpc=uri,
+                rpc=f"http://{uri}",
                 chain_id=chain_id,
                 payfrom_bond=args.payfrom_bond,
             ),
+            watch_config(config_watcher),
         )
     except asyncio.CancelledError:
         print("shutting down running tasks")
         raise
-
-
-def load_config() -> dict[str, Any]:
-    """Load config.toml."""
-    config_path = Path(__file__).resolve().parents[2] / "config.toml"
-    with open(config_path, "rb") as f:
-        data = tomllib.load(f)
-        data = {k.lower(): v for k, v in data.items()}
-        for key, value in data.items():
-            data[key.lower()] = {k.lower(): v for k, v in value.items()}
-        return data
 
 
 if __name__ == "__main__":

@@ -386,7 +386,7 @@ async def test_inspect_reports(mock_websockets_connect, test_report_messages, mo
 
     mock_websocket.recv.side_effect = mock_recv
 
-    await listen_to_new_report_events(uri, event_queue)
+    listener_task = asyncio.create_task(listen_to_new_report_events(uri, event_queue))
     config = {
         "83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992": {
             "metric": "percentage",
@@ -408,3 +408,8 @@ async def test_inspect_reports(mock_websockets_connect, test_report_messages, mo
         await inspect_reports(event_queue, disputes_queue, config, len(test_report_messages))
         assert not disputes_queue.empty()
         mock_generate_msg.assert_called()
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
