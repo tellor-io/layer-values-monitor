@@ -50,55 +50,91 @@ async def start() -> None:
     parser.add_argument("keyring_dir", type=str, help="Keyring directory")
     parser.add_argument("--payfrom-bond", action="store_true", help="Pay dispute fee from bond")
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
+    # percentage
     parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
-        "--global-percentage-warning-threshold", type=float, help="Global percentage for a warning dispute cat"
+        "--global-percentage-warning-threshold", default=0.0, type=float, help="Global percentage for a warning dispute cat"
     )
-    parser.add_argument("--global-percentage-minor-threshold", type=float, help="Global percentage for a minor dispute cat")
-    parser.add_argument("--global-percentage-major-threshold", type=float, help="Global percentage for a major dispute cat")
+    parser.add_argument(
+        "--global-percentage-minor-threshold", default=0.0, type=float, help="Global percentage for a minor dispute cat"
+    )
+    parser.add_argument(
+        "--global-percentage-major-threshold", default=0.0, type=float, help="Global percentage for a major dispute cat"
+    )
+    # range
     parser.add_argument("--global-range-alert-threshold", type=float, help="Global range threshold")
-    parser.add_argument("--global-range-warning-threshold", type=float, help="Global range for a warning dispute cat")
-    parser.add_argument("--global-range-minor-threshold", type=float, help="Global range for a minor dispute cat")
-    parser.add_argument("--global-range-major-threshold", type=float, help="Global range for a major dispute cat")
-    parser.add_argument("--global-equality-threshold", type=bool, help="Global equality threshold")
+    parser.add_argument(
+        "--global-range-warning-threshold", default=0.0, type=float, help="Global range for a warning dispute cat"
+    )
+    parser.add_argument(
+        "--global-range-minor-threshold", default=0.0, type=float, help="Global range for a minor dispute cat"
+    )
+    parser.add_argument(
+        "--global-range-major-threshold", default=0.0, type=float, help="Global range for a major dispute cat"
+    )
+    # equality
+    parser.add_argument("--global-equality-alert-threshold", type=bool, help="Global equality threshold")
+    parser.add_argument(
+        "--global-equality-warning-threshold", default=0.0, type=float, help="Global equality for a warning dispute cat"
+    )
+    parser.add_argument(
+        "--global-equality-minor-threshold", default=0.0, type=float, help="Global equality for a minor dispute cat"
+    )
+    parser.add_argument(
+        "--global-equality-major-threshold", default=0.0, type=float, help="Global equality for a major dispute cat"
+    )
     args = parser.parse_args()
 
     if args.use_custom_config:
+        # percentage
         global_percentage_alert_threshold = None
         global_percentage_warning_threshold = None
         global_percentage_minor_threshold = None
         global_percentage_major_threshold = None
+        # range
         global_range_alert_threshold = None
         global_range_warning_threshold = None
         global_range_minor_threshold = None
         global_range_major_threshold = None
+        # equality
+        global_equality_alert_threshold = None
         global_equality_warning_threshold = None
         global_equality_minor_threshold = None
         global_equality_major_threshold = None
     else:
         if any(
             [
-                not args.global_percentage_alert_threshold,
-                not args.global_range_alert_threshold,
-                not args.global_percentage_warning_threshold,
-                not args.global_percentage_minor_threshold,
-                not args.global_percentage_major_threshold,
-                not args.global_range_warning_threshold,
-                not args.global_range_minor_threshold,
-                not args.global_range_major_threshold,
+                args.global_percentage_alert_threshold is None,
+                args.global_range_alert_threshold is None,
+                args.global_equality_alert_threshold is None,
+                # percentage
+                args.global_percentage_warning_threshold is None,
+                args.global_percentage_minor_threshold is None,
+                args.global_percentage_major_threshold is None,
+                # range
+                args.global_range_warning_threshold is None,
+                args.global_range_minor_threshold is None,
+                args.global_range_major_threshold is None,
+                # equality
+                args.global_equality_warning_threshold is None,
+                args.global_equality_minor_threshold is None,
+                args.global_equality_major_threshold is None,
             ]
         ):
             raise ValueError("Global flags required if not using custom config")
 
         global_percentage_alert_threshold = args.global_percentage_alert_threshold
         global_range_alert_threshold = args.global_range_alert_threshold
+        global_equality_alert_threshold = args.global_equality_alert_threshold
+        # percentage
         global_percentage_warning_threshold = args.global_percentage_warning_threshold
         global_percentage_minor_threshold = args.global_percentage_minor_threshold
         global_percentage_major_threshold = args.global_percentage_major_threshold
-        global_range_alert_threshold = args.global_range_alert_threshold
+        # range
         global_range_warning_threshold = args.global_range_warning_threshold
         global_range_minor_threshold = args.global_range_minor_threshold
         global_range_major_threshold = args.global_range_major_threshold
+        # equality
         global_equality_warning_threshold = args.global_equality_warning_threshold
         global_equality_minor_threshold = args.global_equality_minor_threshold
         global_equality_major_threshold = args.global_equality_major_threshold
@@ -120,14 +156,18 @@ async def start() -> None:
                 reports_queue,
                 disputes_queue,
                 config_watcher,
+                # percentage
                 global_percentage_alert_threshold=global_percentage_alert_threshold,
                 global_percentage_warning_threshold=global_percentage_warning_threshold,
                 global_percentage_minor_threshold=global_percentage_minor_threshold,
                 global_percentage_major_threshold=global_percentage_major_threshold,
+                # range
                 global_range_alert_threshold=global_range_alert_threshold,
                 global_range_warning_threshold=global_range_warning_threshold,
                 global_range_minor_threshold=global_range_minor_threshold,
                 global_range_major_threshold=global_range_major_threshold,
+                # equality
+                global_equality_alert_threshold=global_equality_alert_threshold,
                 global_equality_warning_threshold=global_equality_warning_threshold,
                 global_equality_minor_threshold=global_equality_minor_threshold,
                 global_equality_major_threshold=global_equality_major_threshold,

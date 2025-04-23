@@ -145,6 +145,7 @@ async def inspect_reports(
     global_range_warning_threshold: float | None = None,
     global_range_minor_threshold: float | None = None,
     global_range_major_threshold: float | None = None,
+    global_equality_alert_threshold: float | None = None,
     global_equality_warning_threshold: float | None = None,
     global_equality_minor_threshold: float | None = None,
     global_equality_major_threshold: float | None = None,
@@ -211,6 +212,7 @@ async def inspect_reports(
                 global_range_warning_threshold=global_range_warning_threshold,
                 global_range_minor_threshold=global_range_minor_threshold,
                 global_range_major_threshold=global_range_major_threshold,
+                global_equality_alert_threshold=global_equality_alert_threshold,
                 global_equality_warning_threshold=global_equality_warning_threshold,
                 global_equality_minor_threshold=global_equality_minor_threshold,
                 global_equality_major_threshold=global_equality_major_threshold,
@@ -382,6 +384,7 @@ def get_metric(
     global_range_warning_threshold: float,
     global_range_minor_threshold: float,
     global_range_major_threshold: float,
+    global_equality_alert_threshold: float,
     global_equality_warning_threshold: float,
     global_equality_minor_threshold: float,
     global_equality_major_threshold: float,
@@ -412,7 +415,7 @@ def get_metric(
     elif metric == "equality":
         return Metrics(
             metric=metric,
-            alert_threshold=1.0,
+            alert_threshold=global_equality_alert_threshold,
             warning_threshold=global_equality_warning_threshold,
             minor_threshold=global_equality_minor_threshold,
             major_threshold=global_equality_major_threshold,

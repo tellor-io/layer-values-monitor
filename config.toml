@@ -18,9 +18,9 @@ major_threshold = 0.75
 [5C13CD9C97DBB98F2429C101A2A8150E6C7A0DDAFF6124EE176A3A411067DED0]
 metric = "range"
 alert_threshold = 200
-warning = 200
-minor = 700
-major = 5000
+warning_threshold = 200
+minor_threshold = 700
+major_threshold = 5000
 
 [some_random_query_id]
 metric = "equality"
