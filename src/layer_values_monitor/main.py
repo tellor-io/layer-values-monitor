@@ -2,20 +2,28 @@
 
 import argparse
 import asyncio
+import logging
 import os
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
+from layer_values_monitor.dispute import process_disputes
+from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
-    inspect_reports,
     listen_to_new_report_events,
-    process_disputes,
+    new_reports_queue_handler,
+    raw_data_queue_handler,
 )
+from layer_values_monitor.threshold_config import ThresholdConfig
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
+
+for logger_name in logging.root.manager.loggerDict:
+    if logger_name.startswith("telliot_feeds"):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 
 
 def async_run(f: Any) -> Any:
@@ -85,65 +93,14 @@ async def start() -> None:
     )
     args = parser.parse_args()
 
-    if args.use_custom_config:
-        # percentage
-        global_percentage_alert_threshold = None
-        global_percentage_warning_threshold = None
-        global_percentage_minor_threshold = None
-        global_percentage_major_threshold = None
-        # range
-        global_range_alert_threshold = None
-        global_range_warning_threshold = None
-        global_range_minor_threshold = None
-        global_range_major_threshold = None
-        # equality
-        global_equality_alert_threshold = None
-        global_equality_warning_threshold = None
-        global_equality_minor_threshold = None
-        global_equality_major_threshold = None
-    else:
-        if any(
-            [
-                args.global_percentage_alert_threshold is None,
-                args.global_range_alert_threshold is None,
-                args.global_equality_alert_threshold is None,
-                # percentage
-                args.global_percentage_warning_threshold is None,
-                args.global_percentage_minor_threshold is None,
-                args.global_percentage_major_threshold is None,
-                # range
-                args.global_range_warning_threshold is None,
-                args.global_range_minor_threshold is None,
-                args.global_range_major_threshold is None,
-                # equality
-                args.global_equality_warning_threshold is None,
-                args.global_equality_minor_threshold is None,
-                args.global_equality_major_threshold is None,
-            ]
-        ):
-            raise ValueError("Global flags required if not using custom config")
-
-        global_percentage_alert_threshold = args.global_percentage_alert_threshold
-        global_range_alert_threshold = args.global_range_alert_threshold
-        global_equality_alert_threshold = args.global_equality_alert_threshold
-        # percentage
-        global_percentage_warning_threshold = args.global_percentage_warning_threshold
-        global_percentage_minor_threshold = args.global_percentage_minor_threshold
-        global_percentage_major_threshold = args.global_percentage_major_threshold
-        # range
-        global_range_warning_threshold = args.global_range_warning_threshold
-        global_range_minor_threshold = args.global_range_minor_threshold
-        global_range_major_threshold = args.global_range_major_threshold
-        # equality
-        global_equality_warning_threshold = args.global_equality_warning_threshold
-        global_equality_minor_threshold = args.global_equality_minor_threshold
-        global_equality_major_threshold = args.global_equality_major_threshold
+    threshold_config = ThresholdConfig.from_args(args)
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     config_watcher = ConfigWatcher(config_path)
 
-    reports_queue = asyncio.Queue()
+    raw_data_queue = asyncio.Queue()
+    new_reports_queue = asyncio.Queue()
     disputes_queue = asyncio.Queue()
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
@@ -151,27 +108,13 @@ async def start() -> None:
     # TODO: validate user options to check if they conflict
     try:
         await asyncio.gather(
-            listen_to_new_report_events(uri, reports_queue),
-            inspect_reports(
-                reports_queue,
-                disputes_queue,
-                config_watcher,
-                # percentage
-                global_percentage_alert_threshold=global_percentage_alert_threshold,
-                global_percentage_warning_threshold=global_percentage_warning_threshold,
-                global_percentage_minor_threshold=global_percentage_minor_threshold,
-                global_percentage_major_threshold=global_percentage_major_threshold,
-                # range
-                global_range_alert_threshold=global_range_alert_threshold,
-                global_range_warning_threshold=global_range_warning_threshold,
-                global_range_minor_threshold=global_range_minor_threshold,
-                global_range_major_threshold=global_range_major_threshold,
-                # equality
-                global_equality_alert_threshold=global_equality_alert_threshold,
-                global_equality_warning_threshold=global_equality_warning_threshold,
-                global_equality_minor_threshold=global_equality_minor_threshold,
-                global_equality_major_threshold=global_equality_major_threshold,
+            listen_to_new_report_events(uri, raw_data_queue, logger),
+            raw_data_queue_handler(
+                raw_data_queue,
+                new_reports_queue,
+                logger=logger,
             ),
+            new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
             process_disputes(
                 disputes_q=disputes_queue,
                 binary_path=args.binary_path,
@@ -181,6 +124,7 @@ async def start() -> None:
                 rpc=f"http://{uri}",
                 chain_id=chain_id,
                 payfrom_bond=args.payfrom_bond,
+                logger=logger,
             ),
             watch_config(config_watcher),
         )

@@ -1,13 +1,13 @@
 """Propose dispute."""
 
+import asyncio
 import json
+import logging
 import subprocess
 import time
-from typing import Literal
 
+from layer_values_monitor.custom_types import DisputeCategory, Msg
 from layer_values_monitor.logger import logger
-
-DisputeCategory = Literal["warning", "minor", "major"]
 
 
 def propose_msg(
@@ -105,6 +105,46 @@ def determine_dispute_fee(
         percentage = 1
 
     return int((reporter_power * 1_000_000) * percentage)
+
+
+async def process_disputes(
+    disputes_q: asyncio.Queue,
+    binary_path: str,
+    key_name: str,
+    chain_id: str,
+    rpc: str,
+    kb: str,
+    kdir: str,
+    payfrom_bond: bool,
+    logger: logging,
+) -> None:
+    """Process dispute messages from queue and submit them to the blockchain."""
+    while True:
+        dispute: Msg = await disputes_q.get()
+        disputes_q.task_done()
+        if dispute is None:
+            continue
+        time.sleep(2)
+        logger.info(
+            f"sending a dispute msg to layer:\n \
+                    Reporter: {dispute.reporter}\n \
+                    Query ID: {dispute.query_id} \
+                    "
+        )
+        _ = propose_msg(
+            binary_path=binary_path,
+            key_name=key_name,
+            chain_id=chain_id,
+            rpc=rpc,
+            kb=kb,
+            kdir=kdir,
+            reporter=dispute.reporter,
+            query_id=dispute.query_id,
+            meta_id=dispute.meta_id,
+            dispute_category=dispute.category,
+            fee=dispute.fee,
+            payfrom_bond=str(payfrom_bond),
+        )
 
 
 if __name__ == "__main__":
