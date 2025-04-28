@@ -15,11 +15,13 @@ from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
 )
+from layer_values_monitor.evm_call import get_evm_call_trusted_value
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.threshold_config import ThresholdConfig
 from layer_values_monitor.utils import add_to_table, get_metric, remove_0x_prefix
 
 import websockets
+from telliot_feeds.datafeed import DataFeed
 
 
 async def listen_to_new_report_events(uri: str, q: asyncio.Queue, logger: logging) -> None:
@@ -187,61 +189,25 @@ async def inspect_reports(
     query = get_query(query_data)
     feed = await get_feed(query_id, query, logger)
 
+    if query_type.lower() == "evmcall":
+        return await inspect_evm_call_reports(
+            reports,
+            feed,
+            disputes_q,
+            query_id,
+            metrics,
+            logger,
+        )
+
     trusted_value, _ = await fetch_value(feed)
     if trusted_value is None:
         logger.error(f"unable to fetch trusted value for query id: {query_id}")
         return None
     for r in reports:
-        display = {
-            "REPORTER": r.reporter,
-            "QUERY_TYPE": r.query_type,
-            "QUERY_ID": r.query_id,
-            "AGGREGATE_METHOD": r.aggregate_method,
-            "CYCLELIST": r.cyclelist,
-            "POWER": r.power,
-            "TIMESTAMP": r.timestamp,
-            "TRUSTED_VALUE": trusted_value,
-            "TX_HASH": r.tx_hash,
-        }
-        display["CURRENT_TIME"] = int(time.time() * 1000)
-        display["TIME_DIFF"] = display["CURRENT_TIME"] - (int(r.timestamp))
-        # decode value for comparison
         reported_value = query.value_type.decode(bytes.fromhex(r.value))
-        display["VALUE"] = reported_value
-        # compare values and check against threshold- three metrics(percentage, equality, range)
-        alertable, disputable, diff = is_disputable(
-            metrics.metric,
-            metrics.alert_threshold,
-            metrics.warning_threshold,
-            reported_value,
-            trusted_value,
-            logger=logger,
-        )
-        if alertable is None:
-            continue
-        if alertable:
-            msg = f"found an alertable value. trusted value: {trusted_value}, reported value: {r.value}"
-            logger.info(msg)
-            generic_alert(msg + f" tx hash: {r.tx_hash}")
+        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger)
 
-        display["DISPUTABLE"] = disputable
-
-        if disputable and metrics.warning_threshold > 0:
-            logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {r.value}")
-            # if dispute add message to dispute queue
-            category = determine_dispute_category(
-                category_thresholds={
-                    "major": metrics.major_threshold,
-                    "minor": metrics.minor_threshold,
-                    "warning": metrics.warning_threshold,
-                },
-                diff=diff,
-            )
-            if category is not None:
-                fee = determine_dispute_fee(category, int(r.power))
-                await disputes_q.put(Msg(r.reporter, r.query_id, r.meta_id, category, fee.__str__() + DENOM))
-
-        add_to_table(display)
+    return None
 
 
 async def new_reports_queue_handler(
@@ -257,7 +223,7 @@ async def new_reports_queue_handler(
 
     while True:
         new_reports: dict = await new_reports_q.get()
-        # TODO: add a separate evm query type handler
+
         for report in new_reports.values():
             # Create a task for each query id
             task = asyncio.create_task(inspect_reports(report, disputes_q, config_watcher, logger, threshold_config))
@@ -304,3 +270,91 @@ def is_disputable(
 
     logger.error(f"unsupported metric: {metric}")
     return None, None, None
+
+
+async def inspect_evm_call_reports(
+    reports: list[NewReport],
+    feed: DataFeed,
+    disputes_q: asyncio.Queue,
+    query_id: str,
+    metrics: Metrics,
+    logger: logging,
+) -> None:
+    """Inspect reports for evm call query type and check if they are disputable.
+
+    Reason they are different is because we need to specifically fetch values for each report
+    because each value needs to be decoded and is dependant on the block timestamp in the value
+    to fetch the trusted value from the relevant chain.
+
+    reports: list of new_reports for a query id
+    disputes_q: the queue to add disputes to for dispute processing
+    query_id: the hash of the query data used to fetch the value.
+    metrics: the metrics object for the query id
+    logger: the logger object
+    feed: the data feed object for the query id
+    """
+    for r in reports:
+        trusted_value = await get_evm_call_trusted_value(r.value, feed)
+        if trusted_value is None:
+            logger.error(f"unable to fetch trusted value for query id: {query_id}")
+            continue
+        await inspect(r, r.value, trusted_value, disputes_q, metrics, logger)
+    return None
+
+
+async def inspect(
+    report: NewReport,
+    reported_value: Any,
+    trusted_value: Any,
+    disputes_q: asyncio.Queue,
+    metrics: Metrics,
+    logger: logging,
+) -> None:
+    """Inspect a new report and check if it is disputable."""
+    display = {
+        "REPORTER": report.reporter,
+        "QUERY_TYPE": report.query_type,
+        "QUERY_ID": report.query_id,
+        "AGGREGATE_METHOD": report.aggregate_method,
+        "CYCLELIST": report.cyclelist,
+        "POWER": report.power,
+        "TIMESTAMP": report.timestamp,
+        "TRUSTED_VALUE": trusted_value,
+        "TX_HASH": report.tx_hash,
+    }
+    display["CURRENT_TIME"] = int(time.time() * 1000)
+    display["TIME_DIFF"] = display["CURRENT_TIME"] - (int(report.timestamp))
+    display["VALUE"] = reported_value
+    # compare values and check against threshold- three metrics(percentage, equality, range)
+    alertable, disputable, diff = is_disputable(
+        metrics.metric,
+        metrics.alert_threshold,
+        metrics.warning_threshold,
+        reported_value,
+        trusted_value,
+        logger=logger,
+    )
+    if alertable is None:
+        return None
+    if alertable:
+        msg = f"found an alertable value. trusted value: {trusted_value}, reported value: {reported_value}"
+        logger.info(msg)
+        generic_alert(msg + f" tx hash: {report.tx_hash}")
+
+    display["DISPUTABLE"] = disputable
+
+    if disputable and metrics.warning_threshold > 0:
+        logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
+        # if dispute add message to dispute queue
+        category = determine_dispute_category(
+            category_thresholds={
+                "major": metrics.major_threshold,
+                "minor": metrics.minor_threshold,
+                "warning": metrics.warning_threshold,
+            },
+            diff=diff,
+        )
+        if category is not None:
+            fee = determine_dispute_fee(category, int(report.power))
+            await disputes_q.put(Msg(report.reporter, report.query_id, report.meta_id, category, fee.__str__() + DENOM))
+    add_to_table(display)
