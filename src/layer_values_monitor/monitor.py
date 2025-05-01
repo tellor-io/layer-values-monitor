@@ -117,15 +117,16 @@ async def raw_data_queue_handler(
                 meta_id=events["new_report.meta_id"][0],
                 tx_hash=events["tx.hash"][0],
             )
-        except IndexError as e:
-            logger.warning(f"malformed report returned by websocker: {e.__str__()}")
+        except (KeyError, IndexError) as e:
+            logger.warning(f"malformed report returned by websocket: {e.__str__()}")
             continue
 
         # check if height has incremented from the reports we are collecting
         # then clear collection and start a new collection
         if height > current_height:
-            await new_reports_q.put(dict(reports_collections))
-            reports_collections.clear()
+            if len(reports_collections) > 0:
+                await new_reports_q.put(dict(reports_collections))
+                reports_collections.clear()
             current_height = height
 
         reports_collected = reports_collections.get(report.query_id, None)
