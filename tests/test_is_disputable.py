@@ -1,8 +1,11 @@
-from unittest.mock import patch
+import logging
+from unittest.mock import MagicMock, patch
 
 from layer_values_monitor.monitor import is_disputable
 
 import pytest
+
+magic_logger = MagicMock(spec=logging.Logger)
 
 
 @pytest.mark.parametrize(
@@ -25,7 +28,8 @@ import pytest
 def test_percentage_metric(reported_value, trusted_value, alert_threshold, dispute_threshold, expected):
     """Test percentage metric calculations and threshold checks."""
     with patch("layer_values_monitor.logger.logger.debug") as mock_logger:
-        result = is_disputable("percentage", alert_threshold, dispute_threshold, reported_value, trusted_value)
+        magic_logger.debug = mock_logger
+        result = is_disputable("percentage", alert_threshold, dispute_threshold, reported_value, trusted_value, magic_logger)
         # logger.debug was called?
         mock_logger.assert_called_once()
 
@@ -53,7 +57,8 @@ def test_percentage_metric(reported_value, trusted_value, alert_threshold, dispu
 def test_equality_metric(reported_value, trusted_value, expected):
     """Test equality metric comparisons."""
     with patch("layer_values_monitor.logger.logger.info") as mock_logger:
-        result = is_disputable("equality", 0.1, 0.2, reported_value, trusted_value)
+        magic_logger.info = mock_logger
+        result = is_disputable("equality", 0.1, 0.2, reported_value, trusted_value, magic_logger)
 
         mock_logger.assert_called_once()
 
@@ -80,7 +85,7 @@ def test_equality_metric(reported_value, trusted_value, expected):
 def test_range_metric(reported_value, trusted_value, alert_threshold, dispute_threshold, expected):
     """Test range metric calculations and threshold checks."""
     with patch("layer_values_monitor.logger") as mock_logger:
-        result = is_disputable("range", alert_threshold, dispute_threshold, reported_value, trusted_value)
+        result = is_disputable("range", alert_threshold, dispute_threshold, reported_value, trusted_value, mock_logger)
 
         # Range metric doesn't log anything specific
         mock_logger.debug.assert_not_called()
@@ -103,13 +108,13 @@ def test_range_metric(reported_value, trusted_value, alert_threshold, dispute_th
 def test_case_insensitivity(metric, case_variant):
     """Test that metric string comparison is case-insensitive."""
     # Use simple values where results will be the same for all metrics
-    result_lower = is_disputable(metric, 1, 1, 100, 100)
-    result_variant = is_disputable(case_variant, 1, 1, 100, 100)
+    result_lower = is_disputable(metric, 1, 1, 100, 100, magic_logger)
+    result_variant = is_disputable(case_variant, 1, 1, 100, 100, magic_logger)
 
     assert result_lower == result_variant
 
 
 def test_unknown_metric():
     """Test behavior with an unknown metric type."""
-    result = is_disputable("unknown_metric", 0.1, 0.2, 100, 100)
+    result = is_disputable("unknown_metric", 0.1, 0.2, 100, 100, magic_logger)
     assert result[0] is None

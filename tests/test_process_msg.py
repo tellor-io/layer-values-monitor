@@ -1,7 +1,7 @@
 import json
 from unittest import mock
 
-from layer_values_monitor.propose_dispute import (
+from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
     propose_msg,
@@ -54,7 +54,7 @@ def test_returns_zero_when_reporter_power_is_zero():
     assert determine_dispute_fee("major", 0) == 0
 
 
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_successful_execution(mock_subprocess_run):
     # Mock successful execution
     mock_process = mock.MagicMock()
@@ -97,7 +97,7 @@ def test_successful_execution(mock_subprocess_run):
     assert "True" in cmd
 
 
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_cli_error(mock_subprocess_run):
     # Mock execution with non-zero return code
     mock_process = mock.MagicMock()
@@ -123,7 +123,7 @@ def test_cli_error(mock_subprocess_run):
     assert result is None
 
 
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_transaction_code_error(mock_subprocess_run):
     # Mock execution with zero return code but non-zero tx code
     mock_process = mock.MagicMock()
@@ -149,7 +149,7 @@ def test_transaction_code_error(mock_subprocess_run):
     assert result is None
 
 
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_exception_handling(mock_subprocess_run):
     # Mock execution with exception
     mock_subprocess_run.side_effect = Exception("Test exception")
@@ -172,8 +172,8 @@ def test_exception_handling(mock_subprocess_run):
     assert result is None
 
 
-@mock.patch("layer_values_monitor.propose_dispute.logger")
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.logger")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_logs_success(mock_subprocess_run, mock_logger):
     # Test that successful execution is logged properly
     mock_process = mock.MagicMock()
@@ -199,8 +199,8 @@ def test_logs_success(mock_subprocess_run, mock_logger):
     mock_logger.info.assert_called_once_with("dispute msg executed successfully: ABC123")
 
 
-@mock.patch("layer_values_monitor.propose_dispute.logger")
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.logger")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_logs_cli_error(mock_subprocess_run, mock_logger):
     # Test that CLI errors are logged properly
     mock_process = mock.MagicMock()
@@ -228,8 +228,8 @@ def test_logs_cli_error(mock_subprocess_run, mock_logger):
     assert "Error message" in str(mock_logger.error.call_args)
 
 
-@mock.patch("layer_values_monitor.propose_dispute.logger")
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.logger")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_logs_transaction_error(mock_subprocess_run, mock_logger):
     # Test that transaction errors are logged properly
     mock_process = mock.MagicMock()
@@ -255,8 +255,8 @@ def test_logs_transaction_error(mock_subprocess_run, mock_logger):
     mock_logger.error.assert_called_once_with("failed to execute dispute msg: Error in transaction")
 
 
-@mock.patch("layer_values_monitor.propose_dispute.logger")
-@mock.patch("layer_values_monitor.propose_dispute.subprocess.run")
+@mock.patch("layer_values_monitor.dispute.logger")
+@mock.patch("layer_values_monitor.dispute.subprocess.run")
 def test_logs_exception(mock_subprocess_run, mock_logger):
     # Test that exceptions are logged properly
     mock_subprocess_run.side_effect = Exception("Test exception")
