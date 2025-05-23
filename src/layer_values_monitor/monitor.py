@@ -176,12 +176,12 @@ async def inspect_reports(
         )
 
         if any(
-            [
-                not metrics.metric,
-                not metrics.alert_threshold,
-                not metrics.warning_threshold,
-                not metrics.minor_threshold,
-                not metrics.major_threshold,
+            x is None for x in [
+                metrics.metric,
+                metrics.alert_threshold,
+                metrics.warning_threshold,
+                metrics.minor_threshold,
+                metrics.major_threshold,
             ]
         ):
             logger.error(f"config for {query_id} not set properly")
