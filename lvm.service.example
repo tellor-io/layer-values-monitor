@@ -1,0 +1,17 @@
+[Unit]
+Description=Layer Values Monitor Service
+After=network.target
+
+[Service]
+Type=simple
+User=<USERNAME>
+Group=<USERNAME>
+WorkingDirectory=/home/<USERNAME>/layer-values-monitor
+Environment=PATH=/home/<USERNAME>/.local/bin
+Environment=PYTHONPATH=/home/<USERNAME>/layer-values-monitor/.venv
+ExecStart=/bin/bash -c "uv run layer-values-monitor /home/<USERNAME>/layerd <ACCOUNT_NAME> <KEYRING_BACKEND> /home/<USERNAME>/.layer --global-percentage-alert-threshold 0.10" ...
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
