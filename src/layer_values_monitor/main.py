@@ -70,7 +70,7 @@ async def start() -> None:
         "--global-percentage-major-threshold", default=0.0, type=float, help="Global percentage for a major dispute cat"
     )
     # range
-    parser.add_argument("--global-range-alert-threshold", type=float, help="Global range threshold")
+    parser.add_argument("--global-range-alert-threshold", default=0.0, type=float, help="Global range threshold")
     parser.add_argument(
         "--global-range-warning-threshold", default=0.0, type=float, help="Global range for a warning dispute cat"
     )
@@ -81,15 +81,15 @@ async def start() -> None:
         "--global-range-major-threshold", default=0.0, type=float, help="Global range for a major dispute cat"
     )
     # equality
-    parser.add_argument("--global-equality-alert-threshold", type=bool, help="Global equality threshold")
+    parser.add_argument("--global-equality-alert-threshold", default=False, type=bool, help="Global equality threshold")
     parser.add_argument(
-        "--global-equality-warning-threshold", default=0.0, type=float, help="Global equality for a warning dispute cat"
+        "--global-equality-warning-threshold", default=False, type=bool, help="Global equality for a warning dispute cat"
     )
     parser.add_argument(
-        "--global-equality-minor-threshold", default=0.0, type=float, help="Global equality for a minor dispute cat"
+        "--global-equality-minor-threshold", default=False, type=bool, help="Global equality for a minor dispute cat"
     )
     parser.add_argument(
-        "--global-equality-major-threshold", default=0.0, type=float, help="Global equality for a major dispute cat"
+        "--global-equality-major-threshold", default=False, type=bool, help="Global equality for a major dispute cat"
     )
     args = parser.parse_args()
 
