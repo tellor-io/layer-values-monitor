@@ -5,4 +5,4 @@ from collections import deque
 DENOM = "loya"
 
 TABLE = deque(maxlen=60)
-CSV_FILE = "table.csv"
+CSV_FILE_PATTERN = "table_{timestamp}.csv"

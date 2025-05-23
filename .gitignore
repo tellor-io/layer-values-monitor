@@ -14,5 +14,5 @@ wheels/
 
 .env
 
-table.csv
-logs.json
+*.csv
+*.log
