@@ -76,11 +76,11 @@ def add_to_table(entry: dict[str, str]) -> None:
     file_date = datetime.fromtimestamp(file_timestamp, timezone.utc)
     
     if current_time.date() > file_date.date():
-        # We're in a new day, use the new file
-        csv_file = current_csv_file
+        # We're in a new day, create and use a new file
+        csv_file = get_current_csv_file()  # This will create a new file with today's timestamp
     else:
-        # Try to get the latest existing file, or use current day's file if none exists
-        csv_file = get_latest_csv_file() or current_csv_file
+        # We're in the same day, use the existing file
+        csv_file = current_csv_file
 
     # Write to the appropriate CSV file
     if os.path.exists(csv_file):
