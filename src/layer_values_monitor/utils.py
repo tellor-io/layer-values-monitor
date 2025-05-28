@@ -3,16 +3,48 @@
 import logging
 import os
 from datetime import datetime, timezone
+import pandas as pd
+from dotenv import load_dotenv
 
-from layer_values_monitor.constants import TABLE,CSV_FILE_PATTERN
+from layer_values_monitor.constants import TABLE, CSV_FILE_PATTERN, CURRENT_CSV_FILE, LOGS_DIR
 from layer_values_monitor.custom_types import GlobalMetric, Metrics
 from layer_values_monitor.threshold_config import ThresholdConfig
 
 from pandas import DataFrame
 
+# Load environment variables
+load_dotenv()
+MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "1000"))  # Default to 1000 if not set
 
-logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
+def get_current_csv_path() -> str:
+    """Get the full path to the current CSV file."""
+    return os.path.join(LOGS_DIR, CURRENT_CSV_FILE)
 
+def should_create_new_file() -> bool:
+    """Check if we should create a new file based on row count."""
+    current_file = get_current_csv_path()
+    if not os.path.exists(current_file):
+        return True
+    
+    try:
+        # Read the CSV file and count rows (excluding header)
+        df = pd.read_csv(current_file)
+        return len(df) >= MAX_TABLE_ROWS
+    except Exception as e:
+        logging.error(f"Error checking file size: {e}")
+        return False
+
+def create_new_csv_file() -> str:
+    """Create a new CSV file with current timestamp and return its path."""
+    timestamp = int(datetime.now(timezone.utc).timestamp())
+    new_filename = CSV_FILE_PATTERN.format(timestamp=timestamp)
+    new_filepath = os.path.join(LOGS_DIR, new_filename)
+    
+    # Update the current CSV file constant
+    global CURRENT_CSV_FILE
+    CURRENT_CSV_FILE = new_filename
+    
+    return new_filepath
 
 def get_metric(
     query_type: str,
@@ -63,46 +95,15 @@ def add_to_table(entry: dict[str, str]) -> None:
     """Add entry to table and print it."""
     TABLE.append(entry)
     os.system("clear")
-    # df = pd.DataFrame(table)
     df = DataFrame(TABLE).sort_values(by="TIMESTAMP")
     print(df.to_string(index=False, justify="center"))
 
-    # Get the current day's CSV file
-    current_csv_file = get_current_csv_file()
-    
-    # Check if we need to switch to a new file (if current time is past midnight UTC)
-    current_time = datetime.now(timezone.utc)
-    file_timestamp = int(os.path.basename(current_csv_file).split("_")[1].split(".")[0])
-    file_date = datetime.fromtimestamp(file_timestamp, timezone.utc)
-    
-    if current_time.date() > file_date.date():
-        # We're in a new day, create and use a new file
-        csv_file = get_current_csv_file()  # This will create a new file with today's timestamp
-    else:
-        # We're in the same day, use the existing file
-        csv_file = current_csv_file
-
-    # Write to the appropriate CSV file
-    if os.path.exists(csv_file):
-        # if file exists then just append to it
-        DataFrame([entry]).to_csv(csv_file, mode="a", header=False, index=False)
-    else:
-        # else create file and add header
+    # Check if we need to create a new file
+    if should_create_new_file():
+        csv_file = create_new_csv_file()
+        # Create new file with header
         DataFrame([entry]).to_csv(csv_file, mode="w", header=True, index=False)
-
-def get_current_csv_file() -> str:
-    """Get the current day's CSV file path based on UTC timestamp."""
-    current_time = datetime.now(timezone.utc)
-    # Get the start of the current UTC day
-    day_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    timestamp = int(day_start.timestamp())
-    return os.path.join(logs_dir, CSV_FILE_PATTERN.format(timestamp=timestamp))
-
-def get_latest_csv_file() -> str | None:
-    """Get the most recent CSV file from the logs directory."""
-    csv_files = [f for f in os.listdir(logs_dir) if f.startswith("table_") and f.endswith(".csv")]
-    if not csv_files:
-        return None
-    # Sort by timestamp in filename and get the most recent
-    latest_file = sorted(csv_files, key=lambda x: int(x.split("_")[1].split(".")[0]))[-1]
-    return os.path.join(logs_dir, latest_file)
+    else:
+        csv_file = get_current_csv_path()
+        # Append to existing file
+        DataFrame([entry]).to_csv(csv_file, mode="a", header=False, index=False)
