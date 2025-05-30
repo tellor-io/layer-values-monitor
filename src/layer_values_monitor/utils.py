@@ -14,7 +14,7 @@ from pandas import DataFrame
 
 # Load environment variables
 load_dotenv()
-MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "1000"))  # Default to 1000 if not set
+MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "100000"))
 
 def get_current_csv_path() -> str:
     """Get the full path to the current CSV file."""
