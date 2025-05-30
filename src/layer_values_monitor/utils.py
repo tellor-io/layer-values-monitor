@@ -2,14 +2,14 @@
 
 import logging
 import os
-from datetime import datetime, timezone
-import pandas as pd
-from dotenv import load_dotenv
+from datetime import UTC, datetime
 
-from layer_values_monitor.constants import TABLE, CSV_FILE_PATTERN, CURRENT_CSV_FILE, LOGS_DIR
+from layer_values_monitor.constants import CSV_FILE_PATTERN, CURRENT_CSV_FILE, LOGS_DIR, TABLE
 from layer_values_monitor.custom_types import GlobalMetric, Metrics
 from layer_values_monitor.threshold_config import ThresholdConfig
 
+import pandas as pd
+from dotenv import load_dotenv
 from pandas import DataFrame
 
 # Load environment variables
@@ -36,7 +36,7 @@ def should_create_new_file() -> bool:
 
 def create_new_csv_file() -> str:
     """Create a new CSV file with current timestamp and return its path."""
-    timestamp = int(datetime.now(timezone.utc).timestamp())
+    timestamp = int(datetime.now(UTC).timestamp())
     new_filename = CSV_FILE_PATTERN.format(timestamp=timestamp)
     new_filepath = os.path.join(LOGS_DIR, new_filename)
     
