@@ -2,13 +2,49 @@
 
 import logging
 import os
+from datetime import UTC, datetime
 
-from layer_values_monitor.constants import CSV_FILE, TABLE
+from layer_values_monitor.constants import CSV_FILE_PATTERN, CURRENT_CSV_FILE, LOGS_DIR, TABLE
 from layer_values_monitor.custom_types import GlobalMetric, Metrics
 from layer_values_monitor.threshold_config import ThresholdConfig
 
+import pandas as pd
+from dotenv import load_dotenv
 from pandas import DataFrame
 
+# Load environment variables
+load_dotenv()
+MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "100000"))
+
+def get_current_csv_path() -> str:
+    """Get the full path to the current CSV file."""
+    return os.path.join(LOGS_DIR, CURRENT_CSV_FILE)
+
+def should_create_new_file() -> bool:
+    """Check if we should create a new file based on row count."""
+    current_file = get_current_csv_path()
+    if not os.path.exists(current_file):
+        return True
+    
+    try:
+        # Read the CSV file and count rows (excluding header)
+        df = pd.read_csv(current_file)
+        return len(df) >= MAX_TABLE_ROWS
+    except Exception as e:
+        logging.error(f"Error checking file size: {e}")
+        return False
+
+def create_new_csv_file() -> str:
+    """Create a new CSV file with current timestamp and return its path."""
+    timestamp = int(datetime.now(UTC).timestamp())
+    new_filename = CSV_FILE_PATTERN.format(timestamp=timestamp)
+    new_filepath = os.path.join(LOGS_DIR, new_filename)
+    
+    # Update the current CSV file constant
+    global CURRENT_CSV_FILE
+    CURRENT_CSV_FILE = new_filename
+    
+    return new_filepath
 
 def get_metric(
     query_type: str,
@@ -59,13 +95,15 @@ def add_to_table(entry: dict[str, str]) -> None:
     """Add entry to table and print it."""
     TABLE.append(entry)
     os.system("clear")
-    # df = pd.DataFrame(table)
     df = DataFrame(TABLE).sort_values(by="TIMESTAMP")
     print(df.to_string(index=False, justify="center"))
 
-    if os.path.exists(CSV_FILE):
-        # if file exists then just append to it
-        DataFrame([entry]).to_csv(CSV_FILE, mode="a", header=False, index=False)
+    # Check if we need to create a new file
+    if should_create_new_file():
+        csv_file = create_new_csv_file()
+        # Create new file with header
+        DataFrame([entry]).to_csv(csv_file, mode="w", header=True, index=False)
     else:
-        # else create file and add header
-        DataFrame([entry]).to_csv(CSV_FILE, mode="w", header=True, index=False)
+        csv_file = get_current_csv_path()
+        # Append to existing file
+        DataFrame([entry]).to_csv(csv_file, mode="a", header=False, index=False)
