@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "discordwebhook>=1.0.3",
     "eth-abi==5.2.0",
+    "lru-dict==1.2.0",
     "pandas>=2.2.3",
     "python-dotenv>=1.0.1",
     "telliot-feeds>=0.2.2",
