@@ -21,3 +21,23 @@ alert_threshold = 0.05
 warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
+
+# TRBBridge query type configuration - applies to ALL TRBBridge reports
+[trbbridge]
+metric = "equality"
+alert_threshold = 1.0
+warning_threshold = 1.0  # Must be > 0 for disputes to trigger
+minor_threshold = 0.0
+major_threshold = 0.0
+dispute_level = "warning" # comment this line out to disable auto disputes
+
+# EVMCall query type configuration - applies to ALL EVMCall reports
+[evmcall]
+metric = "equality"
+alert_threshold = 1.0
+warning_threshold = 1.0  # Must be > 0 for disputes to trigger
+minor_threshold = 0.0
+major_threshold = 0.0
+dispute_level = "warning" # comment this line out to disable auto disputes
+
+
