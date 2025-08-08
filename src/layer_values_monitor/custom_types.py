@@ -12,6 +12,7 @@ class GlobalMetric(Enum):
 
     SPOTPRICE = "percentage"
     EVMCALL = "equality"
+    TRBBRIDGE = "equality"
 
 
 @dataclass
@@ -51,3 +52,4 @@ class Metrics:
     warning_threshold: float
     minor_threshold: float
     major_threshold: float
+    dispute_level: str | None = None  # Optional: "warning", "minor", "major", or None for no auto-dispute
