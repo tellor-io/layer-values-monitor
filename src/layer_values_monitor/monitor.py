@@ -159,14 +159,12 @@ async def inspect_reports(
     # First try specific query ID, then query type configuration
     _config: dict[str, str] = config_watcher.get_config().get(query_id.lower())
     if _config is None:
+        logger.info(f"no config by queryID found, getting config by query type for query id: {query_id}, query type: {query_type}")
         _config = config_watcher.get_config().get(query_type.lower())
-
-    logger.debug(
-        f"Configuration lookup - Query ID: {query_id}, Query Type: {query_type}, Config found: {_config is not None}"
-    )
 
     if _config is None:
         # use globals if no specific config for query id or query type
+        logger.info(f"no config found, using global metrics for query id: {query_id}, query type: {query_type}")
         metrics = get_metric(
             query_type,
             logger,
@@ -445,7 +443,8 @@ async def inspect_trbbridge_reports(
             "tip": trusted_tip,
         }
 
-        logger.info(f"TRBBridge comparison - Reported: {reported_value}, Trusted: {trusted_value}")
+        logger.info(f"TRBBridge Reported: {reported_value}")
+        logger.info(f"TRBBridge Trusted: {trusted_value}")
 
         # Use string comparison for equality check (addresses and layer address)
         # and exact value comparison for amounts
@@ -516,12 +515,12 @@ async def inspect(
         else:
             # For other metrics, use traditional threshold-based logic
             category = determine_dispute_category(
+                diff=diff,
                 category_thresholds={
                     "major": metrics.major_threshold,
                     "minor": metrics.minor_threshold,
                     "warning": metrics.warning_threshold,
                 },
-                diff=diff,
             )
             if category is not None:
                 dispute_category = category
@@ -530,12 +529,12 @@ async def inspect(
         # Fallback to traditional threshold-based disputes for backward compatibility
         logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
         category = determine_dispute_category(
+            diff=diff,
             category_thresholds={
                 "major": metrics.major_threshold,
                 "minor": metrics.minor_threshold,
                 "warning": metrics.warning_threshold,
             },
-            diff=diff,
         )
         if category is not None:
             dispute_category = category
