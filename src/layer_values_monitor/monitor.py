@@ -159,7 +159,7 @@ async def inspect_reports(
     # First try specific query ID, then query type configuration
     _config: dict[str, str] = config_watcher.get_config().get(query_id.lower())
     if _config is None:
-        logger.info(f"no config by queryID found, getting config by query type")
+        logger.info("no config by queryID found, getting config by query type")
         _config = config_watcher.get_config().get(query_type.lower())
 
     if _config is None:
