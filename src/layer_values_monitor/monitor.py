@@ -17,9 +17,9 @@ from layer_values_monitor.dispute import (
     determine_dispute_fee,
 )
 from layer_values_monitor.evm_call import get_evm_call_trusted_value
-from layer_values_monitor.trb_bridge import get_trb_bridge_trusted_value, decode_report_value
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.threshold_config import ThresholdConfig
+from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
 from layer_values_monitor.utils import add_to_table, get_metric, remove_0x_prefix
 
 import websockets
@@ -160,9 +160,11 @@ async def inspect_reports(
     _config: dict[str, str] = config_watcher.get_config().get(query_id.lower())
     if _config is None:
         _config = config_watcher.get_config().get(query_type.lower())
-    
-    logger.debug(f"Configuration lookup - Query ID: {query_id}, Query Type: {query_type}, Config found: {_config is not None}")
-    
+
+    logger.debug(
+        f"Configuration lookup - Query ID: {query_id}, Query Type: {query_type}, Config found: {_config is not None}"
+    )
+
     if _config is None:
         # use globals if no specific config for query id or query type
         metrics = get_metric(
@@ -187,7 +189,8 @@ async def inspect_reports(
         logger.debug(f"Using config metrics: alert_threshold={metrics.alert_threshold}")
 
         if any(
-            x is None for x in [
+            x is None
+            for x in [
                 metrics.metric,
                 metrics.alert_threshold,
                 metrics.warning_threshold,
@@ -204,12 +207,12 @@ async def inspect_reports(
         if query is None:
             logger.error(f"unable to get query object for evmcall query type: {query_type}")
             return None
-            
+
         feed = await get_feed(query_id, query, logger)
         if feed is None:
             logger.error(f"unable to get feed for evmcall query id: {query_id}")
             return None
-            
+
         return await inspect_evm_call_reports(
             reports,
             feed,
@@ -227,18 +230,18 @@ async def inspect_reports(
             metrics,
             logger,
         )
-    
+
     # For other query types, use standard telliot-feeds pipeline
     query = get_query(query_data)
     if query is None:
         logger.error(f"unable to get query object for query type: {query_type}")
         return None
-        
+
     feed = await get_feed(query_id, query, logger)
     if feed is None:
         logger.error(f"unable to get feed for query id: {query_id}, query type: {query_type}")
         return None
-        
+
     trusted_value, _ = await fetch_value(feed)
     if trusted_value is None:
         logger.error(f"unable to fetch trusted value for query id: {query_id}, query type: {query_type}")
@@ -290,53 +293,57 @@ def is_disputable(
         percent_diff: float = (reported_value - trusted_value) / trusted_value
         percent_diff = abs(percent_diff)
         logger.debug(f"percent diff: {percent_diff}, reported value: {reported_value} - trusted value: {trusted_value}")
-        
+
         # Handle None values for thresholds - but don't override valid thresholds
         if alert_threshold is None:
             alert_threshold = 0.0
         if dispute_threshold is None:
             dispute_threshold = 0.0
-        
+
         if dispute_threshold == 0:
             return percent_diff >= alert_threshold, False, percent_diff
         return percent_diff >= alert_threshold, percent_diff >= dispute_threshold, percent_diff
 
     if metric.lower() == "equality":
         logger.info(f"checking equality of values, reported value: {reported_value}, trusted value: {trusted_value}")
-        
+
         # Handle None values for thresholds
         if alert_threshold is None:
             alert_threshold = 0.0
         if dispute_threshold is None:
             dispute_threshold = 0.0
-        
+
         # Handle structured data (dicts) vs simple values
         if isinstance(reported_value, dict) and isinstance(trusted_value, dict):
             is_not_equal = reported_value != trusted_value
         else:
             # For simple values, use string comparison
             is_not_equal = remove_0x_prefix(str(reported_value)).lower() != remove_0x_prefix(str(trusted_value).lower())
-        
+
         # Convert to float for consistency
         diff_value = float(is_not_equal)
-        
+
         # For equality metric, if values differ and dispute_threshold > 0, it's disputable
         alertable = is_not_equal and alert_threshold > 0
         disputable = is_not_equal and dispute_threshold > 0
-        
-        logger.debug(f"Equality logic - is_not_equal: {is_not_equal}, alert_threshold: {alert_threshold}, dispute_threshold: {dispute_threshold}, alertable: {alertable}, disputable: {disputable}")
-        
+
+        logger.debug(
+            f"Equality logic - is_not_equal: {is_not_equal}, "
+            f"alert_threshold: {alert_threshold}, dispute_threshold: {dispute_threshold}, "
+            f"alertable: {alertable}, disputable: {disputable}"
+        )
+
         return alertable, disputable, diff_value
 
     if metric.lower() == "range":
         diff = float(abs(reported_value - trusted_value))
-        
+
         # Handle None values for thresholds
         if alert_threshold is None:
             alert_threshold = 0.0
         if dispute_threshold is None:
             dispute_threshold = 0.0
-        
+
         if dispute_threshold == 0:
             return diff >= alert_threshold, False, diff
         return diff >= alert_threshold, diff >= dispute_threshold, diff
@@ -396,68 +403,57 @@ async def inspect_trbbridge_reports(
     contract_address = os.getenv("TRBBRIDGE_CONTRACT_ADDRESS")
     chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
     rpc_url = os.getenv("TRBBRIDGE_RPC_URL")
-    
+
     if not contract_address:
         logger.error("TRBBRIDGE_CONTRACT_ADDRESS environment variable is not set")
         return None
-    
+
     logger.info(f"TRBBridge contract address: {contract_address}")
     logger.info(f"chain ID: {chain_id}")
     logger.info(f"rpc url: {rpc_url}")
-    
+
     for r in reports:
         # Decode the reported value
         reported_details = decode_report_value(r.value)
         if reported_details is None:
             logger.error(f"Failed to decode reported value for TRBBridge query {query_id}")
             continue
-        
+
         reported_eth_addr, reported_layer_addr, reported_amount, reported_tip = reported_details
-        
+
         # Get trusted value from contract
-        trusted_details = await get_trb_bridge_trusted_value(
-            r.query_data,
-            contract_address,
-            chain_id,
-            rpc_url,
-            logger
-        )
-        
+        trusted_details = await get_trb_bridge_trusted_value(r.query_data, contract_address, chain_id, rpc_url, logger)
+
         if trusted_details is None:
             logger.error(f"Unable to fetch trusted value for TRBBridge query {query_id}")
             continue
-        
+
         trusted_eth_addr, trusted_layer_addr, trusted_amount, trusted_tip = trusted_details
-        
+
         # Create comparison structures for inspection
         reported_value = {
             "eth_address": reported_eth_addr,
             "layer_address": reported_layer_addr,
             "amount": reported_amount,
-            "tip": reported_tip
+            "tip": reported_tip,
         }
-        
+
         trusted_value = {
             "eth_address": trusted_eth_addr,
             "layer_address": trusted_layer_addr,
             "amount": trusted_amount,
-            "tip": trusted_tip
+            "tip": trusted_tip,
         }
-        
+
         logger.info(f"TRBBridge comparison - Reported: {reported_value}, Trusted: {trusted_value}")
-        
+
         # Use string comparison for equality check (addresses and layer address)
         # and exact value comparison for amounts
-        matches = (
-            reported_eth_addr == trusted_eth_addr and
-            reported_layer_addr == trusted_layer_addr and
-            reported_amount == trusted_amount and
-            reported_tip == trusted_tip
-        )
-        
+        # Note: We don't need to store the matches result since we use exact equality for TRBBridge
+
         # For TRBBridge, we expect exact equality
         await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger)
-    
+
     return None
 
 
@@ -505,9 +501,11 @@ async def inspect(
     # Handle auto-dispute logic
     should_dispute = False
     dispute_category = None
-    
-    logger.debug(f"Dispute logic - disputable: {disputable}, dispute_level: {metrics.dispute_level}, metric: {metrics.metric}")
-    
+
+    logger.debug(
+        f"Dispute logic - disputable: {disputable}, dispute_level: {metrics.dispute_level}, metric: {metrics.metric}"
+    )
+
     # Check if we should auto-dispute based on dispute_level configuration
     if disputable and metrics.dispute_level is not None:
         # For equality metrics with dispute_level set, always dispute at the specified level
@@ -542,7 +540,7 @@ async def inspect(
         if category is not None:
             dispute_category = category
             should_dispute = True
-    
+
     # Submit dispute if needed
     if should_dispute and dispute_category is not None:
         logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
