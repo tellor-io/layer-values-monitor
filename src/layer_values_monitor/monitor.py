@@ -182,7 +182,6 @@ async def inspect_reports(
             warning_threshold=_config.get("warning_threshold"),
             minor_threshold=_config.get("minor_threshold"),
             major_threshold=_config.get("major_threshold"),
-            dispute_level=_config.get("dispute_level"),  # New field for single dispute level
         )
         logger.debug(f"Using config metrics: alert_threshold={metrics.alert_threshold}")
 
@@ -502,16 +501,30 @@ async def inspect(
     dispute_category = None
 
     logger.debug(
-        f"Dispute logic - disputable: {disputable}, dispute_level: {metrics.dispute_level}, metric: {metrics.metric}"
+        f"Dispute logic - disputable: {disputable}, metric: {metrics.metric}"
     )
 
-    # Check if we should auto-dispute based on dispute_level configuration
-    if disputable and metrics.dispute_level is not None:
-        # For equality metrics with dispute_level set, always dispute at the specified level
+    # Check if we should auto-dispute based on threshold configuration
+    if disputable:
+        logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
+        
+        # For equality metrics, determine dispute level based on which threshold is set to 1.0
         if metrics.metric.lower() == "equality":
-            dispute_category = metrics.dispute_level
-            should_dispute = True
-            logger.info(f"Auto-disputing equality mismatch at {dispute_category} level")
+            # Check which threshold is set to 1.0 (indicating the dispute level)
+            if metrics.warning_threshold == 1.0:
+                dispute_category = "warning"
+                should_dispute = True
+                logger.info(f"Auto-disputing equality mismatch at warning level")
+            elif metrics.minor_threshold == 1.0:
+                dispute_category = "minor"
+                should_dispute = True
+                logger.info(f"Auto-disputing equality mismatch at minor level")
+            elif metrics.major_threshold == 1.0:
+                dispute_category = "major"
+                should_dispute = True
+                logger.info(f"Auto-disputing equality mismatch at major level")
+            else:
+                logger.debug("No dispute level configured for equality metric (no threshold set to 1.0)")
         else:
             # For other metrics, use traditional threshold-based logic
             category = determine_dispute_category(
@@ -525,20 +538,6 @@ async def inspect(
             if category is not None:
                 dispute_category = category
                 should_dispute = True
-    elif disputable and metrics.warning_threshold > 0:
-        # Fallback to traditional threshold-based disputes for backward compatibility
-        logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
-        category = determine_dispute_category(
-            diff=diff,
-            category_thresholds={
-                "major": metrics.major_threshold,
-                "minor": metrics.minor_threshold,
-                "warning": metrics.warning_threshold,
-            },
-        )
-        if category is not None:
-            dispute_category = category
-            should_dispute = True
 
     # Submit dispute if needed
     if should_dispute and dispute_category is not None:

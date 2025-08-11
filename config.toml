@@ -26,18 +26,18 @@ major_threshold = 0.0
 [trbbridge]
 metric = "equality"
 alert_threshold = 1.0
-warning_threshold = 1.0  # Must be > 0 for disputes to trigger
-minor_threshold = 0.0
-major_threshold = 0.0
-dispute_level = "warning" # comment this line out to disable auto disputes
+warning_threshold = 1.0
+minor_threshold = 0.0    
+major_threshold = 0.0    
+# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
 
 # EVMCall query type configuration - applies to ALL EVMCall reports
 [evmcall]
 metric = "equality"
 alert_threshold = 1.0
-warning_threshold = 1.0  # Must be > 0 for disputes to trigger
-minor_threshold = 0.0
-major_threshold = 0.0
-dispute_level = "warning" # comment this line out to disable auto disputes
+warning_threshold = 1.0  # Set to 1.0 to enable disputes at warning level
+minor_threshold = 0.0    # Set to 1.0 to enable disputes at minor level
+major_threshold = 0.0    # Set to 1.0 to enable disputes at major level
+# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
 
 
