@@ -514,15 +514,15 @@ async def inspect(
             if metrics.warning_threshold == 1.0:
                 dispute_category = "warning"
                 should_dispute = True
-                logger.info(f"Auto-disputing equality mismatch at warning level")
+                logger.info("Auto-disputing equality mismatch at warning level")
             elif metrics.minor_threshold == 1.0:
                 dispute_category = "minor"
                 should_dispute = True
-                logger.info(f"Auto-disputing equality mismatch at minor level")
+                logger.info("Auto-disputing equality mismatch at minor level")
             elif metrics.major_threshold == 1.0:
                 dispute_category = "major"
                 should_dispute = True
-                logger.info(f"Auto-disputing equality mismatch at major level")
+                logger.info("Auto-disputing equality mismatch at major level")
             else:
                 logger.debug("No dispute level configured for equality metric (no threshold set to 1.0)")
         else:
