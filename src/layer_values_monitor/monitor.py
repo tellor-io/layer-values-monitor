@@ -75,6 +75,57 @@ async def listen_to_new_report_events(uri: str, q: asyncio.Queue, logger: loggin
         await asyncio.sleep(actual_delay)
 
 
+async def listen_to_agg_reports_events(uri: str, q: asyncio.Queue, logger: logging) -> None:
+    """Connect to a layer websocket and fetch aggregate reports and add them to queue for monitoring.
+
+    uri: address to chain (ie ws://localhost:26657/websocket)
+    q: queue to store raw response for later processing
+    logger:
+    """
+    logger.info("Starting WebSocket connection for aggregate reports...")
+    query = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "subscribe",
+            "id": 2,
+            "params": {"query": "aggregate_report.aggregate_power > 0"},
+        }
+    )
+    uri = f"ws://{uri}/websocket"
+    retry_count = 0
+    base_delay = 1
+    max_delay = 60
+
+    while True:
+        try:
+            logger.info(f"Connecting to WebSocket at {uri} for aggregate reports... (Attempt {retry_count + 1})")
+            async with websockets.connect(uri) as websocket:
+                await websocket.send(query)
+                logger.info("Successfully subscribed to aggregate report events.")
+                # Reset retry count on successful connection
+                retry_count = 0
+                while True:
+                    response = await websocket.recv()
+                    await q.put(json.loads(response))
+
+        except websockets.ConnectionClosed as e:
+            logger.warning(f"WebSocket connection closed for aggregate reports: {e}")
+        except websockets.WebSocketException as e:
+            logger.error(f"WebSocket error for aggregate reports: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error for aggregate reports: {e}", exc_info=True)
+        logger.info("going through the retry phase since aggregate reports connection was closed")
+        # Calculate delay with exponential backoff and jitter for reconnection
+        delay = min(base_delay * (2**retry_count), max_delay)
+        # Add jitter to prevent thundering herd problem
+        jitter = random.uniform(0, 0.1 * delay)
+        actual_delay = delay + jitter
+
+        retry_count += 1
+        logger.info(f"Reconnecting in {actual_delay:.2f} seconds for aggregate reports (retry {retry_count})")
+        await asyncio.sleep(actual_delay)
+
+
 async def raw_data_queue_handler(
     raw_data_q: asyncio.Queue,
     new_reports_q: asyncio.Queue,
