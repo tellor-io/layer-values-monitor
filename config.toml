@@ -21,3 +21,23 @@ alert_threshold = 0.05
 warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
+
+# TRBBridge query type configuration - applies to ALL TRBBridge reports
+[trbbridge]
+metric = "equality"
+alert_threshold = 1.0
+warning_threshold = 1.0
+minor_threshold = 0.0
+major_threshold = 0.0
+# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
+
+# EVMCall query type configuration - applies to ALL EVMCall reports
+[evmcall]
+metric = "equality"
+alert_threshold = 1.0
+warning_threshold = 1.0
+minor_threshold = 0.0
+major_threshold = 0.0
+# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
+
+

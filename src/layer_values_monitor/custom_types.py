@@ -12,6 +12,7 @@ class GlobalMetric(Enum):
 
     SPOTPRICE = "percentage"
     EVMCALL = "equality"
+    TRBBRIDGE = "equality"
 
 
 @dataclass

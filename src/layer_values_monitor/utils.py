@@ -16,16 +16,18 @@ from pandas import DataFrame
 load_dotenv()
 MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "100000"))
 
+
 def get_current_csv_path() -> str:
     """Get the full path to the current CSV file."""
     return os.path.join(LOGS_DIR, CURRENT_CSV_FILE)
+
 
 def should_create_new_file() -> bool:
     """Check if we should create a new file based on row count."""
     current_file = get_current_csv_path()
     if not os.path.exists(current_file):
         return True
-    
+
     try:
         # Read the CSV file and count rows (excluding header)
         df = pd.read_csv(current_file)
@@ -34,17 +36,19 @@ def should_create_new_file() -> bool:
         logging.error(f"Error checking file size: {e}")
         return False
 
+
 def create_new_csv_file() -> str:
     """Create a new CSV file with current timestamp and return its path."""
     timestamp = int(datetime.now(UTC).timestamp())
     new_filename = CSV_FILE_PATTERN.format(timestamp=timestamp)
     new_filepath = os.path.join(LOGS_DIR, new_filename)
-    
+
     # Update the current CSV file constant
     global CURRENT_CSV_FILE
     CURRENT_CSV_FILE = new_filename
-    
+
     return new_filepath
+
 
 def get_metric(
     query_type: str,
