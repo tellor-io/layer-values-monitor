@@ -12,11 +12,14 @@ from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.dispute import process_disputes
 from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
+    agg_reports_queue_handler,
+    listen_to_agg_reports_events,
     listen_to_new_report_events,
     new_reports_queue_handler,
     raw_data_queue_handler,
 )
 from layer_values_monitor.threshold_config import ThresholdConfig
+from layer_values_monitor.saga_contract import create_saga_contract_manager
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
@@ -52,10 +55,18 @@ async def start() -> None:
     if chain_id is None:
         raise ValueError("CHAIN_ID not found in environment variables")
     parser = argparse.ArgumentParser(description="Start values monitor")
-    parser.add_argument("binary_path", type=str, help="Path to the Layer binary executable")
-    parser.add_argument("key_name", type=str, help="Name of the key to use for transactions")
-    parser.add_argument("keyring_backend", type=str, help="Keyring backend")
-    parser.add_argument("keyring_dir", type=str, help="Keyring directory")
+    parser.add_argument("binary_path", type=str, nargs='?', 
+                       default=os.getenv("LAYER_BINARY_PATH"), 
+                       help="Path to the Layer binary executable (can be set via LAYER_BINARY_PATH env var)")
+    parser.add_argument("key_name", type=str, nargs='?', 
+                       default=os.getenv("LAYER_KEY_NAME"), 
+                       help="Name of the key to use for transactions (can be set via LAYER_KEY_NAME env var)")
+    parser.add_argument("keyring_backend", type=str, nargs='?', 
+                       default=os.getenv("LAYER_KEYRING_BACKEND"), 
+                       help="Keyring backend (can be set via LAYER_KEYRING_BACKEND env var)")
+    parser.add_argument("keyring_dir", type=str, nargs='?', 
+                       default=os.getenv("LAYER_KEYRING_DIR"), 
+                       help="Keyring directory (can be set via LAYER_KEYRING_DIR env var)")
     parser.add_argument("--payfrom-bond", action="store_true", help="Pay dispute fee from bond")
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
     # percentage
@@ -93,13 +104,27 @@ async def start() -> None:
     )
     args = parser.parse_args()
 
+    # Validate required arguments are provided either via env vars or command line
+    if not args.binary_path:
+        raise ValueError("binary_path is required (set LAYER_BINARY_PATH env var or provide as argument)")
+    if not args.key_name:
+        raise ValueError("key_name is required (set LAYER_KEY_NAME env var or provide as argument)")
+    if not args.keyring_backend:
+        raise ValueError("keyring_backend is required (set LAYER_KEYRING_BACKEND env var or provide as argument)")
+    if not args.keyring_dir:
+        raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
+
     threshold_config = ThresholdConfig.from_args(args)
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     config_watcher = ConfigWatcher(config_path)
 
+    # Initialize Saga contract manager for pausing contracts
+    saga_contract_manager = create_saga_contract_manager(logger)
+
     raw_data_queue = asyncio.Queue()
+    agg_reports_queue = asyncio.Queue()
     new_reports_queue = asyncio.Queue()
     disputes_queue = asyncio.Queue()
     cfg = TelliotConfig()
@@ -109,11 +134,14 @@ async def start() -> None:
     try:
         await asyncio.gather(
             listen_to_new_report_events(uri, raw_data_queue, logger),
+            listen_to_agg_reports_events(uri, raw_data_queue, logger),
             raw_data_queue_handler(
                 raw_data_queue,
                 new_reports_queue,
+                agg_reports_queue,
                 logger=logger,
             ),
+            agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager),
             new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
             process_disputes(
                 disputes_q=disputes_queue,
