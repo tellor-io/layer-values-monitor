@@ -51,3 +51,16 @@ class Metrics:
     warning_threshold: float
     minor_threshold: float
     major_threshold: float
+    pause_threshold: float
+
+
+@dataclass
+class AggregateReport:
+    """Store information about an aggregate report event."""
+
+    query_id: str
+    query_data: str
+    value: str
+    aggregate_power: str
+    micro_report_height: str
+    height: int | None = None
