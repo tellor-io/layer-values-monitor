@@ -65,6 +65,7 @@ def get_metric(
             warning_threshold=threshold_config.percentage_warning,
             minor_threshold=threshold_config.percentage_minor,
             major_threshold=threshold_config.percentage_major,
+            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for percentage metric
         )
     elif metric == "range":
         return Metrics(
@@ -73,6 +74,7 @@ def get_metric(
             warning_threshold=threshold_config.range_warning,
             minor_threshold=threshold_config.range_minor,
             major_threshold=threshold_config.range_major,
+            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for range metric
         )
     elif metric == "equality":
         return Metrics(
@@ -81,6 +83,7 @@ def get_metric(
             warning_threshold=threshold_config.equality_warning,
             minor_threshold=threshold_config.equality_minor,
             major_threshold=threshold_config.equality_major,
+            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for equality metric (binary)
         )
 
 
