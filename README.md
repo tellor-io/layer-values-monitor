@@ -79,6 +79,11 @@ Do both option 1 and 2.  Set the global thresholds without the `--use-custom-con
 | `CHAIN_ID` | Chain ID of the Layer network (ie `layer-testnet`) |
 | `URI` | URI of the Layer node to connect to (ie `localhost:26657`) |
 | `DISCORD_WEBHOOK_URL_1` | Discord webhook url to recieve to notifications on |
+| `TRBBRIDGE_CONTRACT_ADDRESS` | TRB Bridge contract address (optional) |
+| `TRBBRIDGE_CHAIN_ID` | TRB Bridge chain ID (optional) |
+| `TRBBRIDGE_RPC_URL` | TRB Bridge RPC endpoint (optional) |
+| `SAGA_EVM_RPC_URL` | Saga EVM RPC endpoint for contract pausing (optional) |
+| `SAGA_PRIVATE_KEY` | Private key of guardian account for contract pausing (optional) |
 
 #### Threshold Settings
 
@@ -91,8 +96,25 @@ The configuration file also allows you to set thresholds for monitoring values. 
 | `warning_threshold` | Lowest level dispute category threshold |
 | `minor_threshold` | Middle level dispute category threshold |
 | `major_threshold` | Highest level in  dispute category threshold |
+| `pause_threshold` | Circuit breaker threshold that triggers data feed contract pausing |
 
 **NOTE** For disputing at minimum the warning category has to be set greater than 0. The thresholds should `float` types. The equality metric is 1.0 for True and 0.0 for False.
+
+#### Contract Pausing
+
+The monitor can automatically pause Saga EVM contracts when aggregate reports exceed the `pause_threshold`. This acts as a circuit breaker to protect against bad oracle data.
+
+| Configuration | Description |
+|---------------|-------------|
+| `pause_threshold` | Deviation threshold that triggers contract pausing |
+| `contract_address` | Address of the GuardedPausable contract to pause |
+| `SAGA_EVM_RPC_URL` | Saga EVM RPC endpoint (environment variable) |
+| `SAGA_PRIVATE_KEY` | Private key of a guardian account (environment variable) |
+
+**Requirements for Contract Pausing:**
+- The configured account must be a guardian on the target contract
+- The contract must not already be paused
+- Valid Saga EVM RPC connection
 
 #### Example Config File (TOML format)
 
@@ -103,4 +125,6 @@ alert_threshold = 1.0
 warning_threshold = 0.0
 minor_threshold = 0.0
 major_threshold = 0.0
+pause_threshold = 0.5
+contract_address = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
 ```
