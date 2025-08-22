@@ -110,7 +110,7 @@ async def test_raw_data_queue_handler_basic_flow(mock_logger):
     for data in [sample_data_1, sample_data_2, sample_data_3, sample_data_4, sample_data_5, sample_data_6]:
         await raw_data_q.put(data)
 
-    await raw_data_queue_handler(raw_data_q, new_reports_q, mock_logger, max_iterations=6)
+    await raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, max_iterations=6)
 
     assert new_reports_q.qsize() == 2
 
@@ -152,7 +152,7 @@ async def test_raw_data_queue_handler_empty_queue(mock_logger):
     new_reports_q = asyncio.Queue()
 
     # Create and run the task with a short timeout
-    task = asyncio.create_task(raw_data_queue_handler(raw_data_q, new_reports_q, mock_logger, max_iterations=1))
+    task = asyncio.create_task(raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, max_iterations=1))
 
     await raw_data_q.put({})
 
@@ -173,7 +173,7 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     raw_data_q = asyncio.Queue()
     new_reports_q = asyncio.Queue()
 
-    task = asyncio.create_task(raw_data_queue_handler(raw_data_q, new_reports_q, mock_logger, max_iterations=5))
+    task = asyncio.create_task(raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, max_iterations=5))
 
     # Wait for the task to start
     await asyncio.sleep(0.1)
@@ -335,7 +335,7 @@ async def test_raw_data_queue_handler():
     await raw_data_q.put(raw_data_height_5_query2)
     await raw_data_q.put(raw_data_height_6)
 
-    await raw_data_queue_handler(raw_data_q, new_reports_q, logger, max_iterations=3)
+    await raw_data_queue_handler(raw_data_q, new_reports_q, None, logger, max_iterations=3)
 
     assert not new_reports_q.empty(), "Queue should have items"
     height_5_reports = await new_reports_q.get()

@@ -36,6 +36,7 @@ def test_spotprice_returns_percentage_metric(threshold_values):
         warning_threshold=threshold_values.percentage_warning,
         minor_threshold=threshold_values.percentage_minor,
         major_threshold=threshold_values.percentage_major,
+        pause_threshold=threshold_values.pause_threshold,
     )
 
     assert result == expected
@@ -51,6 +52,7 @@ def test_evmcall_returns_equality_metric(threshold_values):
         warning_threshold=threshold_values.equality_warning,
         minor_threshold=threshold_values.equality_minor,
         major_threshold=threshold_values.equality_major,
+        pause_threshold=threshold_values.pause_threshold,
     )
 
     assert result == expected
