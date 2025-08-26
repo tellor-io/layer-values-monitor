@@ -155,10 +155,10 @@ async def raw_data_queue_handler(
     logger: logging,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
 ) -> None:
-    """Inspect reports in reports queue and process to see if they should be disputed
-    or if any saga contract should be paused.
-    """
+    """Inspect reports in reports queue and process to see if they should be disputed.
     
+    Or if any saga contract should be paused.
+    """
     logger.info("Inspecting reports...")
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
