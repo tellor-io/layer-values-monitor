@@ -67,8 +67,11 @@ async def start() -> None:
     parser.add_argument("keyring_dir", type=str, nargs='?', 
                        default=os.getenv("LAYER_KEYRING_DIR"), 
                        help="Keyring directory (can be set via LAYER_KEYRING_DIR env var)")
-    parser.add_argument("--payfrom-bond", action="store_true", help="Pay dispute fee from bond")
+    parser.add_argument("--payfrom-bond", action="store_true", 
+                       default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"), 
+                       help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)")
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
+    parser.add_argument("--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing")
     # percentage
     parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
@@ -113,6 +116,16 @@ async def start() -> None:
         raise ValueError("keyring_backend is required (set LAYER_KEYRING_BACKEND env var or provide as argument)")
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
+    
+    # Validate Saga environment variables if Saga guard is enabled
+    if args.enable_saga_guard:
+        saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
+        saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
+        
+        if not saga_rpc_url:
+            raise ValueError("SAGA_EVM_RPC_URL environment variable is required when using --enable-saga-guard")
+        if not saga_private_key:
+            raise ValueError("SAGA_PRIVATE_KEY environment variable is required when using --enable-saga-guard")
 
     threshold_config = ThresholdConfig.from_args(args)
 
@@ -120,8 +133,10 @@ async def start() -> None:
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     config_watcher = ConfigWatcher(config_path)
 
-    # Initialize Saga contract manager for pausing contracts
-    saga_contract_manager = create_saga_contract_manager(logger)
+    # Initialize Saga contract manager for pausing contracts (if enabled)
+    saga_contract_manager = None
+    if args.enable_saga_guard:
+        saga_contract_manager = create_saga_contract_manager(logger)
 
     raw_data_queue = asyncio.Queue()
     agg_reports_queue = asyncio.Queue()
@@ -132,16 +147,15 @@ async def start() -> None:
 
     # TODO: validate user options to check if they conflict
     try:
-        await asyncio.gather(
+        # Build list of tasks to run concurrently
+        tasks = [
             listen_to_new_report_events(uri, raw_data_queue, logger),
-            listen_to_agg_reports_events(uri, raw_data_queue, logger),
             raw_data_queue_handler(
                 raw_data_queue,
                 new_reports_queue,
                 agg_reports_queue,
                 logger=logger,
             ),
-            agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager),
             new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
             process_disputes(
                 disputes_q=disputes_queue,
@@ -155,7 +169,16 @@ async def start() -> None:
                 logger=logger,
             ),
             watch_config(config_watcher),
-        )
+        ]
+        
+        # Only add Saga-related tasks if enabled
+        if args.enable_saga_guard:
+            tasks.extend([
+                listen_to_agg_reports_events(uri, raw_data_queue, logger),
+                agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager),
+            ])
+        
+        await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         print("shutting down running tasks")
         raise
