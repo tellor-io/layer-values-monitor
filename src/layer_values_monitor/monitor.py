@@ -10,6 +10,7 @@ from typing import Any
 
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
+from layer_values_monitor.custom_feeds import get_custom_trusted_value
 from layer_values_monitor.custom_types import AggregateReport, Metrics, Msg, NewReport
 from layer_values_monitor.discord import generic_alert
 from layer_values_monitor.dispute import (
@@ -41,7 +42,8 @@ def decode_hex_value(hex_value: str) -> float:
     
     return value_scaled
 
-    # 
+
+
 
 
 async def listen_to_new_report_events(uri: str, q: asyncio.Queue, logger: logging) -> None:
@@ -177,7 +179,7 @@ async def raw_data_queue_handler(
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
 
         if is_new_report:
-            logger.info(f"new_report found w/ meta id: {events['new_report.meta_id'][0]}")
+            logger.info(f"new_report found w/ meta id: {events['new_report.meta_id'][0]}, query id: {events['new_report.query_id'][0]}")
             try:
                 # get current height from event
                 height = events["tx.height"][0]
@@ -330,6 +332,30 @@ async def inspect_reports(
             metrics,
             logger,
         )
+
+    # Check if this query ID requires custom price lookup (not supported by telliot feeds yet)
+    UNSUPPORTED_QUERY_IDS = {
+        "c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e",  # FBTC/USD
+        "74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d",  # SAGA/USD
+    }
+    
+    if query_id.lower() in UNSUPPORTED_QUERY_IDS:
+        logger.info(f"Using custom price lookup for unsupported query ID: {query_id}")
+        trusted_value = await get_custom_trusted_value(query_id, logger)
+        if trusted_value is None:
+            logger.error(f"unable to fetch custom trusted value for query id: {query_id}")
+            return None
+        
+        # For custom price lookups, we need to decode the reported values manually
+        query = get_query(query_data)
+        if query is None:
+            logger.error(f"unable to get query object for query type: {query_type}")
+            return None
+            
+        for r in reports:
+            reported_value = query.value_type.decode(bytes.fromhex(r.value))
+            await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger)
+        return None
 
     # For other query types, use standard telliot-feeds pipeline
     query = get_query(query_data)
@@ -643,7 +669,7 @@ async def inspect_trbbridge_reports(
     # Get TRBBridge configuration from environment variables, default to mainnet if not set
     contract_address = os.getenv("TRBBRIDGE_CONTRACT_ADDRESS")
     chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
-    rpc_url = os.getenv("TRBBRIDGE_RPC_URL")
+    rpc_url = os.getenv("ETHEREUM_RPC_URL")
 
     if not contract_address:
         logger.error("TRBBRIDGE_CONTRACT_ADDRESS environment variable is not set")
