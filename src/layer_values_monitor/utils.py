@@ -99,12 +99,10 @@ def remove_0x_prefix(s: str) -> str:
 
 
 def add_to_table(entry: dict[str, str]) -> None:
-    """Add entry to table and print it."""
+    """Add entry to table and save to CSV (without console output)."""
     TABLE.append(entry)
-    os.system("clear")
-    df = DataFrame(TABLE).sort_values(by="TIMESTAMP")
-    print(df.to_string(index=False, justify="center"))
-
+    
+    # Only save to CSV files, don't print to console
     # Check if we need to create a new file
     if should_create_new_file():
         csv_file = create_new_csv_file()
