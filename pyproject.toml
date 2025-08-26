@@ -9,6 +9,7 @@ authors = [
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.8.0",
     "discordwebhook>=1.0.3",
     "eth-abi==5.2.0",
     "pandas>=2.2.3",
