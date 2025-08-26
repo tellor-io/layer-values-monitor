@@ -4,10 +4,10 @@ import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from layer_values_monitor.custom_types import AggregateReport
 from layer_values_monitor.saga_contract import create_saga_contract_manager
+
+import pytest
 
 
 class TestSagaIntegration:

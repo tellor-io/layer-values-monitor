@@ -2,13 +2,13 @@
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
-from web3.exceptions import Web3Exception, TransactionNotFound, TimeExhausted
-
-import pytest
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from layer_values_monitor.custom_types import AggregateReport
 from layer_values_monitor.saga_contract import SagaContractManager
+
+import pytest
+from web3.exceptions import TransactionNotFound, Web3Exception
 
 
 class TestSagaEdgeCases:

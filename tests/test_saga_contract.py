@@ -1,15 +1,14 @@
 """Tests for Saga contract pausing functionality."""
 
-import asyncio
 import logging
 import os
-from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock, patch
-from web3 import Web3
-from web3.exceptions import Web3Exception
-
-import pytest
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from layer_values_monitor.saga_contract import SagaContractManager, create_saga_contract_manager
+
+import pytest
+from web3 import Web3
+from web3.exceptions import Web3Exception
 
 
 class TestSagaContractManager:
@@ -177,7 +176,8 @@ class TestSagaContractManager:
             
             assert result is None
             mock_logger.error.assert_called_with(
-                f"Account {saga_manager.account.address} is not a guardian for contract 0X9FE237B245466A5F088AFE808B27C1305E3027BC"
+                f"Account {saga_manager.account.address} is not a guardian for contract "
+                f"0X9FE237B245466A5F088AFE808B27C1305E3027BC"
             )
 
     @pytest.mark.asyncio
@@ -195,7 +195,8 @@ class TestSagaContractManager:
                 )
                 
                 assert result is None
-                mock_logger.warning.assert_called_with("Contract 0X9FE237B245466A5F088AFE808B27C1305E3027BC is already paused")
+                mock_logger.warning.assert_called_with(
+                    "Contract 0X9FE237B245466A5F088AFE808B27C1305E3027BC is already paused")
 
     @pytest.mark.asyncio
     async def test_pause_contract_transaction_failure(self, saga_manager, mock_logger, mock_web3):
@@ -281,7 +282,7 @@ class TestSagaContractManager:
                     mock_web3.eth.send_raw_transaction.return_value.hex.return_value = "0xtest_hash"
                     
                     # Mock timeout
-                    mock_web3.eth.wait_for_transaction_receipt.side_effect = asyncio.TimeoutError()
+                    mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeoutError()
                     
                     result = await saga_manager.pause_contract(
                         "0x9fe237b245466A5f088AfE808b27c1305E3027BC",

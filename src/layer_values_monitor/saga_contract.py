@@ -1,9 +1,7 @@
 """Saga contract interactions for pausing contracts when circuit breaker is triggered."""
 
-import asyncio
 import logging
 import os
-from typing import Optional
 
 from web3 import Web3
 
@@ -11,13 +9,14 @@ from web3 import Web3
 class SagaContractManager:
     """Manages interactions with Saga EVM contracts for pausing functionality."""
 
-    def __init__(self, rpc_url: str, private_key: str, logger: logging.Logger):
+    def __init__(self, rpc_url: str, private_key: str, logger: logging.Logger) -> None:
         """Initialize the Saga contract manager.
         
         Args:
             rpc_url: The Saga EVM RPC endpoint
             private_key: Private key for signing transactions (without 0x prefix)
             logger: Logger instance
+
         """
         self.logger = logger
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
@@ -61,7 +60,7 @@ class SagaContractManager:
         
         self.logger.info(f"Initialized Saga contract manager with account: {self.account.address}")
     
-    async def pause_contract(self, contract_address: str, query_id: str) -> Optional[str]:
+    async def pause_contract(self, contract_address: str, query_id: str) -> str | None:
         """Pause a Saga contract by calling its pause() function.
         
         Args:
@@ -70,6 +69,7 @@ class SagaContractManager:
             
         Returns:
             Transaction hash if successful, None if failed
+
         """
         try:
             # Validate contract address format
@@ -121,23 +121,28 @@ class SagaContractManager:
             tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
             tx_hash_hex = tx_hash.hex()
             
-            self.logger.critical(f"🚨 PAUSE TRANSACTION SENT - Query: {query_id[:16]}... Contract: {contract_address} TxHash: {tx_hash_hex}")
+            self.logger.critical(f"🚨 PAUSE TRANSACTION SENT - Query: {query_id[:16]}... "
+                                f"Contract: {contract_address} TxHash: {tx_hash_hex}")
             
             # Wait for transaction receipt (with timeout)
             try:
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
                 if receipt.status == 1:
-                    self.logger.critical(f"✅ PAUSE SUCCESSFUL - Contract {contract_address} paused successfully. TxHash: {tx_hash_hex}")
+                    self.logger.critical(f"✅ PAUSE SUCCESSFUL - Contract {contract_address} "
+                                        f"paused successfully. TxHash: {tx_hash_hex}")
                     return tx_hash_hex
                 else:
-                    self.logger.error(f"❌ PAUSE FAILED - Transaction failed for contract {contract_address}. TxHash: {tx_hash_hex}")
+                    self.logger.error(f"❌ PAUSE FAILED - Transaction failed for contract "
+                                     f"{contract_address}. TxHash: {tx_hash_hex}")
                     return None
-            except asyncio.TimeoutError:
-                self.logger.warning(f"⏰ PAUSE PENDING - Transaction timeout for contract {contract_address}, but may still be processing. TxHash: {tx_hash_hex}")
+            except TimeoutError:
+                self.logger.warning(f"⏰ PAUSE PENDING - Transaction timeout for contract {contract_address}, "
+                                   f"but may still be processing. TxHash: {tx_hash_hex}")
                 return tx_hash_hex  # Return hash even on timeout as it may still succeed
                 
         except Exception as e:
-            self.logger.error(f"❌ PAUSE ERROR - Failed to pause contract {contract_address} for query {query_id[:16]}...: {e}")
+            self.logger.error(f"❌ PAUSE ERROR - Failed to pause contract {contract_address} "
+                             f"for query {query_id[:16]}...: {e}")
             return None
 
     async def is_guardian(self, contract_address: str, guardian_address: str) -> bool:
@@ -149,6 +154,7 @@ class SagaContractManager:
             
         Returns:
             True if the address is a guardian, False otherwise
+
         """
         try:
             contract_address = self.w3.to_checksum_address(contract_address)
@@ -172,6 +178,7 @@ class SagaContractManager:
             
         Returns:
             True if the contract is paused, False otherwise
+
         """
         try:
             contract_address = self.w3.to_checksum_address(contract_address)
@@ -189,21 +196,22 @@ class SagaContractManager:
     def is_connected(self) -> bool:
         """Check if Web3 connection is working."""
         try:
-            self.w3.eth.block_number
+            _ = self.w3.eth.block_number
             return True
         except Exception as e:
             self.logger.error(f"Saga EVM connection failed: {e}")
             return False
 
 
-def create_saga_contract_manager(logger: logging.Logger) -> Optional[SagaContractManager]:
-    """Factory function to create SagaContractManager from environment variables.
+def create_saga_contract_manager(logger: logging.Logger) -> SagaContractManager | None:
+    """Create SagaContractManager from environment variables.
     
     Args:
         logger: Logger instance
         
     Returns:
         SagaContractManager instance if environment variables are set, None otherwise
+
     """
     saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
     saga_private_key = os.getenv("SAGA_PRIVATE_KEY")

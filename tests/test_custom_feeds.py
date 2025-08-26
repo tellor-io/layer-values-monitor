@@ -2,7 +2,7 @@
 
 import logging
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from layer_values_monitor.custom_feeds import get_custom_trusted_value
 

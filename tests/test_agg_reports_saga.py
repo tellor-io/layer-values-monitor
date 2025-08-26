@@ -4,13 +4,13 @@ import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.custom_types import AggregateReport
 from layer_values_monitor.monitor import agg_reports_queue_handler, inspect_aggregate_report
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.threshold_config import ThresholdConfig
+
+import pytest
 
 
 class TestAggReportsQueueHandler:

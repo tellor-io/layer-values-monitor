@@ -2,7 +2,6 @@
 
 import logging
 import os
-from typing import Any
 
 import aiohttp
 
@@ -16,6 +15,7 @@ async def get_custom_trusted_value(query_id: str, logger: logging.Logger) -> flo
         
     Returns:
         float: The averaged trusted price value from multiple sources or None if unable to fetch
+
     """
     # Normalize query_id to lowercase for comparison
     query_id_lower = query_id.lower()
@@ -67,7 +67,9 @@ async def _fetch_fbtc_price(logger: logging.Logger) -> float | None:
     # Calculate average if we have valid prices
     if len(prices) > 0:
         average_price = sum(prices) / len(prices)
-        logger.info(f"FBTC/USD average price: ${average_price:.6f} from sources: {', '.join(sources_used)} (individual prices: {[f'${p:.6f}' for p in prices]})")
+        individual_prices = [f'${p:.6f}' for p in prices]
+        logger.info(f"FBTC/USD average price: ${average_price:.6f} from sources: {', '.join(sources_used)} "
+                   f"(individual prices: {individual_prices})")
         return average_price
     else:
         logger.error("No valid FBTC/USD prices obtained from any source")
@@ -98,7 +100,9 @@ async def _fetch_saga_price(logger: logging.Logger) -> float | None:
     # Calculate average if we have valid prices
     if len(prices) > 0:
         average_price = sum(prices) / len(prices)
-        logger.info(f"SAGA/USD average price: ${average_price:.6f} from sources: {', '.join(sources_used)} (individual prices: {[f'${p:.6f}' for p in prices]})")
+        individual_prices = [f'${p:.6f}' for p in prices]
+        logger.info(f"SAGA/USD average price: ${average_price:.6f} from sources: {', '.join(sources_used)} "
+                   f"(individual prices: {individual_prices})")
         return average_price
     else:
         logger.error("No valid SAGA/USD prices obtained from any source")

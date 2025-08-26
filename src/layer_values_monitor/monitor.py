@@ -18,11 +18,11 @@ from layer_values_monitor.dispute import (
     determine_dispute_fee,
 )
 from layer_values_monitor.evm_call import get_evm_call_trusted_value
+from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.threshold_config import ThresholdConfig
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
 from layer_values_monitor.utils import add_to_table, get_metric, remove_0x_prefix
-from layer_values_monitor.saga_contract import SagaContractManager
 
 import websockets
 from telliot_feeds.datafeed import DataFeed
@@ -155,7 +155,10 @@ async def raw_data_queue_handler(
     logger: logging,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
 ) -> None:
-    """Inspect reports in reports queue and process to see if they should be disputed or if any saga contract should be paused."""
+    """Inspect reports in reports queue and process to see if they should be disputed
+    or if any saga contract should be paused.
+    """
+    
     logger.info("Inspecting reports...")
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
@@ -179,7 +182,8 @@ async def raw_data_queue_handler(
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
 
         if is_new_report:
-            logger.info(f"new_report found w/ meta id: {events['new_report.meta_id'][0]}, query id: {events['new_report.query_id'][0]}")
+            logger.info(f"new_report found w/ meta id: {events['new_report.meta_id'][0]}, "
+                        f"query id: {events['new_report.query_id'][0]}")
             try:
                 # get current height from event
                 height = events["tx.height"][0]
@@ -439,7 +443,9 @@ async def inspect_aggregate_report(
             pause_threshold=_config.get("pause_threshold"),
         )
         
-        if any(x is None for x in [metrics.metric, metrics.alert_threshold, metrics.warning_threshold, metrics.minor_threshold, metrics.major_threshold, metrics.pause_threshold]):
+        thresholds = [metrics.metric, metrics.alert_threshold, metrics.warning_threshold, 
+                     metrics.minor_threshold, metrics.major_threshold, metrics.pause_threshold]
+        if any(x is None for x in thresholds):
             logger.error(f"Config for aggregate report {query_id} not set properly")
             return None
 
@@ -475,7 +481,8 @@ async def inspect_aggregate_report(
     # Check pause threshold first - this is the most critical
     if diff >= metrics.pause_threshold:
         should_pause = True
-        reason = f"Aggregate report deviation ({diff:.4f}) exceeds pause threshold ({metrics.pause_threshold:.4f}) - CIRCUIT BREAKER ACTIVATED"
+        reason = (f"Aggregate report deviation ({diff:.4f}) exceeds pause threshold "
+                 f"({metrics.pause_threshold:.4f}) - CIRCUIT BREAKER ACTIVATED")
     elif disputable and metrics.warning_threshold > 0:
         # Use same category determination logic for non-pause alerts
         category = determine_dispute_category(
@@ -492,7 +499,8 @@ async def inspect_aggregate_report(
     else:
         reason = f"Aggregate report within acceptable range (deviation: {diff:.4f})"
     
-    logger.info(f"Aggregate validation - Reported: {reported_value:.6f}, Trusted: {trusted_value:.6f}, Deviation: {diff:.6f}")
+    logger.info(f"Aggregate validation - Reported: {reported_value:.6f}, "
+               f"Trusted: {trusted_value:.6f}, Deviation: {diff:.6f}")
     
     return should_pause, reason
 
@@ -509,7 +517,8 @@ async def agg_reports_queue_handler(
         agg_report: AggregateReport = await agg_reports_q.get()
         
         # Log the aggregate report (don't add to main table as it has different structure)
-        logger.info(f"Aggregate Report - Query: {agg_report.query_id[:16]}... Value: {agg_report.value} Power: {agg_report.aggregate_power} Height: {agg_report.micro_report_height}")
+        logger.info(f"Aggregate Report - Query: {agg_report.query_id[:16]}... Value: {agg_report.value} "
+                   f"Power: {agg_report.aggregate_power} Height: {agg_report.micro_report_height}")
         
         # Inspect aggregate report using same logic as individual reports
         inspection_result = await inspect_aggregate_report(agg_report, config_watcher, logger, threshold_config)
@@ -539,11 +548,14 @@ async def agg_reports_queue_handler(
                             else:
                                 logger.error(f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}")
                         else:
-                            logger.warning(f"⚠️ PAUSE SKIPPED - No valid contract address configured for query {agg_report.query_id[:16]}...")
+                            logger.warning(f"⚠️ PAUSE SKIPPED - No valid contract address configured "
+                                          f"for query {agg_report.query_id[:16]}...")
                     else:
-                        logger.warning(f"⚠️ PAUSE SKIPPED - No contract address found in config for query {agg_report.query_id[:16]}...")
+                        logger.warning(f"⚠️ PAUSE SKIPPED - No contract address found in config "
+                                      f"for query {agg_report.query_id[:16]}...")
                 else:
-                    logger.warning("⚠️ PAUSE SKIPPED - Saga contract manager not initialized (check SAGA_EVM_RPC_URL and SAGA_PRIVATE_KEY)")
+                    logger.warning("⚠️ PAUSE SKIPPED - Saga contract manager not initialized "
+                                  "(check SAGA_EVM_RPC_URL and SAGA_PRIVATE_KEY)")
             else:
                 logger.info(f"✅ Aggregate report validated: {reason}")
         else:

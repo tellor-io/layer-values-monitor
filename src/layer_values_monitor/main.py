@@ -18,8 +18,8 @@ from layer_values_monitor.monitor import (
     new_reports_queue_handler,
     raw_data_queue_handler,
 )
-from layer_values_monitor.threshold_config import ThresholdConfig
 from layer_values_monitor.saga_contract import create_saga_contract_manager
+from layer_values_monitor.threshold_config import ThresholdConfig
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
@@ -71,7 +71,8 @@ async def start() -> None:
                        default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"), 
                        help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)")
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
-    parser.add_argument("--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing")
+    parser.add_argument("--enable-saga-guard", action="store_true", 
+                       help="Enable Saga aggregate report monitoring and contract pausing")
     # percentage
     parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
@@ -175,7 +176,8 @@ async def start() -> None:
         if args.enable_saga_guard:
             tasks.extend([
                 listen_to_agg_reports_events(uri, raw_data_queue, logger),
-                agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager),
+                agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, 
+                                         threshold_config, saga_contract_manager),
             ])
         
         await asyncio.gather(*tasks)
