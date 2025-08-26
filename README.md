@@ -3,16 +3,18 @@
 
 # Layer Values Monitor
 
-A monitoring system that listens to new_report and aggregate_report events on Layer. New_report values are compared aginst trusted values and can be automatically disputed/alerted about through a dsicord webhook. Aggregate_report values are compared against trusted values and the related data feed contract can be paused.
+A monitoring system that listens to new_report and aggregate_report events on Layer. New_report values are compared aginst trusted values and can be automatically disputed/alerted about through a discord webhook. Aggregate_report values are compared against trusted values and the related data feed contract can be paused.
 
 ## Quick Start
 
 ### 1. Install Dependencies
-```sh
 # Install uv package manager
-curl -LsSf https://astral.sh/uv/install.sh | sh
+```sh
+https://docs.astral.sh/uv/#installation
+```
 
 # Create and activate virtual environment
+```sh
 uv venv
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate   # Windows
