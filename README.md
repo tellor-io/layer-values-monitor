@@ -5,6 +5,7 @@
 
 A monitoring system that listens to new_report and aggregate_report events on Layer. New_report values are compared aginst trusted values and can be automatically disputed/alerted about through a discord webhook. Aggregate_report values are compared against trusted values and the related data feed contract can be paused.
 
+**NOTE**: All preset thresholds are arbitrary and should be carefully considered.
 ## Quick Start
 
 ### 1. Install Dependencies
@@ -29,20 +30,21 @@ cp env.example .env
 # Edit .env file with your settings
 nano .env
 
-# OPTIONAL BUT RECOMMENDED: edit config thresholds
+# OPTIONAL BUT RECOMMENDED: edit all config thresholds
 nano config.toml
 ```
 
 ### 3. Run the Monitor
 ```sh
-# Basic monitoring w/o optional env variables (disputes only)
-uv run layer-values-monitor [binary_path] [key_name] [keyring_backend] [keyring_dir] [options]
+# Basic monitoring 
+uv run layer-values-monitor --use-custom-config
 
-# With Saga guard enabled w/o optional env variables
-uv run layer-values-monitor [binary_path] [key_name] [keyring_backend] [keyring_dir] [options]
+# Basic monitoring without configuring extra env variables
+uv run layer-values-monitor [binary_path] [key_name] [keyring_backend] [keyring_dir] --use-custom-config
 
-# Using environment variables
-uv run layer-values-monitor [options]
+# Basic monitoring + saga guard
+uv run layer-values-monitor --enable-saga-guard --use-custom-config
+
 ```
 
 ## env Configuration
