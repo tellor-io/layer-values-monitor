@@ -78,7 +78,7 @@ def get_metric(
             warning_threshold=threshold_config.range_warning,
             minor_threshold=threshold_config.range_minor,
             major_threshold=threshold_config.range_major,
-            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for range metric
+            pause_threshold=0.0,  # Pause threshold not applicable for range metrics
         )
     elif metric == "equality":
         return Metrics(
@@ -87,7 +87,7 @@ def get_metric(
             warning_threshold=threshold_config.equality_warning,
             minor_threshold=threshold_config.equality_minor,
             major_threshold=threshold_config.equality_major,
-            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for equality metric (binary)
+            pause_threshold=0.0,  # Pause threshold not applicable for equality metrics
         )
 
 

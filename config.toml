@@ -68,6 +68,9 @@ major_threshold = 0.0
 pause_threshold = 0.000000001
 contract_address = "0x0000000000000000000000000000000000000000"
 
+# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
+# NOTE: pause_threshold is not applicable for equality metrics (only for percentage metrics)
+
 # TRBBridge query type configuration - applies to ALL TRBBridge reports
 [trbbridge]
 metric = "equality"
@@ -75,7 +78,7 @@ alert_threshold = 1.0
 warning_threshold = 1.0
 minor_threshold = 0.0
 major_threshold = 0.0
-# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
+
 
 # EVMCall query type configuration - applies to ALL EVMCall reports
 [evmcall]
@@ -84,6 +87,5 @@ alert_threshold = 1.0
 warning_threshold = 1.0
 minor_threshold = 0.0
 major_threshold = 0.0
-# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
 
 
