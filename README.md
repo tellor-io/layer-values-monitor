@@ -38,16 +38,9 @@ nano config.toml
 ```sh
 # Basic monitoring 
 uv run layer-values-monitor --use-custom-config
-
-# Basic monitoring without configuring extra env variables
-uv run layer-values-monitor [binary_path] [key_name] [keyring_backend] [keyring_dir] --use-custom-config
-
-# Basic monitoring + saga guard
-uv run layer-values-monitor --enable-saga-guard --use-custom-config
-
 ```
 
-## env Configuration
+## Env Configuration
 
 ### Required Environment Variables
 
@@ -57,7 +50,7 @@ uv run layer-values-monitor --enable-saga-guard --use-custom-config
 | `CHAIN_ID` | Layer chain identifier | `layer-testnet-3` |
 
 
-### Optional Environment Variables
+### Optional (Recommended) Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -66,35 +59,43 @@ uv run layer-values-monitor --enable-saga-guard --use-custom-config
 | `LAYER_KEYRING_BACKEND` | Keyring backend type | `test` |
 | `LAYER_KEYRING_DIR` | Keyring directory | `~/.layer` |
 | `PAYFROM_BOND` | Pay dispute fees from bond | `false` |
-| `DISCORD_WEBHOOK_URL_1` | Discord notifications | _(none)_ |
-| `TRBBRIDGE_CONTRACT_ADDRESS` | TRB Bridge contract | _(none)_ |
-| `TRBBRIDGE_CHAIN_ID` | Layer chain ID | `1` |
-| `ETHEREUM_RPC_URL` | Ethereum RPC endpoint (for TRB Bridge contract) | _(none)_ |
+| | | |
+| `DISCORD_WEBHOOK_URL_1` | Discord notifications webhook 1 | _(none)_ |
+| `MAX_TABLE_ROWS` | Maximum rows in reports tables | `1000000` |
+| | | |
+| `TRBBRIDGE_CONTRACT_ADDRESS` | TRB Bridge contract address | _(none)_ |
+| `TRBBRIDGE_CHAIN_ID` | Chain ID for bridge contract (default sepolia) | `11155111` |
+| `ETHEREUM_RPC_URL` | Ethereum RPC endpoint (for TRB Bridge) | _(none)_ |
+| | | |
 | `SAGA_EVM_RPC_URL` | Saga EVM RPC endpoint | _(none)_ |
 | `SAGA_PRIVATE_KEY` | Guardian private key | _(none)_ |
+| `CG_API_KEY` | CoinGecko API key for price data | _(none)_ |
+| `CMC_API_KEY` | CoinMarketCap API key for price data | _(none)_ |
 
 ## Command Line Options
 
 ### Basic Usage
 ```sh
-layer-values-monitor [binary_path] [key_name] [keyring_backend] [keyring_dir] [options]
+uv run layer-values-monitor [options]
 ```
 
 ### Available Flags
 
 | Flag | Description |
 |------|-------------|
-| `--payfrom-bond` | Pay dispute fees from reporter bond |
-| `--enable-saga-guard` | Enable Saga contract circuit breaker |
 | `--use-custom-config` | Use config.toml for query-specific settings |
+| `--enable-saga-guard` | Enable aggregate report and Saga contract guarding |
+| `--payfrom-bond` | Pay dispute fees from reporter bond, defaults to false |
 
 ### Global Thresholds
 
-Set global dispute thresholds for all queries:
+Set global dispute thresholds for all queries.
+
+**NOTE:** If you do not want to auto dispute a certain queryId or queryType, set all threshold values to 0 for it in `config.toml`.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--global-percentage-alert-threshold` | Percentage threshold for alerts | `0.0` |
+| `--global-percentage-alert-threshold` | Percentage threshold for alerts | `0.1` |
 | `--global-percentage-warning-threshold` | Warning dispute threshold | `0.0` |
 | `--global-percentage-minor-threshold` | Minor dispute threshold | `0.0` |
 | `--global-percentage-major-threshold` | Major dispute threshold | `0.0` |
@@ -103,20 +104,20 @@ Set global dispute thresholds for all queries:
 
 ## Configuration Strategies
 
-### Strategy 1 (RECOMMENDED): Fully configure .env and config.toml
-Set all configuration in `.env` and `config.toml` files:
+### Strategy 1 (Recommended): Fully configure .env and config.toml
+Set all configuration in your `.env` and `config.toml` files:
 ```sh
 uv run layer-values-monitor --use-custom-config
 ```
 
-### Strategy 2: Minimum .env settings, fully configre config.toml
-Override specific settings:
+### Strategy 2: Custom config, no optional env fields
+Use custom thresholds and more command line parameters:
 ```sh
 uv run layer-values-monitor /path/to/layerd alice test ~/.layer --payfrom-bond --use-custom-config
 ```
 
 ### Strategy 3: Minimum .env setting, set thresholds in start command
-Set global thresholds via command line:
+Set everything via command line:
 ```sh
 uv run layer-values-monitor \
   /path/to/layerd \
@@ -148,8 +149,6 @@ uv run layer-values-monitor \
 
 ## Query-Specific Configuration (config.toml)
 
-Create a `config.toml` file for query-specific settings:
-
 ```toml
 # Example: BTC/USD price feed monitoring
 [a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
@@ -170,13 +169,6 @@ minor_threshold = 0.0
 major_threshold = 0.0
 ```
 
-### Threshold Types
-
-| Metric | Description | Values |
-|--------|-------------|--------|
-| `percentage` | Percentage deviation from trusted value | `0.0` to `1.0` (0% to 100%) |
-| `range` | Absolute value difference | Any positive number |
-| `equality` | Exact match requirement | `1.0` (required) or `0.0` (not required) |
 
 ## Saga Guard
 
@@ -196,14 +188,18 @@ Enable automatic contract pausing when aggregate report values are incorrect. Th
 
 ### Basic Report Monitoring
 ```sh
-# New report monitoring with 5% auto warning dispute threshold
+# New report monitoring with 5% auto alert threshold
+# no auto disputes on spot prices
 uv run layer-values-monitor \
-  --global-percentage-warning-threshold 0.05
+  --global-percentage-alert-threshold 0.1 \
+  --global-percentage-warning-threshold 0.0 \
+  --global-percentage-minor-threshold 0.0 \
+  --global-percentage-major-threshold 0.0 \
 ```
 
 ### Production Setup with Saga Guard
 ```sh
-# New report and aggregate report monitoring (aggregate report monitoring is for saga guardians)
+# New report and aggregate report monitoring using config thresholds
 uv run layer-values-monitor \
   --enable-saga-guard \
   --use-custom-config
