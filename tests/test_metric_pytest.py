@@ -52,7 +52,7 @@ def test_evmcall_returns_equality_metric(threshold_values):
         warning_threshold=threshold_values.equality_warning,
         minor_threshold=threshold_values.equality_minor,
         major_threshold=threshold_values.equality_major,
-        pause_threshold=threshold_values.pause_threshold,
+        pause_threshold=0.0,  # Pause threshold not applicable for equality metrics
     )
 
     assert result == expected

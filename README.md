@@ -209,7 +209,7 @@ uv run layer-values-monitor \
 
 ### Run Tests
 ```sh
-uv run pytest -v -s
+uv run pytest -v
 ```
 
 ### Build Package
