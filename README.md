@@ -17,8 +17,6 @@ https://docs.astral.sh/uv/#installation
 # Create and activate virtual environment
 ```sh
 uv venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
 # https://docs.astral.sh/uv/reference/cli/#uv-venv
 ```
 
