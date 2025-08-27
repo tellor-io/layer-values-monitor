@@ -48,7 +48,7 @@ class SagaContractManager:
 
         self.logger.info(f"Initialized Saga contract manager with account: {self.account.address}")
 
-    async def pause_contract(self, contract_address: str, query_id: str) -> str | None:
+    async def pause_contract(self, contract_address: str, query_id: str) -> tuple[str | None, str]:
         """Pause a Saga contract by calling its pause() function.
 
         Args:
@@ -56,14 +56,16 @@ class SagaContractManager:
             query_id: Query ID for logging purposes
 
         Returns:
-            Transaction hash if successful, None if failed
+            Tuple of (transaction_hash, status_message). 
+            transaction_hash is str if successful, None if failed.
+            status_message describes the result.
 
         """
         try:
             # Validate contract address format
             if not self.w3.is_address(contract_address):
                 self.logger.error(f"Invalid contract address format: {contract_address}")
-                return None
+                return None, "invalid_address"
 
             # Convert to checksum address
             contract_address = self.w3.to_checksum_address(contract_address)
@@ -74,19 +76,19 @@ class SagaContractManager:
             # Check if contract exists
             if self.w3.eth.get_code(contract_address) == b"":
                 self.logger.error(f"No contract found at address: {contract_address}")
-                return None
+                return None, "no_contract"
 
             # Check if account is a guardian
             is_guardian = await self.is_guardian(contract_address, self.account.address)
             if not is_guardian:
                 self.logger.error(f"Account {self.account.address} is not a guardian for contract {contract_address}")
-                return None
+                return None, "not_guardian"
 
             # Check if contract is already paused
             is_paused = await self.is_paused(contract_address)
             if is_paused:
                 self.logger.warning(f"Contract {contract_address} is already paused")
-                return None
+                return None, "already_paused"
 
             # Get current nonce
             nonce = self.w3.eth.get_transaction_count(self.account.address)
@@ -114,29 +116,29 @@ class SagaContractManager:
 
             # Wait for transaction receipt (with timeout)
             try:
-                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
                 if receipt.status == 1:
                     self.logger.critical(
                         f"✅ PAUSE SUCCESSFUL - Contract {contract_address} paused successfully. TxHash: {tx_hash_hex}"
                     )
-                    return tx_hash_hex
+                    return tx_hash_hex, "success"
                 else:
                     self.logger.error(
                         f"❌ PAUSE FAILED - Transaction failed for contract {contract_address}. TxHash: {tx_hash_hex}"
                     )
-                    return None
+                    return None, "transaction_failed"
             except TimeoutError:
                 self.logger.warning(
                     f"⏰ PAUSE PENDING - Transaction timeout for contract {contract_address}, "
                     f"but may still be processing. TxHash: {tx_hash_hex}"
                 )
-                return tx_hash_hex  # Return hash even on timeout as it may still succeed
+                return tx_hash_hex, "timeout"  # Return hash even on timeout as it may still succeed
 
         except Exception as e:
             self.logger.error(
                 f"❌ PAUSE ERROR - Failed to pause contract {contract_address} for query {query_id[:16]}...: {e}"
             )
-            return None
+            return None, f"error: {str(e)}"
 
     async def is_guardian(self, contract_address: str, guardian_address: str) -> bool:
         """Check if an address is a guardian for the specified contract.

@@ -186,6 +186,12 @@ async def raw_data_queue_handler(
                 continue
                 
         elif is_agg_report and agg_reports_q is not None:
+            # This ensures new reports are processed for disputes even when aggregate arrives at same height
+            if len(reports_collections) > 0:
+                logger.debug(f"Flushing {len(reports_collections)} pending new report collections before processing aggregate")
+                await new_reports_q.put(dict(reports_collections))
+                reports_collections.clear()
+            
             try:
                 # Handle optional fields gracefully with fallbacks
                 height = None
@@ -530,11 +536,23 @@ async def agg_reports_queue_handler(
 
                         # Skip if placeholder address
                         if contract_address != "0x0000000000000000000000000000000000000000":
-                            tx_hash = await saga_contract_manager.pause_contract(contract_address, agg_report.query_id)
+                            tx_hash, status = await saga_contract_manager.pause_contract(contract_address, agg_report.query_id)
                             if tx_hash:
-                                logger.critical(f"🚨 CONTRACT PAUSED SUCCESSFULLY - TxHash: {tx_hash}")
+                                if status == "success":
+                                    logger.critical(f"🚨 CONTRACT PAUSED SUCCESSFULLY - TxHash: {tx_hash}")
+                                elif status == "timeout":
+                                    logger.warning(f"⏰ PAUSE TRANSACTION PENDING - TxHash: {tx_hash}")
                             else:
-                                logger.error(f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}")
+                                if status == "already_paused":
+                                    logger.warning(f"⚠️ CONTRACT ALREADY PAUSED - Address: {contract_address}")
+                                elif status == "not_guardian":
+                                    logger.error(f"❌ NOT AUTHORIZED - Account is not a guardian for contract {contract_address}")
+                                elif status == "no_contract":
+                                    logger.error(f"❌ NO CONTRACT FOUND - Address: {contract_address}")
+                                elif status == "invalid_address":
+                                    logger.error(f"❌ INVALID ADDRESS - Address: {contract_address}")
+                                else:
+                                    logger.error(f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}, Status: {status}")
                         else:
                             logger.warning(
                                 f"⚠️ PAUSE SKIPPED - No valid contract address configured "
