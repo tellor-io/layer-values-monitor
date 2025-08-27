@@ -137,7 +137,7 @@ def mock_web3():
     mock_w3.eth.gas_price = 20000000000  # 20 gwei
     mock_w3.is_address.return_value = True
     mock_w3.to_checksum_address.side_effect = lambda x: x.upper()
-    mock_w3.eth.get_code.return_value = b'contract_bytecode'
+    mock_w3.eth.get_code.return_value = b"contract_bytecode"
     mock_w3.eth.get_transaction_count.return_value = 5
     return mock_w3
 
@@ -146,6 +146,7 @@ def mock_web3():
 def mock_saga_contract_manager():
     """Mock SagaContractManager for testing."""
     from layer_values_monitor.saga_contract import SagaContractManager
+
     manager = MagicMock(spec=SagaContractManager)
     manager.pause_contract = AsyncMock(return_value="0xtest_transaction_hash")
     manager.is_guardian = AsyncMock(return_value=True)
@@ -158,11 +159,12 @@ def mock_saga_contract_manager():
 def sample_aggregate_report():
     """Create a sample aggregate report for testing."""
     from layer_values_monitor.custom_types import AggregateReport
+
     return AggregateReport(
         query_id="test_query_id",
         query_data="0x123abc",
         value="0x" + "0" * 63 + "1",  # 1 in hex with padding
         aggregate_power="1000",
         micro_report_height="12345",
-        height=12345
+        height=12345,
     )

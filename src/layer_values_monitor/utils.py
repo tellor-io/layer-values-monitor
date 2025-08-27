@@ -101,7 +101,7 @@ def remove_0x_prefix(s: str) -> str:
 def add_to_table(entry: dict[str, str]) -> None:
     """Add entry to table and save to CSV (without console output)."""
     TABLE.append(entry)
-    
+
     # Only save to CSV files, don't print to console
     # Check if we need to create a new file
     if should_create_new_file():

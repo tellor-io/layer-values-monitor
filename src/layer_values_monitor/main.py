@@ -55,24 +55,44 @@ async def start() -> None:
     if chain_id is None:
         raise ValueError("CHAIN_ID not found in environment variables")
     parser = argparse.ArgumentParser(description="Start values monitor")
-    parser.add_argument("binary_path", type=str, nargs='?', 
-                       default=os.getenv("LAYER_BINARY_PATH"), 
-                       help="Path to the Layer binary executable (can be set via LAYER_BINARY_PATH env var)")
-    parser.add_argument("key_name", type=str, nargs='?', 
-                       default=os.getenv("LAYER_KEY_NAME"), 
-                       help="Name of the key to use for transactions (can be set via LAYER_KEY_NAME env var)")
-    parser.add_argument("keyring_backend", type=str, nargs='?', 
-                       default=os.getenv("LAYER_KEYRING_BACKEND"), 
-                       help="Keyring backend (can be set via LAYER_KEYRING_BACKEND env var)")
-    parser.add_argument("keyring_dir", type=str, nargs='?', 
-                       default=os.getenv("LAYER_KEYRING_DIR"), 
-                       help="Keyring directory (can be set via LAYER_KEYRING_DIR env var)")
-    parser.add_argument("--payfrom-bond", action="store_true", 
-                       default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"), 
-                       help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)")
+    parser.add_argument(
+        "binary_path",
+        type=str,
+        nargs="?",
+        default=os.getenv("LAYER_BINARY_PATH"),
+        help="Path to the Layer binary executable (can be set via LAYER_BINARY_PATH env var)",
+    )
+    parser.add_argument(
+        "key_name",
+        type=str,
+        nargs="?",
+        default=os.getenv("LAYER_KEY_NAME"),
+        help="Name of the key to use for transactions (can be set via LAYER_KEY_NAME env var)",
+    )
+    parser.add_argument(
+        "keyring_backend",
+        type=str,
+        nargs="?",
+        default=os.getenv("LAYER_KEYRING_BACKEND"),
+        help="Keyring backend (can be set via LAYER_KEYRING_BACKEND env var)",
+    )
+    parser.add_argument(
+        "keyring_dir",
+        type=str,
+        nargs="?",
+        default=os.getenv("LAYER_KEYRING_DIR"),
+        help="Keyring directory (can be set via LAYER_KEYRING_DIR env var)",
+    )
+    parser.add_argument(
+        "--payfrom-bond",
+        action="store_true",
+        default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"),
+        help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)",
+    )
     parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
-    parser.add_argument("--enable-saga-guard", action="store_true", 
-                       help="Enable Saga aggregate report monitoring and contract pausing")
+    parser.add_argument(
+        "--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing"
+    )
     # percentage
     parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
     parser.add_argument(
@@ -117,12 +137,12 @@ async def start() -> None:
         raise ValueError("keyring_backend is required (set LAYER_KEYRING_BACKEND env var or provide as argument)")
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
-    
+
     # Validate Saga environment variables if Saga guard is enabled
     if args.enable_saga_guard:
         saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
         saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
-        
+
         if not saga_rpc_url:
             raise ValueError("SAGA_EVM_RPC_URL environment variable is required when using --enable-saga-guard")
         if not saga_private_key:
@@ -171,15 +191,18 @@ async def start() -> None:
             ),
             watch_config(config_watcher),
         ]
-        
+
         # Only add Saga-related tasks if enabled
         if args.enable_saga_guard:
-            tasks.extend([
-                listen_to_agg_reports_events(uri, raw_data_queue, logger),
-                agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, 
-                                         threshold_config, saga_contract_manager),
-            ])
-        
+            tasks.extend(
+                [
+                    listen_to_agg_reports_events(uri, raw_data_queue, logger),
+                    agg_reports_queue_handler(
+                        agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager
+                    ),
+                ]
+            )
+
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         print("shutting down running tasks")

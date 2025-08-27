@@ -108,17 +108,17 @@ class TestTRBBridgeDecoding:
     @pytest.mark.asyncio
     async def test_get_trb_bridge_trusted_value(self):
         """Test getting TRBBridge trusted value. Get deposit 9 from palmito
-        
+
         This test requires a valid RPC endpoint for Sepolia. Set ETHEREUM_RPC_URL
         environment variable to run this test (e.g., with an Infura or Alchemy API key).
         """
         import os
-        
+
         # Skip test if no RPC URL is configured
         rpc_url = os.getenv("ETHEREUM_RPC_URL")
         if not rpc_url or "{" in rpc_url:  # Check for placeholder like {INFURA_API_KEY}
             pytest.skip("Test requires ETHEREUM_RPC_URL environment variable with valid RPC endpoint")
-        
+
         query_data = (
             "0x0000000000000000000000000000000000000000000000000000000000000000"
             "000000000000000000000000000000000000000000000000000000000000008000"
@@ -130,10 +130,10 @@ class TestTRBBridgeDecoding:
         )
         contract_address = "0x5acb5977f35b1A91C4fE0F4386eB669E046776F2"  # token bridge contract address on sepolia
         chain_id = 11155111  # sepolia
-        
+
         result = await get_trb_bridge_trusted_value(query_data, contract_address, chain_id)
         assert result is not None
-        
+
         #   [ deposits(uint256) method Response ]
         #   sender   address :  0x7660794eF8f978Ea0922DC29B3b534d93e1fc94A
         #   recipient   string :  tellor17gc67q05d5rgsz9caznm0s7s5eazwg2e3fkk8e

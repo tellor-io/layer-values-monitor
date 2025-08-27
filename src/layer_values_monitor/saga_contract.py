@@ -11,7 +11,7 @@ class SagaContractManager:
 
     def __init__(self, rpc_url: str, private_key: str, logger: logging.Logger) -> None:
         """Initialize the Saga contract manager.
-        
+
         Args:
             rpc_url: The Saga EVM RPC endpoint
             private_key: Private key for signing transactions (without 0x prefix)
@@ -20,53 +20,41 @@ class SagaContractManager:
         """
         self.logger = logger
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
-        
+
         # Setup account for signing
-        if private_key.startswith('0x'):
+        if private_key.startswith("0x"):
             private_key = private_key[2:]
         self.account = self.w3.eth.account.from_key(private_key)
-        
+
         # GuardedPausable contract ABI - core functions we need
         self.guarded_pausable_abi = [
-            {
-                "inputs": [],
-                "name": "pause",
-                "outputs": [],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            },
-            {
-                "inputs": [],
-                "name": "unpause",
-                "outputs": [],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            },
+            {"inputs": [], "name": "pause", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+            {"inputs": [], "name": "unpause", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
             {
                 "inputs": [],
                 "name": "paused",
                 "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
                 "stateMutability": "view",
-                "type": "function"
+                "type": "function",
             },
             {
                 "inputs": [{"internalType": "address", "name": "", "type": "address"}],
                 "name": "guardians",
                 "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
                 "stateMutability": "view",
-                "type": "function"
-            }
+                "type": "function",
+            },
         ]
-        
+
         self.logger.info(f"Initialized Saga contract manager with account: {self.account.address}")
-    
+
     async def pause_contract(self, contract_address: str, query_id: str) -> str | None:
         """Pause a Saga contract by calling its pause() function.
-        
+
         Args:
             contract_address: The contract address to pause
             query_id: Query ID for logging purposes
-            
+
         Returns:
             Transaction hash if successful, None if failed
 
@@ -76,82 +64,87 @@ class SagaContractManager:
             if not self.w3.is_address(contract_address):
                 self.logger.error(f"Invalid contract address format: {contract_address}")
                 return None
-            
+
             # Convert to checksum address
             contract_address = self.w3.to_checksum_address(contract_address)
-            
+
             # Create contract instance
-            contract = self.w3.eth.contract(
-                address=contract_address,
-                abi=self.guarded_pausable_abi
-            )
-            
+            contract = self.w3.eth.contract(address=contract_address, abi=self.guarded_pausable_abi)
+
             # Check if contract exists
-            if self.w3.eth.get_code(contract_address) == b'':
+            if self.w3.eth.get_code(contract_address) == b"":
                 self.logger.error(f"No contract found at address: {contract_address}")
                 return None
-            
+
             # Check if account is a guardian
             is_guardian = await self.is_guardian(contract_address, self.account.address)
             if not is_guardian:
                 self.logger.error(f"Account {self.account.address} is not a guardian for contract {contract_address}")
                 return None
-            
+
             # Check if contract is already paused
             is_paused = await self.is_paused(contract_address)
             if is_paused:
                 self.logger.warning(f"Contract {contract_address} is already paused")
                 return None
-            
+
             # Get current nonce
             nonce = self.w3.eth.get_transaction_count(self.account.address)
-            
+
             # Build transaction
-            transaction = contract.functions.pause().build_transaction({
-                'from': self.account.address,
-                'nonce': nonce,
-                'gas': 100000,  # Conservative gas limit for a simple pause function
-                'gasPrice': self.w3.eth.gas_price,
-            })
-            
+            transaction = contract.functions.pause().build_transaction(
+                {
+                    "from": self.account.address,
+                    "nonce": nonce,
+                    "gas": 100000,  # Conservative gas limit for a simple pause function
+                    "gasPrice": self.w3.eth.gas_price,
+                }
+            )
+
             # Sign transaction
             signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.account.key)
-            
+
             # Send transaction
             tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
             tx_hash_hex = tx_hash.hex()
-            
-            self.logger.critical(f"🚨 PAUSE TRANSACTION SENT - Query: {query_id[:16]}... "
-                                f"Contract: {contract_address} TxHash: {tx_hash_hex}")
-            
+
+            self.logger.critical(
+                f"🚨 PAUSE TRANSACTION SENT - Query: {query_id[:16]}... Contract: {contract_address} TxHash: {tx_hash_hex}"
+            )
+
             # Wait for transaction receipt (with timeout)
             try:
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
                 if receipt.status == 1:
-                    self.logger.critical(f"✅ PAUSE SUCCESSFUL - Contract {contract_address} "
-                                        f"paused successfully. TxHash: {tx_hash_hex}")
+                    self.logger.critical(
+                        f"✅ PAUSE SUCCESSFUL - Contract {contract_address} paused successfully. TxHash: {tx_hash_hex}"
+                    )
                     return tx_hash_hex
                 else:
-                    self.logger.error(f"❌ PAUSE FAILED - Transaction failed for contract "
-                                     f"{contract_address}. TxHash: {tx_hash_hex}")
+                    self.logger.error(
+                        f"❌ PAUSE FAILED - Transaction failed for contract {contract_address}. TxHash: {tx_hash_hex}"
+                    )
                     return None
             except TimeoutError:
-                self.logger.warning(f"⏰ PAUSE PENDING - Transaction timeout for contract {contract_address}, "
-                                   f"but may still be processing. TxHash: {tx_hash_hex}")
+                self.logger.warning(
+                    f"⏰ PAUSE PENDING - Transaction timeout for contract {contract_address}, "
+                    f"but may still be processing. TxHash: {tx_hash_hex}"
+                )
                 return tx_hash_hex  # Return hash even on timeout as it may still succeed
-                
+
         except Exception as e:
-            self.logger.error(f"❌ PAUSE ERROR - Failed to pause contract {contract_address} "
-                             f"for query {query_id[:16]}...: {e}")
+            self.logger.error(
+                f"❌ PAUSE ERROR - Failed to pause contract {contract_address} for query {query_id[:16]}...: {e}"
+            )
             return None
 
     async def is_guardian(self, contract_address: str, guardian_address: str) -> bool:
         """Check if an address is a guardian for the specified contract.
-        
+
         Args:
             contract_address: The contract address to check
             guardian_address: The address to check guardian status for
-            
+
         Returns:
             True if the address is a guardian, False otherwise
 
@@ -159,12 +152,9 @@ class SagaContractManager:
         try:
             contract_address = self.w3.to_checksum_address(contract_address)
             guardian_address = self.w3.to_checksum_address(guardian_address)
-            
-            contract = self.w3.eth.contract(
-                address=contract_address,
-                abi=self.guarded_pausable_abi
-            )
-            
+
+            contract = self.w3.eth.contract(address=contract_address, abi=self.guarded_pausable_abi)
+
             return contract.functions.guardians(guardian_address).call()
         except Exception as e:
             self.logger.error(f"Failed to check guardian status for {guardian_address} on contract {contract_address}: {e}")
@@ -172,22 +162,19 @@ class SagaContractManager:
 
     async def is_paused(self, contract_address: str) -> bool:
         """Check if a contract is currently paused.
-        
+
         Args:
             contract_address: The contract address to check
-            
+
         Returns:
             True if the contract is paused, False otherwise
 
         """
         try:
             contract_address = self.w3.to_checksum_address(contract_address)
-            
-            contract = self.w3.eth.contract(
-                address=contract_address,
-                abi=self.guarded_pausable_abi
-            )
-            
+
+            contract = self.w3.eth.contract(address=contract_address, abi=self.guarded_pausable_abi)
+
             return contract.functions.paused().call()
         except Exception as e:
             self.logger.error(f"Failed to check pause status for contract {contract_address}: {e}")
@@ -205,25 +192,25 @@ class SagaContractManager:
 
 def create_saga_contract_manager(logger: logging.Logger) -> SagaContractManager | None:
     """Create SagaContractManager from environment variables.
-    
+
     Args:
         logger: Logger instance
-        
+
     Returns:
         SagaContractManager instance if environment variables are set, None otherwise
 
     """
     saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
     saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
-    
+
     if not saga_rpc_url:
         logger.warning("SAGA_EVM_RPC_URL not set in environment - contract pausing disabled")
         return None
-        
+
     if not saga_private_key:
         logger.warning("SAGA_PRIVATE_KEY not set in environment - contract pausing disabled")
         return None
-    
+
     try:
         manager = SagaContractManager(saga_rpc_url, saga_private_key, logger)
         if manager.is_connected():

@@ -23,9 +23,7 @@ class TestGetCustomTrustedValue:
         """Test that unsupported query IDs return None."""
         result = await get_custom_trusted_value("invalid_query_id", mock_logger)
         assert result is None
-        mock_logger.error.assert_called_once_with(
-            "Query ID invalid_query_id is not configured for custom price lookup"
-        )
+        mock_logger.error.assert_called_once_with("Query ID invalid_query_id is not configured for custom price lookup")
 
     @pytest.mark.asyncio
     @patch.dict(os.environ, {}, clear=True)
@@ -33,10 +31,9 @@ class TestGetCustomTrustedValue:
         """Test that function returns None when no API keys are available."""
         fbtc_query_id = "c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e"
         result = await get_custom_trusted_value(fbtc_query_id, mock_logger)
-        
+
         assert result is None
         mock_logger.error.assert_called_with("No valid FBTC/USD prices obtained from any source")
-
 
 
 class TestCustomFeedsIntegration:
@@ -47,10 +44,10 @@ class TestCustomFeedsIntegration:
         """Integration test for real FBTC price fetching."""
         if not os.getenv("CMC_API_KEY") and not os.getenv("CG_API_KEY"):
             pytest.skip("No API keys available for integration testing")
-        
+
         fbtc_query_id = "c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e"
         result = await get_custom_trusted_value(fbtc_query_id, mock_logger)
-        
+
         if result is not None:
             # Price should be a positive number (reasonable range for FBTC)
             assert isinstance(result, float)
@@ -65,10 +62,10 @@ class TestCustomFeedsIntegration:
         """Integration test for real SAGA price fetching."""
         if not os.getenv("CMC_API_KEY") and not os.getenv("CG_API_KEY"):
             pytest.skip("No API keys available for integration testing")
-        
+
         saga_query_id = "74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d"
         result = await get_custom_trusted_value(saga_query_id, mock_logger)
-        
+
         if result is not None:
             # Price should be a positive number (reasonable range for SAGA)
             assert isinstance(result, float)

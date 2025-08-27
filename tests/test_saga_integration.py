@@ -18,7 +18,7 @@ class TestSagaIntegration:
         """Test the complete flow from aggregate report to contract pause."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
         from layer_values_monitor.threshold_config import ThresholdConfig
-        
+
         # Create aggregate report that will trigger pause
         agg_report = AggregateReport(
             query_id="test_query_id",
@@ -26,44 +26,39 @@ class TestSagaIntegration:
             value="0x" + "0" * 63 + "1",  # Very low value
             aggregate_power="1000",
             micro_report_height="12345",
-            height=12345
+            height=12345,
         )
-        
+
         queue = asyncio.Queue()
         await queue.put(agg_report)
-        
+
         mock_logger = MagicMock()
         mock_threshold_config = MagicMock(spec=ThresholdConfig)
-        
+
         # Mock the inspection to return should_pause=True
-        with patch('layer_values_monitor.monitor.inspect_aggregate_report') as mock_inspect:
+        with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
             mock_inspect.return_value = (True, "Deviation exceeds pause threshold")
-            
+
             # Run the queue handler for a short time
             task = asyncio.create_task(
                 agg_reports_queue_handler(
-                    queue,
-                    saga_config_watcher,
-                    mock_logger,
-                    mock_threshold_config,
-                    mock_saga_contract_manager
+                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
                 )
             )
-            
+
             await asyncio.sleep(0.1)
             task.cancel()
-            
+
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-            
+
             # Verify the complete flow
             mock_saga_contract_manager.pause_contract.assert_called_once_with(
-                "0x9fe237b245466A5f088AfE808b27c1305E3027BC",
-                "test_query_id"
+                "0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id"
             )
-            
+
             # Verify proper logging
             mock_logger.critical.assert_any_call("🚨 CIRCUIT BREAKER ACTIVATED: Deviation exceeds pause threshold")
             mock_logger.critical.assert_any_call("🚨 CONTRACT PAUSED SUCCESSFULLY - TxHash: 0xtest_transaction_hash")
@@ -71,33 +66,30 @@ class TestSagaIntegration:
     def test_saga_manager_creation_with_env_vars(self):
         """Test SagaContractManager creation from environment variables."""
         mock_logger = MagicMock()
-        
-        with patch.dict(os.environ, {
-            'SAGA_EVM_RPC_URL': 'https://chainlet-2742.saga.xyz/',
-            'SAGA_PRIVATE_KEY': 'test_private_key'
-        }):
-            with patch('layer_values_monitor.saga_contract.SagaContractManager') as mock_manager_class:
+
+        with patch.dict(
+            os.environ, {"SAGA_EVM_RPC_URL": "https://chainlet-2742.saga.xyz/", "SAGA_PRIVATE_KEY": "test_private_key"}
+        ):
+            with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
                 mock_manager = MagicMock()
                 mock_manager.is_connected.return_value = True
                 mock_manager_class.return_value = mock_manager
-                
+
                 result = create_saga_contract_manager(mock_logger)
-                
+
                 assert result is not None
                 mock_manager_class.assert_called_once_with(
-                    'https://chainlet-2742.saga.xyz/',
-                    'test_private_key',
-                    mock_logger
+                    "https://chainlet-2742.saga.xyz/", "test_private_key", mock_logger
                 )
 
     def test_saga_manager_creation_missing_env_vars(self):
         """Test SagaContractManager creation with missing environment variables."""
         mock_logger = MagicMock()
-        
+
         # Clear environment variables
         with patch.dict(os.environ, {}, clear=True):
             result = create_saga_contract_manager(mock_logger)
-            
+
             assert result is None
             mock_logger.warning.assert_called()
 
@@ -106,7 +98,7 @@ class TestSagaIntegration:
         """Test handling multiple aggregate reports with different outcomes."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
         from layer_values_monitor.threshold_config import ThresholdConfig
-        
+
         # Create multiple reports
         report1 = AggregateReport(
             query_id="test_query_id",
@@ -114,58 +106,53 @@ class TestSagaIntegration:
             value="0x" + "0" * 63 + "1",
             aggregate_power="1000",
             micro_report_height="12345",
-            height=12345
+            height=12345,
         )
-        
+
         report2 = AggregateReport(
             query_id="another_query_id",
             query_data="0x456def",
             value="0x" + "0" * 63 + "2",
             aggregate_power="2000",
             micro_report_height="12346",
-            height=12346
+            height=12346,
         )
-        
+
         queue = asyncio.Queue()
         await queue.put(report1)
         await queue.put(report2)
-        
+
         mock_logger = MagicMock()
         mock_threshold_config = MagicMock(spec=ThresholdConfig)
-        
+
         # Mock different inspection results
         def side_effect(agg_report, *args):
             if agg_report.query_id == "test_query_id":
                 return (True, "Should pause")  # First report triggers pause
             else:
                 return (False, "Within limits")  # Second report is fine
-        
-        with patch('layer_values_monitor.monitor.inspect_aggregate_report', side_effect=side_effect):
+
+        with patch("layer_values_monitor.monitor.inspect_aggregate_report", side_effect=side_effect):
             # Run the queue handler
             task = asyncio.create_task(
                 agg_reports_queue_handler(
-                    queue,
-                    saga_config_watcher,
-                    mock_logger,
-                    mock_threshold_config,
-                    mock_saga_contract_manager
+                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
                 )
             )
-            
+
             await asyncio.sleep(0.2)  # Give time to process both reports
             task.cancel()
-            
+
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-            
+
             # Verify only one pause attempt (for the first report)
             mock_saga_contract_manager.pause_contract.assert_called_once_with(
-                "0x9fe237b245466A5f088AfE808b27c1305E3027BC",
-                "test_query_id"
+                "0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id"
             )
-            
+
             # Verify both success and pause logging
             assert any("CONTRACT PAUSED SUCCESSFULLY" in str(call) for call in mock_logger.critical.call_args_list)
             assert any("Aggregate report validated" in str(call) for call in mock_logger.info.call_args_list)
@@ -175,143 +162,126 @@ class TestSagaIntegration:
         """Test contract pause when guardian check fails."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
         from layer_values_monitor.threshold_config import ThresholdConfig
-        
+
         # Create mock saga manager that fails guardian check
         mock_saga_manager = MagicMock()
         mock_saga_manager.pause_contract = AsyncMock(return_value=None)  # Failure
-        
+
         report = AggregateReport(
             query_id="test_query_id",
             query_data="0x123abc",
             value="0x" + "0" * 63 + "1",
             aggregate_power="1000",
             micro_report_height="12345",
-            height=12345
+            height=12345,
         )
-        
+
         queue = asyncio.Queue()
         await queue.put(report)
-        
+
         mock_logger = MagicMock()
         mock_threshold_config = MagicMock(spec=ThresholdConfig)
-        
-        with patch('layer_values_monitor.monitor.inspect_aggregate_report') as mock_inspect:
+
+        with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
             mock_inspect.return_value = (True, "Should pause")
-            
+
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue,
-                    saga_config_watcher,
-                    mock_logger,
-                    mock_threshold_config,
-                    mock_saga_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
             )
-            
+
             await asyncio.sleep(0.1)
             task.cancel()
-            
+
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-            
+
             # Verify error logging when pause fails
             mock_logger.error.assert_called_with(
                 "❌ FAILED TO PAUSE CONTRACT - Address: 0x9fe237b245466A5f088AfE808b27c1305E3027BC"
             )
 
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_config_reload_during_monitoring(self, saga_config_watcher):
         """Test that config changes are picked up during monitoring."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
         from layer_values_monitor.threshold_config import ThresholdConfig
-        
+
         # Initial config
         initial_config = saga_config_watcher.get_config()
-        
+
         # Modify config (simulate file change)
         new_config = dict(initial_config)
         new_config["test_query_id"]["contract_address"] = "0xNEWADDRESS123456789"
-        
+
         # Mock config watcher to return new config
-        with patch.object(saga_config_watcher, 'get_config', return_value=new_config):
+        with patch.object(saga_config_watcher, "get_config", return_value=new_config):
             report = AggregateReport(
                 query_id="test_query_id",
                 query_data="0x123abc",
                 value="0x" + "0" * 63 + "1",
                 aggregate_power="1000",
                 micro_report_height="12345",
-                height=12345
+                height=12345,
             )
-            
+
             queue = asyncio.Queue()
             await queue.put(report)
-            
+
             mock_logger = MagicMock()
             mock_threshold_config = MagicMock(spec=ThresholdConfig)
             mock_saga_manager = MagicMock()
             mock_saga_manager.pause_contract = AsyncMock(return_value="0xtest_hash")
-            
-            with patch('layer_values_monitor.monitor.inspect_aggregate_report') as mock_inspect:
+
+            with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
                 mock_inspect.return_value = (True, "Should pause")
-                
+
                 task = asyncio.create_task(
                     agg_reports_queue_handler(
-                        queue,
-                        saga_config_watcher,
-                        mock_logger,
-                        mock_threshold_config,
-                        mock_saga_manager
+                        queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager
                     )
                 )
-                
+
                 await asyncio.sleep(0.1)
                 task.cancel()
-                
+
                 try:
                     await task
                 except asyncio.CancelledError:
                     pass
-                
+
                 # Verify pause was called with the new address
-                mock_saga_manager.pause_contract.assert_called_once_with(
-                    "0xNEWADDRESS123456789",
-                    "test_query_id"
-                )
+                mock_saga_manager.pause_contract.assert_called_once_with("0xNEWADDRESS123456789", "test_query_id")
 
     def test_abi_compatibility(self):
         """Test that the ABI matches the GuardedPausable contract."""
         from layer_values_monitor.saga_contract import SagaContractManager
-        
+
         mock_logger = MagicMock()
-        
-        with patch('layer_values_monitor.saga_contract.Web3') as mock_web3_class:
+
+        with patch("layer_values_monitor.saga_contract.Web3") as mock_web3_class:
             mock_web3 = MagicMock()
             mock_web3_class.return_value = mock_web3
-            
-            with patch('layer_values_monitor.saga_contract.Web3.eth.account.from_key') as mock_from_key:
+
+            with patch("layer_values_monitor.saga_contract.Web3.eth.account.from_key") as mock_from_key:
                 mock_from_key.return_value = MagicMock()
-                
-                manager = SagaContractManager(
-                    "https://test-rpc.saga.xyz/",
-                    "test_key",
-                    mock_logger
-                )
-                
+
+                manager = SagaContractManager("https://test-rpc.saga.xyz/", "test_key", mock_logger)
+
                 # Verify ABI contains expected functions
                 abi_functions = [func["name"] for func in manager.guarded_pausable_abi if func["type"] == "function"]
-                
+
                 assert "pause" in abi_functions
                 assert "unpause" in abi_functions
                 assert "paused" in abi_functions
                 assert "guardians" in abi_functions
-                
+
                 # Verify function signatures match expected format
                 pause_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "pause")
                 assert pause_func["inputs"] == []
                 assert pause_func["stateMutability"] == "nonpayable"
-                
+
                 guardians_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "guardians")
                 assert len(guardians_func["inputs"]) == 1
                 assert guardians_func["inputs"][0]["type"] == "address"

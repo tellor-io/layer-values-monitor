@@ -40,7 +40,7 @@ class ThresholdConfig:
         self.equality_warning = equality_warning
         self.equality_minor = equality_minor
         self.equality_major = equality_major
-        
+
         self.pause_threshold = pause_threshold
 
     @classmethod
