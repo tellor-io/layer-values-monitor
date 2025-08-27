@@ -170,7 +170,7 @@ async def start() -> None:
     try:
         # Build list of queries to subscribe to
         queries = ["new_report.reporter_power > 0"]
-        
+
         # Add aggregate report query if Saga guard is enabled
         if args.enable_saga_guard:
             queries.append("aggregate_report.aggregate_power > 0")
@@ -202,9 +202,7 @@ async def start() -> None:
         # Only add Saga-related tasks if enabled
         if args.enable_saga_guard:
             tasks.append(
-                agg_reports_queue_handler(
-                    agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager
-                )
+                agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager)
             )
 
         await asyncio.gather(*tasks)

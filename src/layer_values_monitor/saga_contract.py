@@ -56,7 +56,7 @@ class SagaContractManager:
             query_id: Query ID for logging purposes
 
         Returns:
-            Tuple of (transaction_hash, status_message). 
+            Tuple of (transaction_hash, status_message).
             transaction_hash is str if successful, None if failed.
             status_message describes the result.
 

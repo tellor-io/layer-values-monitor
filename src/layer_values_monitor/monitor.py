@@ -52,17 +52,14 @@ async def listen_to_websocket_events(uri: str, queries: list[str], q: asyncio.Qu
     logger: logger instance
     """
     logger.info(f"Starting WebSocket connection for {len(queries)} subscriptions...")
-    
+
     # Prepare subscription messages
     subscription_messages = []
     for i, query_string in enumerate(queries, 1):
-        subscription_messages.append(json.dumps({
-            "jsonrpc": "2.0",
-            "method": "subscribe",
-            "id": i,
-            "params": {"query": query_string}
-        }))
-    
+        subscription_messages.append(
+            json.dumps({"jsonrpc": "2.0", "method": "subscribe", "id": i, "params": {"query": query_string}})
+        )
+
     uri = f"ws://{uri}/websocket"
     retry_count = 0
     base_delay = 1
@@ -75,8 +72,8 @@ async def listen_to_websocket_events(uri: str, queries: list[str], q: asyncio.Qu
                 # Send all subscription messages
                 for i, msg in enumerate(subscription_messages):
                     await websocket.send(msg)
-                    logger.info(f"✅ Successfully subscribed to query {i+1}: {queries[i]}")
-                
+                    logger.info(f"✅ Successfully subscribed to query {i + 1}: {queries[i]}")
+
                 # Reset retry count on successful connection
                 retry_count = 0
                 while True:
@@ -166,7 +163,7 @@ async def raw_data_queue_handler(
                     meta_id=events["new_report.meta_id"][0],
                     tx_hash=events["tx.hash"][0],
                 )
-                
+
                 # check if height has incremented from the reports we are collecting
                 # then clear collection and start a new collection
                 if height > current_height:
@@ -180,18 +177,20 @@ async def raw_data_queue_handler(
                     reports_collections[report.query_id] = [report]
                 else:
                     reports_collections[report.query_id].append(report)
-                    
+
             except (KeyError, IndexError) as e:
                 logger.warning(f"malformed new_report returned by websocket: {e.__str__()}")
                 continue
-                
+
         elif is_agg_report and agg_reports_q is not None:
             # This ensures new reports are processed for disputes even when aggregate arrives at same height
             if len(reports_collections) > 0:
-                logger.debug(f"Flushing {len(reports_collections)} pending new report collections before processing aggregate")
+                logger.debug(
+                    f"Flushing {len(reports_collections)} pending new report collections before processing aggregate"
+                )
                 await new_reports_q.put(dict(reports_collections))
                 reports_collections.clear()
-            
+
             try:
                 # Handle optional fields gracefully with fallbacks
                 height = None
@@ -206,7 +205,7 @@ async def raw_data_queue_handler(
                     micro_report_height=events["aggregate_report.micro_report_height"][0],
                     height=height,
                 )
-                
+
                 await agg_reports_q.put(agg_report)
             except (KeyError, IndexError) as e:
                 logger.warning(f"malformed aggregate_report returned by websocket: {e.__str__()}")
@@ -493,14 +492,14 @@ async def agg_reports_queue_handler(
 ) -> None:
     """Handle aggregate reports from the queue and check for pause conditions."""
     processed_reports = {}  # Track processed reports with timestamps to detect duplicates
-    
+
     while True:
         agg_report: AggregateReport = await agg_reports_q.get()
-        
+
         # Create a unique key for this report to detect duplicates (keep for safety)
         report_key = f"{agg_report.query_id}:{agg_report.height}:{agg_report.value}:{agg_report.micro_report_height}"
         current_time = time.time()
-        
+
         if report_key in processed_reports:
             time_diff = current_time - processed_reports[report_key]
             logger.warning(f"🚨 DUPLICATE DETECTED! Report already processed {time_diff:.3f}s ago: {report_key}")
@@ -536,7 +535,9 @@ async def agg_reports_queue_handler(
 
                         # Skip if placeholder address
                         if contract_address != "0x0000000000000000000000000000000000000000":
-                            tx_hash, status = await saga_contract_manager.pause_contract(contract_address, agg_report.query_id)
+                            tx_hash, status = await saga_contract_manager.pause_contract(
+                                contract_address, agg_report.query_id
+                            )
                             if tx_hash:
                                 if status == "success":
                                     logger.critical(f"🚨 CONTRACT PAUSED SUCCESSFULLY - TxHash: {tx_hash}")
@@ -546,13 +547,17 @@ async def agg_reports_queue_handler(
                                 if status == "already_paused":
                                     logger.warning(f"⚠️ CONTRACT ALREADY PAUSED - Address: {contract_address}")
                                 elif status == "not_guardian":
-                                    logger.error(f"❌ NOT AUTHORIZED - Account is not a guardian for contract {contract_address}")
+                                    logger.error(
+                                        f"❌ NOT AUTHORIZED - Account is not a guardian for contract {contract_address}"
+                                    )
                                 elif status == "no_contract":
                                     logger.error(f"❌ NO CONTRACT FOUND - Address: {contract_address}")
                                 elif status == "invalid_address":
                                     logger.error(f"❌ INVALID ADDRESS - Address: {contract_address}")
                                 else:
-                                    logger.error(f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}, Status: {status}")
+                                    logger.error(
+                                        f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}, Status: {status}"
+                                    )
                         else:
                             logger.warning(
                                 f"⚠️ PAUSE SKIPPED - No valid contract address configured "

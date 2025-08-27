@@ -358,7 +358,7 @@ async def test_raw_data_queue_handler():
 @pytest.mark.asyncio
 async def test_new_report_followed_by_aggregate_same_height(mock_logger):
     """Test that new reports are processed when aggregate arrives at same height.
-    
+
     This tests the critical fix for the single-reporter testnet scenario where
     a bad report is followed immediately by an aggregate report at the same height.
     The new report must be flushed and processed for disputes before the aggregate.
