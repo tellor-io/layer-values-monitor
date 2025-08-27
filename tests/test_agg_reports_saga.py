@@ -236,8 +236,9 @@ class TestAggReportsQueueHandler:
             # Verify pause_contract was NOT called
             mock_saga_manager.pause_contract.assert_not_called()
 
-            # Verify success logging
-            mock_logger.info.assert_any_call("✅ Aggregate report validated: Values within threshold")
+            # Check that no pause was triggered (no CIRCUIT BREAKER message)
+            critical_calls = [call for call in mock_logger.critical.call_args_list if "CIRCUIT BREAKER" in str(call)]
+            assert len(critical_calls) == 0, f"Unexpected circuit breaker activation: {critical_calls}"
 
     @pytest.mark.asyncio
     async def test_handler_inspection_failure(
@@ -362,7 +363,7 @@ class TestInspectAggregateReport:
                             assert result is not None
                             should_pause, reason = result
                             assert should_pause is False
-                            assert "within acceptable range" in reason
+                            assert "acceptable deviation:" in reason
 
     @pytest.mark.asyncio
     async def test_inspect_no_trusted_value(

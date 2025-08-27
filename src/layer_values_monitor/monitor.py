@@ -43,22 +43,26 @@ def decode_hex_value(hex_value: str) -> float:
     return value_scaled
 
 
-async def listen_to_new_report_events(uri: str, q: asyncio.Queue, logger: logging) -> None:
-    """Connect to a layer websocket and fetch new reports and add them to queue for monitoring.
+async def listen_to_websocket_events(uri: str, queries: list[str], q: asyncio.Queue, logger: logging) -> None:
+    """Connect to a layer websocket and fetch events, adding them to queue for monitoring.
 
-    uri: address to chain (ie ws://localhost:26657/websocket)
+    uri: address to chain (ie localhost:26657)
+    queries: list of query strings to subscribe to
     q: queue to store raw response for later processing
-    logger:
+    logger: logger instance
     """
-    logger.info("Starting WebSocket connection...")
-    query = json.dumps(
-        {
+    logger.info(f"Starting WebSocket connection for {len(queries)} subscriptions...")
+    
+    # Prepare subscription messages
+    subscription_messages = []
+    for i, query_string in enumerate(queries, 1):
+        subscription_messages.append(json.dumps({
             "jsonrpc": "2.0",
             "method": "subscribe",
-            "id": 1,
-            "params": {"query": "new_report.reporter_power > 0"},
-        }
-    )
+            "id": i,
+            "params": {"query": query_string}
+        }))
+    
     uri = f"ws://{uri}/websocket"
     retry_count = 0
     base_delay = 1
@@ -68,13 +72,17 @@ async def listen_to_new_report_events(uri: str, q: asyncio.Queue, logger: loggin
         try:
             logger.info(f"Connecting to WebSocket at {uri}... (Attempt {retry_count + 1})")
             async with websockets.connect(uri) as websocket:
-                await websocket.send(query)
-                logger.info("Successfully subscribed to events.")
+                # Send all subscription messages
+                for i, msg in enumerate(subscription_messages):
+                    await websocket.send(msg)
+                    logger.info(f"✅ Successfully subscribed to query {i+1}: {queries[i]}")
+                
                 # Reset retry count on successful connection
                 retry_count = 0
                 while True:
                     response = await websocket.recv()
-                    await q.put(json.loads(response))
+                    parsed_response = json.loads(response)
+                    await q.put(parsed_response)
 
         except websockets.ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed: {e}")
@@ -94,57 +102,6 @@ async def listen_to_new_report_events(uri: str, q: asyncio.Queue, logger: loggin
         await asyncio.sleep(actual_delay)
 
 
-async def listen_to_agg_reports_events(uri: str, q: asyncio.Queue, logger: logging) -> None:
-    """Connect to a layer websocket and fetch aggregate reports and add them to queue for monitoring.
-
-    uri: address to chain (ie ws://localhost:26657/websocket)
-    q: queue to store raw response for later processing
-    logger:
-    """
-    logger.info("Starting WebSocket connection for aggregate reports...")
-    query = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "method": "subscribe",
-            "id": 2,
-            "params": {"query": "aggregate_report.aggregate_power > 0"},
-        }
-    )
-    uri = f"ws://{uri}/websocket"
-    retry_count = 0
-    base_delay = 1
-    max_delay = 60
-
-    while True:
-        try:
-            logger.info(f"Connecting to WebSocket at {uri} for aggregate reports... (Attempt {retry_count + 1})")
-            async with websockets.connect(uri) as websocket:
-                await websocket.send(query)
-                logger.info("Successfully subscribed to aggregate report events.")
-                # Reset retry count on successful connection
-                retry_count = 0
-                while True:
-                    response = await websocket.recv()
-                    await q.put(json.loads(response))
-
-        except websockets.ConnectionClosed as e:
-            logger.warning(f"WebSocket connection closed for aggregate reports: {e}")
-        except websockets.WebSocketException as e:
-            logger.error(f"WebSocket error for aggregate reports: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error for aggregate reports: {e}", exc_info=True)
-        logger.info("going through the retry phase since aggregate reports connection was closed")
-        # Calculate delay with exponential backoff and jitter for reconnection
-        delay = min(base_delay * (2**retry_count), max_delay)
-        # Add jitter to prevent thundering herd problem
-        jitter = random.uniform(0, 0.1 * delay)
-        actual_delay = delay + jitter
-
-        retry_count += 1
-        logger.info(f"Reconnecting in {actual_delay:.2f} seconds for aggregate reports (retry {retry_count})")
-        await asyncio.sleep(actual_delay)
-
-
 async def raw_data_queue_handler(
     raw_data_q: asyncio.Queue,
     new_reports_q: asyncio.Queue,
@@ -152,11 +109,13 @@ async def raw_data_queue_handler(
     logger: logging,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
 ) -> None:
-    """Inspect reports in reports queue and process to see if they should be disputed.
+    """Process raw WebSocket data and route to appropriate queues.
 
-    Or if any saga contract should be paused.
+    Handles both new reports and aggregate reports from the same WebSocket stream.
+    New reports are collected by height and sent to new_reports_q.
+    Aggregate reports are sent directly to agg_reports_q.
     """
-    logger.info("Inspecting reports...")
+    logger.info("Processing raw WebSocket data...")
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
     # current height being collected for
@@ -170,6 +129,13 @@ async def raw_data_queue_handler(
         if result is None:
             continue
 
+        # Filter out duplicate events: Tendermint sends the same aggregate reports in both
+        # 'NewBlock' and 'NewBlockEvents'. We only process 'NewBlockEvents' to avoid duplicates.
+        data = result.get("data", {})
+        event_type = data.get("type")
+        if event_type == "tendermint/event/NewBlock":
+            continue
+
         events = result.get("events")
         if events is None:
             continue
@@ -180,8 +146,8 @@ async def raw_data_queue_handler(
 
         if is_new_report:
             logger.info(
-                f"new_report found w/ meta id: {events['new_report.meta_id'][0]}, "
-                f"query id: {events['new_report.query_id'][0]}"
+                f"New Report found w/ meta id: {events['new_report.meta_id'][0]}, "
+                f"query id: {events['new_report.query_id'][0][:16]}..."
             )
             try:
                 # get current height from event
@@ -200,11 +166,26 @@ async def raw_data_queue_handler(
                     meta_id=events["new_report.meta_id"][0],
                     tx_hash=events["tx.hash"][0],
                 )
+                
+                # check if height has incremented from the reports we are collecting
+                # then clear collection and start a new collection
+                if height > current_height:
+                    if len(reports_collections) > 0:
+                        await new_reports_q.put(dict(reports_collections))
+                        reports_collections.clear()
+                    current_height = height
+
+                reports_collected = reports_collections.get(report.query_id, None)
+                if reports_collected is None:
+                    reports_collections[report.query_id] = [report]
+                else:
+                    reports_collections[report.query_id].append(report)
+                    
             except (KeyError, IndexError) as e:
                 logger.warning(f"malformed new_report returned by websocket: {e.__str__()}")
                 continue
+                
         elif is_agg_report and agg_reports_q is not None:
-            logger.info(f"aggregate_report found w/ query id: {events['aggregate_report.query_id'][0]}")
             try:
                 # Handle optional fields gracefully with fallbacks
                 height = None
@@ -219,29 +200,14 @@ async def raw_data_queue_handler(
                     micro_report_height=events["aggregate_report.micro_report_height"][0],
                     height=height,
                 )
+                
                 await agg_reports_q.put(agg_report)
-                # Skip new report collection path
-                continue
             except (KeyError, IndexError) as e:
                 logger.warning(f"malformed aggregate_report returned by websocket: {e.__str__()}")
                 continue
         else:
             # Unknown or not interested
             continue
-
-        # check if height has incremented from the reports we are collecting
-        # then clear collection and start a new collection
-        if height > current_height:
-            if len(reports_collections) > 0:
-                await new_reports_q.put(dict(reports_collections))
-                reports_collections.clear()
-            current_height = height
-
-        reports_collected = reports_collections.get(report.query_id, None)
-        if reports_collected is None:
-            reports_collections[report.query_id] = [report]
-        else:
-            reports_collections[report.query_id].append(report)
 
 
 async def inspect_reports(
@@ -290,7 +256,7 @@ async def inspect_reports(
             major_threshold=_config.get("major_threshold"),
             pause_threshold=_config.get("pause_threshold"),
         )
-        logger.debug(f"Using config metrics: alert_threshold={metrics.alert_threshold}")
+        # logger.debug(f"Using config metrics: alert_threshold={metrics.alert_threshold}")
 
         if any(
             x is None
@@ -390,7 +356,6 @@ async def new_reports_queue_handler(
     threshold_config: ThresholdConfig,
 ) -> None:
     """Handle new reports from the queue and process them."""
-    logger.debug("Handling new reports...")
     running_tasks = set()
 
     while True:
@@ -500,11 +465,11 @@ async def inspect_aggregate_report(
             },
             diff=diff,
         )
-        reason = f"Aggregate report deviation ({diff:.4f}) exceeds {category} threshold - monitoring only"
+        reason = f"Aggregate report deviation ({diff:.4f}) exceeds {category} threshold"
     elif alertable:
-        reason = f"Aggregate report deviation ({diff:.4f}) exceeds alert threshold - monitoring only"
+        reason = f"Aggregate report deviation ({diff:.4f}) exceeds alert threshold"
     else:
-        reason = f"Aggregate report within acceptable range (deviation: {diff:.4f})"
+        reason = f"acceptable deviation: {diff:.4f}"
 
     logger.info(
         f"Aggregate validation - Reported: {reported_value:.6f}, Trusted: {trusted_value:.6f}, Deviation: {diff:.6f}"
@@ -521,13 +486,29 @@ async def agg_reports_queue_handler(
     saga_contract_manager: SagaContractManager | None = None,
 ) -> None:
     """Handle aggregate reports from the queue and check for pause conditions."""
+    processed_reports = {}  # Track processed reports with timestamps to detect duplicates
+    
     while True:
         agg_report: AggregateReport = await agg_reports_q.get()
+        
+        # Create a unique key for this report to detect duplicates (keep for safety)
+        report_key = f"{agg_report.query_id}:{agg_report.height}:{agg_report.value}:{agg_report.micro_report_height}"
+        current_time = time.time()
+        
+        if report_key in processed_reports:
+            time_diff = current_time - processed_reports[report_key]
+            logger.warning(f"🚨 DUPLICATE DETECTED! Report already processed {time_diff:.3f}s ago: {report_key}")
+            # Skip processing duplicate
+            agg_reports_q.task_done()
+            continue
+        else:
+            processed_reports[report_key] = current_time
 
-        # Log the aggregate report (don't add to main table as it has different structure)
+        # Log the aggregate report with decoded value for readability
+        decoded_value = decode_hex_value(agg_report.value)
         logger.info(
-            f"Aggregate Report - Query: {agg_report.query_id[:16]}... Value: {agg_report.value} "
-            f"Power: {agg_report.aggregate_power} Height: {agg_report.micro_report_height}"
+            f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: {decoded_value:.6f} "
+            f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
         )
 
         # Inspect aggregate report using same logic as individual reports
@@ -569,7 +550,8 @@ async def agg_reports_queue_handler(
                         "(check SAGA_EVM_RPC_URL and SAGA_PRIVATE_KEY)"
                     )
             else:
-                logger.info(f"✅ Aggregate report validated: {reason}")
+                # Report validated - no action needed
+                pass
         else:
             logger.warning("Could not validate aggregate report - configuration or trusted source unavailable")
 

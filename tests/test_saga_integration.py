@@ -153,9 +153,8 @@ class TestSagaIntegration:
                 "0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id"
             )
 
-            # Verify both success and pause logging
+            # Verify pause was executed
             assert any("CONTRACT PAUSED SUCCESSFULLY" in str(call) for call in mock_logger.critical.call_args_list)
-            assert any("Aggregate report validated" in str(call) for call in mock_logger.info.call_args_list)
 
     @pytest.mark.asyncio
     async def test_contract_pause_with_guardian_failure(self, saga_config_watcher):

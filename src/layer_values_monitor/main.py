@@ -13,8 +13,7 @@ from layer_values_monitor.dispute import process_disputes
 from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
     agg_reports_queue_handler,
-    listen_to_agg_reports_events,
-    listen_to_new_report_events,
+    listen_to_websocket_events,
     new_reports_queue_handler,
     raw_data_queue_handler,
 )
@@ -159,22 +158,30 @@ async def start() -> None:
     if args.enable_saga_guard:
         saga_contract_manager = create_saga_contract_manager(logger)
 
-    raw_data_queue = asyncio.Queue()
-    agg_reports_queue = asyncio.Queue()
-    new_reports_queue = asyncio.Queue()
-    disputes_queue = asyncio.Queue()
+    # Bounded queues to prevent memory exhaustion
+    raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events
+    agg_reports_queue = asyncio.Queue(maxsize=500)  # Aggregate reports for Saga Guard
+    new_reports_queue = asyncio.Queue(maxsize=200)  # Batched new reports
+    disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
 
     # TODO: validate user options to check if they conflict
     try:
+        # Build list of queries to subscribe to
+        queries = ["new_report.reporter_power > 0"]
+        
+        # Add aggregate report query if Saga guard is enabled
+        if args.enable_saga_guard:
+            queries.append("aggregate_report.aggregate_power > 0")
+
         # Build list of tasks to run concurrently
         tasks = [
-            listen_to_new_report_events(uri, raw_data_queue, logger),
+            listen_to_websocket_events(uri, queries, raw_data_queue, logger),
             raw_data_queue_handler(
                 raw_data_queue,
                 new_reports_queue,
-                agg_reports_queue,
+                agg_reports_queue if args.enable_saga_guard else None,
                 logger=logger,
             ),
             new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
@@ -194,13 +201,10 @@ async def start() -> None:
 
         # Only add Saga-related tasks if enabled
         if args.enable_saga_guard:
-            tasks.extend(
-                [
-                    listen_to_agg_reports_events(uri, raw_data_queue, logger),
-                    agg_reports_queue_handler(
-                        agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager
-                    ),
-                ]
+            tasks.append(
+                agg_reports_queue_handler(
+                    agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager
+                )
             )
 
         await asyncio.gather(*tasks)
