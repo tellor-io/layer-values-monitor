@@ -54,7 +54,7 @@ class TestSagaEdgeCases:
             with patch.object(saga_manager, "is_paused", return_value=False):
                 result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                assert result is None
+                assert result == (None, "error: Network error")
                 mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -72,7 +72,7 @@ class TestSagaEdgeCases:
 
                 result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                assert result is None
+                assert result == (None, "error: Gas required exceeds allowance")
                 mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -85,7 +85,7 @@ class TestSagaEdgeCases:
             with patch.object(saga_manager, "is_paused", return_value=False):
                 result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                assert result is None
+                assert result == (None, "error: Invalid nonce")
                 mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -111,7 +111,7 @@ class TestSagaEdgeCases:
 
                     result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                    assert result is None
+                    assert result == (None, "error: Receipt not found")
                     mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -147,7 +147,7 @@ class TestSagaEdgeCases:
                     results = await asyncio.gather(*tasks)
 
                     # All should succeed (in this mock scenario)
-                    assert all(result == "0xtest_hash" for result in results)
+                    assert all(result == ("0xtest_hash", "success") for result in results)
 
     @pytest.mark.asyncio
     async def test_pause_contract_malformed_address(self, saga_manager, mock_logger):
@@ -165,7 +165,7 @@ class TestSagaEdgeCases:
 
             result = await saga_manager.pause_contract(address, "test_query")
 
-            assert result is None
+            assert result == (None, "invalid_address")
             mock_logger.error.assert_called_with(f"Invalid contract address format: {address}")
             mock_logger.reset_mock()
 
@@ -243,7 +243,7 @@ class TestSagaEdgeCases:
                     result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
                     # Should still succeed despite high gas price
-                    assert result == "0xtest_hash"
+                    assert result == ("0xtest_hash", "success")
 
     @pytest.mark.asyncio
     async def test_aggregate_report_edge_values(self):

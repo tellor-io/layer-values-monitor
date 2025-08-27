@@ -164,7 +164,7 @@ class TestSagaIntegration:
 
         # Create mock saga manager that fails guardian check
         mock_saga_manager = MagicMock()
-        mock_saga_manager.pause_contract = AsyncMock(return_value=None)  # Failure
+        mock_saga_manager.pause_contract = AsyncMock(return_value=(None, "not_guardian"))  # Failure
 
         report = AggregateReport(
             query_id="test_query_id",
@@ -198,7 +198,7 @@ class TestSagaIntegration:
 
             # Verify error logging when pause fails
             mock_logger.error.assert_called_with(
-                "❌ FAILED TO PAUSE CONTRACT - Address: 0x9fe237b245466A5f088AfE808b27c1305E3027BC"
+                "❌ NOT AUTHORIZED - Account is not a guardian for contract 0x9fe237b245466A5f088AfE808b27c1305E3027BC"
             )
 
     @pytest.mark.asyncio
@@ -231,7 +231,7 @@ class TestSagaIntegration:
             mock_logger = MagicMock()
             mock_threshold_config = MagicMock(spec=ThresholdConfig)
             mock_saga_manager = MagicMock()
-            mock_saga_manager.pause_contract = AsyncMock(return_value="0xtest_hash")
+            mock_saga_manager.pause_contract = AsyncMock(return_value=("0xtest_hash", "success"))
 
             with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
                 mock_inspect.return_value = (True, "Should pause")

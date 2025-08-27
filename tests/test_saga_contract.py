@@ -117,7 +117,7 @@ class TestSagaContractManager:
 
             result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-            assert result == "0xtest_hash"
+            assert result == ("0xtest_hash", "success")
             mock_logger.critical.assert_called()
 
     @pytest.mark.asyncio
@@ -127,7 +127,7 @@ class TestSagaContractManager:
 
         result = await saga_manager.pause_contract("invalid_address", "test_query_id")
 
-        assert result is None
+        assert result == (None, "invalid_address")
         mock_logger.error.assert_called_with("Invalid contract address format: invalid_address")
 
     @pytest.mark.asyncio
@@ -137,7 +137,7 @@ class TestSagaContractManager:
 
         result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-        assert result is None
+        assert result == (None, "no_contract")
         mock_logger.error.assert_called_with("No contract found at address: 0X9FE237B245466A5F088AFE808B27C1305E3027BC")
 
     @pytest.mark.asyncio
@@ -150,7 +150,7 @@ class TestSagaContractManager:
         with patch.object(saga_manager, "is_guardian", return_value=False):
             result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-            assert result is None
+            assert result == (None, "not_guardian")
             mock_logger.error.assert_called_with(
                 f"Account {saga_manager.account.address} is not a guardian for contract "
                 f"0X9FE237B245466A5F088AFE808B27C1305E3027BC"
@@ -167,7 +167,7 @@ class TestSagaContractManager:
             with patch.object(saga_manager, "is_paused", return_value=True):
                 result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                assert result is None
+                assert result == (None, "already_paused")
                 mock_logger.warning.assert_called_with(
                     "Contract 0X9FE237B245466A5F088AFE808B27C1305E3027BC is already paused"
                 )
@@ -186,7 +186,7 @@ class TestSagaContractManager:
 
                 result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                assert result is None
+                assert result == (None, "error: Transaction failed")
                 mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -221,7 +221,7 @@ class TestSagaContractManager:
 
                     result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                    assert result is None
+                    assert result == (None, "transaction_failed")
                     mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -254,7 +254,7 @@ class TestSagaContractManager:
 
                     result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                    assert result == "0xtest_hash"  # Should still return hash on timeout
+                    assert result == ("0xtest_hash", "timeout")  # Should still return hash on timeout
                     mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio

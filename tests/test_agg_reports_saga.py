@@ -47,7 +47,7 @@ class TestAggReportsQueueHandler:
     def mock_saga_manager(self):
         """Create a mock Saga contract manager."""
         manager = MagicMock(spec=SagaContractManager)
-        manager.pause_contract = AsyncMock(return_value="0xtest_hash")
+        manager.pause_contract = AsyncMock(return_value=("0xtest_hash", "success"))
         return manager
 
     @pytest.fixture
@@ -106,7 +106,7 @@ class TestAggReportsQueueHandler:
         await queue.put(sample_aggregate_report)
 
         # Mock pause_contract to return None (failure)
-        mock_saga_manager.pause_contract = AsyncMock(return_value=None)
+        mock_saga_manager.pause_contract = AsyncMock(return_value=(None, "not_guardian"))
 
         # Mock inspect_aggregate_report to return should_pause=True
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
@@ -128,7 +128,7 @@ class TestAggReportsQueueHandler:
 
             # Verify error logging
             mock_logger.error.assert_called_with(
-                "❌ FAILED TO PAUSE CONTRACT - Address: 0x9fe237b245466A5f088AfE808b27c1305E3027BC"
+                "❌ NOT AUTHORIZED - Account is not a guardian for contract 0x9fe237b245466A5f088AfE808b27c1305E3027BC"
             )
 
     @pytest.mark.asyncio

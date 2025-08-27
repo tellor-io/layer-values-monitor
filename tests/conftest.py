@@ -148,7 +148,7 @@ def mock_saga_contract_manager():
     from layer_values_monitor.saga_contract import SagaContractManager
 
     manager = MagicMock(spec=SagaContractManager)
-    manager.pause_contract = AsyncMock(return_value="0xtest_transaction_hash")
+    manager.pause_contract = AsyncMock(return_value=("0xtest_transaction_hash", "success"))
     manager.is_guardian = AsyncMock(return_value=True)
     manager.is_paused = AsyncMock(return_value=False)
     manager.is_connected.return_value = True
