@@ -353,3 +353,72 @@ async def test_raw_data_queue_handler():
     query2_reports = height_5_reports["query2"]
     assert len(query2_reports) == 1, "query2 should have 1 report"
     assert query2_reports[0].value == "3000", "Report should have value 3000"
+
+
+@pytest.mark.asyncio
+async def test_new_report_followed_by_aggregate_same_height(mock_logger):
+    """Test that new reports are processed when aggregate arrives at same height.
+    
+    This tests the critical fix for the single-reporter testnet scenario where
+    a bad report is followed immediately by an aggregate report at the same height.
+    The new report must be flushed and processed for disputes before the aggregate.
+    """
+    raw_data_q = asyncio.Queue()
+    new_reports_q = asyncio.Queue()
+    agg_reports_q = asyncio.Queue()
+
+    # New report at height 100
+    new_report_data = {
+        "result": {
+            "events": {
+                "tx.height": ["100"],
+                "new_report.query_type": ["SpotPrice"],
+                "new_report.query_data": ["0x123"],
+                "new_report.query_id": ["83a7f3d48786ac26"],
+                "new_report.value": ["0x125690000"],  # Bad value that should be disputed
+                "new_report.aggregate_method": ["median"],
+                "new_report.cyclelist": ["cycle1"],
+                "new_report.reporter_power": ["1000000"],
+                "new_report.reporter": ["reporter1"],
+                "new_report.timestamp": ["1625097600000"],
+                "new_report.meta_id": ["57"],
+                "tx.hash": ["hash1"],
+            }
+        }
+    }
+
+    # Aggregate report at the same height 100 - this triggers the EndBlock processing
+    aggregate_report_data = {
+        "result": {
+            "events": {
+                "tx.height": ["100"],
+                "aggregate_report.query_id": ["83a7f3d48786ac26"],
+                "aggregate_report.query_data": ["0x123"],
+                "aggregate_report.value": ["0x125690000"],
+                "aggregate_report.aggregate_power": ["1000000"],
+                "aggregate_report.micro_report_height": ["116"],
+            }
+        }
+    }
+
+    await raw_data_q.put(new_report_data)
+    await raw_data_q.put(aggregate_report_data)
+
+    # Process the events - this should process both the new report and aggregate
+    await raw_data_queue_handler(raw_data_q, new_reports_q, agg_reports_q, mock_logger, max_iterations=2)
+
+    # Verify the new report was processed (sent to new_reports_q for dispute checking)
+    assert not new_reports_q.empty(), "New reports queue should contain the flushed report"
+    new_reports = await new_reports_q.get()
+    assert "83a7f3d48786ac26" in new_reports, "Should contain the bad report for dispute processing"
+    assert len(new_reports["83a7f3d48786ac26"]) == 1, "Should have exactly one report"
+    assert new_reports["83a7f3d48786ac26"][0].meta_id == "57", "Should be the correct report"
+
+    # Verify the aggregate report was also processed
+    assert not agg_reports_q.empty(), "Aggregate reports queue should contain the aggregate report"
+    agg_report = await agg_reports_q.get()
+    assert agg_report.query_id == "83a7f3d48786ac26", "Should be the same query ID"
+    assert agg_report.micro_report_height == "116", "Should have correct micro report height"
+
+    # Verify debug logging was called to show the flush happened
+    mock_logger.debug.assert_called_with("Flushing 1 pending new report collections before processing aggregate")
