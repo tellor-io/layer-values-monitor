@@ -46,9 +46,13 @@ uv run layer-values-monitor --use-custom-config
 |----------|-------------|---------|
 | `URI` | Layer node WebSocket endpoint | `localhost:26657` |
 | `CHAIN_ID` | Layer chain identifier | `layer-testnet-3` |
+| `DISCORD_WEBHOOK_URL_1` | Discord notifications webhook 1 | _(none)_ |
+| `MAX_TABLE_ROWS` | Maximum rows in reports tables | `1000000` |
 
 
-### Optional (Recommended) Environment Variables
+### Optional Environment Variables 
+
+For a lighter startup command, log
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -57,9 +61,6 @@ uv run layer-values-monitor --use-custom-config
 | `LAYER_KEYRING_BACKEND` | Keyring backend type | `test` |
 | `LAYER_KEYRING_DIR` | Keyring directory | `~/.layer` |
 | `PAYFROM_BOND` | Pay dispute fees from bond | `false` |
-| | | |
-| `DISCORD_WEBHOOK_URL_1` | Discord notifications webhook 1 | _(none)_ |
-| `MAX_TABLE_ROWS` | Maximum rows in reports tables | `1000000` |
 | | | |
 | `TRBBRIDGE_CONTRACT_ADDRESS` | TRB Bridge contract address | _(none)_ |
 | `TRBBRIDGE_CHAIN_ID` | Chain ID for bridge contract (default sepolia) | `11155111` |
@@ -102,7 +103,7 @@ Set global dispute thresholds for all queries.
 
 ## Configuration Strategies
 
-### Strategy 1 (Recommended): Fully configure .env and config.toml
+### Strategy 1: Fully configure .env and config.toml
 Set all configuration in your `.env` and `config.toml` files:
 ```sh
 uv run layer-values-monitor --use-custom-config

@@ -362,9 +362,16 @@ async def new_reports_queue_handler(
 ) -> None:
     """Handle new reports from the queue and process them."""
     running_tasks = set()
+    task_cleanup_threshold = 1000  # Safety threshold for task cleanup
 
     while True:
         new_reports: dict = await new_reports_q.get()
+
+        # Periodic cleanup of completed tasks to prevent memory growth
+        if len(running_tasks) > task_cleanup_threshold:
+            completed_tasks = {t for t in running_tasks if t.done()}
+            running_tasks -= completed_tasks
+            logger.warning(f"🧹 Cleaned up {len(completed_tasks)} completed tasks (active: {len(running_tasks)})")
 
         for report in new_reports.values():
             # Create a task for each query id
@@ -492,6 +499,8 @@ async def agg_reports_queue_handler(
 ) -> None:
     """Handle aggregate reports from the queue and check for pause conditions."""
     processed_reports = {}  # Track processed reports with timestamps to detect duplicates
+    last_cleanup_time = time.time()
+    cleanup_interval = 24 * 60 * 60  # 24 hours in seconds
 
     while True:
         agg_report: AggregateReport = await agg_reports_q.get()
@@ -499,6 +508,15 @@ async def agg_reports_queue_handler(
         # Create a unique key for this report to detect duplicates (keep for safety)
         report_key = f"{agg_report.query_id}:{agg_report.height}:{agg_report.value}:{agg_report.micro_report_height}"
         current_time = time.time()
+
+        # Periodic cleanup of old processed reports to prevent memory growth
+        if current_time - last_cleanup_time >= cleanup_interval:
+            initial_count = len(processed_reports)
+            cutoff_time = current_time - cleanup_interval  # Remove entries older than 24 hours
+            processed_reports = {k: v for k, v in processed_reports.items() if v >= cutoff_time}
+            cleaned_count = initial_count - len(processed_reports)
+            logger.info(f"🧹 Cleaned up {cleaned_count} old processed report entries (kept {len(processed_reports)})")
+            last_cleanup_time = current_time
 
         if report_key in processed_reports:
             time_diff = current_time - processed_reports[report_key]
