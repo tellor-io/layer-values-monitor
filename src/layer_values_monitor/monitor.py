@@ -142,10 +142,6 @@ async def raw_data_queue_handler(
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
 
         if is_new_report:
-            logger.info(
-                f"New Report found w/ meta id: {events['new_report.meta_id'][0]}, "
-                f"query id: {events['new_report.query_id'][0][:16]}..."
-            )
             try:
                 # get current height from event
                 height = events["tx.height"][0]
@@ -168,6 +164,13 @@ async def raw_data_queue_handler(
                 # then clear collection and start a new collection
                 if height > current_height:
                     if len(reports_collections) > 0:
+                        total_reports = sum(len(reports) for reports in reports_collections.values())
+                        query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
+                        
+                        logger.info(
+                            f"New Reports({total_reports}) found at height {current_height}, qIds: [{', '.join(query_counts)}]"
+                        )
+                        
                         await new_reports_q.put(dict(reports_collections))
                         reports_collections.clear()
                     current_height = height
@@ -185,9 +188,13 @@ async def raw_data_queue_handler(
         elif is_agg_report and agg_reports_q is not None:
             # This ensures new reports are processed for disputes even when aggregate arrives at same height
             if len(reports_collections) > 0:
-                logger.debug(
-                    f"Flushing {len(reports_collections)} pending new report collections before processing aggregate"
+                total_reports = sum(len(reports) for reports in reports_collections.values())
+                query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
+                
+                logger.info(
+                    f"New Reports({total_reports}) found at height {current_height}, qIds: [{', '.join(query_counts)}]"
                 )
+                
                 await new_reports_q.put(dict(reports_collections))
                 reports_collections.clear()
 
@@ -483,9 +490,6 @@ async def inspect_aggregate_report(
     else:
         reason = f"acceptable deviation: {diff:.4f}"
 
-    logger.info(
-        f"Aggregate validation - Reported: {reported_value:.6f}, Trusted: {trusted_value:.6f}, Deviation: {diff:.6f}"
-    )
 
     return should_pause, reason
 
@@ -816,8 +820,6 @@ async def inspect(
     # Handle auto-dispute logic
     should_dispute = False
     dispute_category = None
-
-    logger.debug(f"Dispute logic - disputable: {disputable}, metric: {metrics.metric}")
 
     # Check if we should auto-dispute based on threshold configuration
     if disputable:

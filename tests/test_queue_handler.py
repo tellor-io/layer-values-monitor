@@ -420,5 +420,5 @@ async def test_new_report_followed_by_aggregate_same_height(mock_logger):
     assert agg_report.query_id == "83a7f3d48786ac26", "Should be the same query ID"
     assert agg_report.micro_report_height == "116", "Should have correct micro report height"
 
-    # Verify debug logging was called to show the flush happened
-    mock_logger.debug.assert_called_with("Flushing 1 pending new report collections before processing aggregate")
+    # Verify info logging was called to show the flush happened
+    mock_logger.info.assert_any_call("New Reports(1) found at height 100, qIds: [83a7f3d48786:1]")
