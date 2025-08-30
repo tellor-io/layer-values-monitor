@@ -48,47 +48,22 @@ class SagaContractManager:
 
         self.logger.info(f"Initialized Saga contract manager with account: {self.account.address}")
 
-    async def pause_contract(self, contract_address: str, query_id: str) -> tuple[str | None, str]:
-        """Pause a Saga contract by calling its pause() function.
+    async def _execute_pause_transaction(
+        self, contract_address: str, query_id: str, attempt: int = 1
+    ) -> tuple[str | None, str]:
+        """Execute a single pause transaction attempt.
 
         Args:
-            contract_address: The contract address to pause
+            contract_address: The contract address to pause (must be checksum format)
             query_id: Query ID for logging purposes
+            attempt: Attempt number for logging
 
         Returns:
             Tuple of (transaction_hash, status_message).
-            transaction_hash is str if successful, None if failed.
-            status_message describes the result.
-
         """
         try:
-            # Validate contract address format
-            if not self.w3.is_address(contract_address):
-                self.logger.error(f"Invalid contract address format: {contract_address}")
-                return None, "invalid_address"
-
-            # Convert to checksum address
-            contract_address = self.w3.to_checksum_address(contract_address)
-
             # Create contract instance
             contract = self.w3.eth.contract(address=contract_address, abi=self.guarded_pausable_abi)
-
-            # Check if contract exists
-            if self.w3.eth.get_code(contract_address) == b"":
-                self.logger.error(f"No contract found at address: {contract_address}")
-                return None, "no_contract"
-
-            # Check if account is a guardian
-            is_guardian = await self.is_guardian(contract_address, self.account.address)
-            if not is_guardian:
-                self.logger.error(f"Account {self.account.address} is not a guardian for contract {contract_address}")
-                return None, "not_guardian"
-
-            # Check if contract is already paused
-            is_paused = await self.is_paused(contract_address)
-            if is_paused:
-                self.logger.warning(f"Contract {contract_address} is already paused")
-                return None, "already_paused"
 
             # Get current nonce
             nonce = self.w3.eth.get_transaction_count(self.account.address)
@@ -110,8 +85,9 @@ class SagaContractManager:
             tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
             tx_hash_hex = tx_hash.hex()
 
+            attempt_suffix = f" (Attempt {attempt})" if attempt > 1 else ""
             self.logger.critical(
-                f"🚨 PAUSE TRANSACTION SENT - Query: {query_id[:16]}... Contract: {contract_address} TxHash: {tx_hash_hex}"
+                f"🚨 PAUSE TRANSACTION SENT{attempt_suffix} - Query: {query_id[:16]}... Contract: {contract_address} TxHash: {tx_hash_hex}"
             )
 
             # Wait for transaction receipt (with timeout)
@@ -119,20 +95,94 @@ class SagaContractManager:
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
                 if receipt.status == 1:
                     self.logger.critical(
-                        f"✅ PAUSE SUCCESSFUL - Contract {contract_address} paused successfully. TxHash: {tx_hash_hex}"
+                        f"✅ PAUSE SUCCESSFUL{attempt_suffix} - Contract {contract_address} paused successfully. TxHash: {tx_hash_hex}"
                     )
-                    return tx_hash_hex, "success"
+                    return tx_hash_hex, "contract_paused_successfully"
                 else:
                     self.logger.error(
-                        f"❌ PAUSE FAILED - Transaction failed for contract {contract_address}. TxHash: {tx_hash_hex}"
+                        f"❌ PAUSE FAILED{attempt_suffix} - Transaction failed for contract {contract_address}. TxHash: {tx_hash_hex}"
                     )
                     return None, "transaction_failed"
             except TimeoutError:
                 self.logger.warning(
-                    f"⏰ PAUSE PENDING - Transaction timeout for contract {contract_address}, "
-                    f"but may still be processing. TxHash: {tx_hash_hex}"
+                    f"⏰ PAUSE CALL PENDING{attempt_suffix} - 90s timeout limit reached for contract {contract_address}, "
+                    f"tx may still be processing. TxHash: {tx_hash_hex}"
                 )
-                return tx_hash_hex, "timeout"  # Return hash even on timeout as it may still succeed
+                return tx_hash_hex, "timeout"
+
+        except Exception as e:
+            attempt_suffix = f" (Attempt {attempt})" if attempt > 1 else ""
+            self.logger.error(
+                f"❌ PAUSE ERROR{attempt_suffix} - Failed to pause contract {contract_address} for query {query_id[:16]}...: {e}"
+            )
+            return None, f"error: {str(e)}"
+
+    async def pause_contract(self, contract_address: str, query_id: str, max_retries: int = 2) -> tuple[str | None, str]:
+        """Pause a Saga contract by calling its pause() function.
+
+        Args:
+            contract_address: The contract address to pause
+            query_id: Query ID for logging purposes
+            max_retries: Maximum number of retry attempts on timeout (default: 2)
+
+        Returns:
+            Tuple of (transaction_hash, status_message).
+            transaction_hash is str if successful, None if failed.
+            status_message describes the result.
+
+        """
+        try:
+            # Validate contract address format
+            if not self.w3.is_address(contract_address):
+                self.logger.error(f"Invalid contract address format: {contract_address}")
+                return None, "invalid_contract_address"
+
+            # Convert to checksum address
+            contract_address = self.w3.to_checksum_address(contract_address)
+
+            # Check if contract exists
+            if self.w3.eth.get_code(contract_address) == b"":
+                self.logger.error(f"No contract found at address: {contract_address}")
+                return None, "no_contract"
+
+            # Check if account is a guardian
+            is_guardian = await self.is_guardian(contract_address, self.account.address)
+            if not is_guardian:
+                self.logger.error(f"Account {self.account.address} is not a guardian for contract {contract_address}")
+                return None, "not_guardian"
+
+            # Check if contract is already paused
+            is_paused = await self.is_paused(contract_address)
+            if is_paused:
+                self.logger.warning(f"Contract {contract_address} is already paused")
+                return None, "already_paused"
+
+            # Execute pause transaction with retry logic
+            for attempt in range(1, max_retries + 1):
+                tx_hash, status = await self._execute_pause_transaction(contract_address, query_id, attempt)
+
+                # Return immediately on success or non-timeout failures
+                if status == "contract_paused_successfully" or status != "timeout":
+                    return tx_hash, status
+
+                # On timeout, check if we should retry
+                if attempt < max_retries:
+                    self.logger.warning(
+                        f"🔄 RETRY PAUSE - Attempting retry {attempt + 1}/{max_retries} for contract {contract_address} due to timeout"
+                    )
+                    # Check if contract got paused during the timeout
+                    is_paused_now = await self.is_paused(contract_address)
+                    if is_paused_now:
+                        self.logger.critical(
+                            f"✅ PAUSE CONFIRMED - Contract {contract_address} was paused during timeout. Previous TxHash: {tx_hash}"
+                        )
+                        return tx_hash, "contract_paused_successfully"
+                else:
+                    # Final timeout
+                    self.logger.error(
+                        f"❌ PAUSE TIMEOUT - Final timeout after {max_retries} attempts for contract {contract_address}. Last TxHash: {tx_hash}"
+                    )
+                    return tx_hash, "final_timeout"
 
         except Exception as e:
             self.logger.error(

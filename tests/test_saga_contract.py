@@ -117,7 +117,7 @@ class TestSagaContractManager:
 
             result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-            assert result == ("0xtest_hash", "success")
+            assert result == ("0xtest_hash", "contract_paused_successfully")
             mock_logger.critical.assert_called()
 
     @pytest.mark.asyncio
@@ -127,7 +127,7 @@ class TestSagaContractManager:
 
         result = await saga_manager.pause_contract("invalid_address", "test_query_id")
 
-        assert result == (None, "invalid_address")
+        assert result == (None, "invalid_contract_address")
         mock_logger.error.assert_called_with("Invalid contract address format: invalid_address")
 
     @pytest.mark.asyncio
@@ -225,12 +225,12 @@ class TestSagaContractManager:
                     mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
-    async def test_pause_contract_timeout(self, saga_manager, mock_logger, mock_web3):
-        """Test pause contract when transaction times out."""
+    async def test_pause_contract_timeout_final(self, saga_manager, mock_logger, mock_web3):
+        """Test pause contract when transaction times out on all retry attempts."""
         mock_contract = MagicMock()
         mock_web3.eth.contract.return_value = mock_contract
 
-        # Mock successful checks
+        # Mock successful checks (is_paused called multiple times for retries)
         with patch.object(saga_manager, "is_guardian", return_value=True):
             with patch.object(saga_manager, "is_paused", return_value=False):
                 # Mock transaction building and sending
@@ -249,13 +249,84 @@ class TestSagaContractManager:
                 with patch.object(saga_manager.w3.eth.account, "sign_transaction", return_value=mock_signed_txn):
                     mock_web3.eth.send_raw_transaction.return_value.hex.return_value = "0xtest_hash"
 
-                    # Mock timeout
+                    # Mock timeout for all attempts
                     mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeoutError()
 
                     result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                    assert result == ("0xtest_hash", "timeout")  # Should still return hash on timeout
+                    assert result == ("0xtest_hash", "final_timeout")  # Should return final_timeout after retries
                     mock_logger.warning.assert_called()
+                    mock_logger.error.assert_called()  # Should log final timeout error
+
+    @pytest.mark.asyncio
+    async def test_pause_contract_timeout_then_success(self, saga_manager, mock_logger, mock_web3):
+        """Test pause contract timeout on first attempt but success detected during pause state check."""
+        mock_contract = MagicMock()
+        mock_web3.eth.contract.return_value = mock_contract
+
+        # Mock successful checks - is_paused called: initial check (False), retry check (True = contract was paused)
+        with patch.object(saga_manager, "is_guardian", return_value=True):
+            with patch.object(saga_manager, "is_paused", side_effect=[False, True]):  # Contract gets paused during timeout
+                # Mock transaction building and sending
+                mock_transaction = {
+                    "from": saga_manager.account.address,
+                    "nonce": 5,
+                    "gas": 100000,
+                    "gasPrice": 20000000000,
+                }
+                mock_contract.functions.pause.return_value.build_transaction.return_value = mock_transaction
+
+                # Mock signing and sending
+                mock_signed_txn = MagicMock()
+                mock_signed_txn.rawTransaction = b"signed_transaction_data"
+
+                with patch.object(saga_manager.w3.eth.account, "sign_transaction", return_value=mock_signed_txn):
+                    mock_web3.eth.send_raw_transaction.return_value.hex.return_value = "0xtest_hash"
+
+                    # Mock timeout on first attempt
+                    mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeoutError()
+
+                    result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
+
+                    assert result == ("0xtest_hash", "contract_paused_successfully")  # Should detect contract was paused during timeout
+                    mock_logger.warning.assert_called()  # Timeout warning
+                    mock_logger.critical.assert_called()  # Success confirmation
+
+    @pytest.mark.asyncio
+    async def test_pause_contract_timeout_with_retry(self, saga_manager, mock_logger, mock_web3):
+        """Test pause contract retries after timeout and succeeds on second attempt."""
+        mock_contract = MagicMock()
+        mock_web3.eth.contract.return_value = mock_contract
+
+        # Mock successful checks - contract not paused during timeout check, so retry happens
+        with patch.object(saga_manager, "is_guardian", return_value=True):
+            with patch.object(saga_manager, "is_paused", return_value=False):  # Always returns False for retry check
+                # Mock transaction building and sending
+                mock_transaction = {
+                    "from": saga_manager.account.address,
+                    "nonce": 5,
+                    "gas": 100000,
+                    "gasPrice": 20000000000,
+                }
+                mock_contract.functions.pause.return_value.build_transaction.return_value = mock_transaction
+
+                # Mock signing and sending
+                mock_signed_txn = MagicMock()
+                mock_signed_txn.rawTransaction = b"signed_transaction_data"
+
+                with patch.object(saga_manager.w3.eth.account, "sign_transaction", return_value=mock_signed_txn):
+                    mock_web3.eth.send_raw_transaction.return_value.hex.return_value = "0xtest_hash"
+
+                    # Mock timeout on first attempt, success on second
+                    mock_receipt = MagicMock()
+                    mock_receipt.status = 1
+                    mock_web3.eth.wait_for_transaction_receipt.side_effect = [TimeoutError(), mock_receipt]
+
+                    result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
+
+                    assert result == ("0xtest_hash", "contract_paused_successfully")  # Should succeed on retry
+                    mock_logger.warning.assert_called()  # First attempt timeout warning
+                    mock_logger.critical.assert_called()  # Success on retry
 
     @pytest.mark.asyncio
     async def test_is_guardian_success(self, saga_manager, mock_web3):

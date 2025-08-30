@@ -165,12 +165,14 @@ async def raw_data_queue_handler(
                 if height > current_height:
                     if len(reports_collections) > 0:
                         total_reports = sum(len(reports) for reports in reports_collections.values())
-                        query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
-                        
+                        query_counts = [
+                            f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()
+                        ]
+
                         logger.info(
                             f"New Reports({total_reports}) found at height {current_height}, qIds: [{', '.join(query_counts)}]"
                         )
-                        
+
                         await new_reports_q.put(dict(reports_collections))
                         reports_collections.clear()
                     current_height = height
@@ -190,11 +192,11 @@ async def raw_data_queue_handler(
             if len(reports_collections) > 0:
                 total_reports = sum(len(reports) for reports in reports_collections.values())
                 query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
-                
+
                 logger.info(
                     f"New Reports({total_reports}) found at height {current_height}, qIds: [{', '.join(query_counts)}]"
                 )
-                
+
                 await new_reports_q.put(dict(reports_collections))
                 reports_collections.clear()
 
@@ -489,7 +491,6 @@ async def inspect_aggregate_report(
         reason = f"Aggregate report deviation ({diff:.4f}) exceeds alert threshold"
     else:
         reason = f"acceptable deviation: {diff:.4f}"
-
 
     return should_pause, reason
 
