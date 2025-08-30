@@ -7,8 +7,10 @@ uv run pytest tests/test_multi_query_logging.py::test_multi_query_logging -v -s
 
 import asyncio
 import logging
-import pytest
+
 from layer_values_monitor.monitor import raw_data_queue_handler
+
+import pytest
 
 
 @pytest.mark.asyncio

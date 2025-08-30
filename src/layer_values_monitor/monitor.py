@@ -170,7 +170,8 @@ async def raw_data_queue_handler(
                         ]
 
                         logger.info(
-                            f"New Reports({total_reports}) found at height {current_height}, qIds: [{', '.join(query_counts)}]"
+                            f"New Reports({total_reports}) found at height {current_height}, "
+                            f"qIds: [{', '.join(query_counts)}]"
                         )
 
                         await new_reports_q.put(dict(reports_collections))

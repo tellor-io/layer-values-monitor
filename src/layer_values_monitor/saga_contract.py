@@ -60,6 +60,7 @@ class SagaContractManager:
 
         Returns:
             Tuple of (transaction_hash, status_message).
+
         """
         try:
             # Create contract instance
@@ -87,7 +88,8 @@ class SagaContractManager:
 
             attempt_suffix = f" (Attempt {attempt})" if attempt > 1 else ""
             self.logger.critical(
-                f"🚨 PAUSE TRANSACTION SENT{attempt_suffix} - Query: {query_id[:16]}... Contract: {contract_address} TxHash: {tx_hash_hex}"
+                f"🚨 PAUSE TRANSACTION SENT{attempt_suffix} - Query: {query_id[:16]}... "
+                f"Contract: {contract_address} TxHash: {tx_hash_hex}"
             )
 
             # Wait for transaction receipt (with timeout)
@@ -95,12 +97,14 @@ class SagaContractManager:
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
                 if receipt.status == 1:
                     self.logger.critical(
-                        f"✅ PAUSE SUCCESSFUL{attempt_suffix} - Contract {contract_address} paused successfully. TxHash: {tx_hash_hex}"
+                        f"✅ PAUSE SUCCESSFUL{attempt_suffix} - Contract {contract_address} "
+                        f"paused successfully. TxHash: {tx_hash_hex}"
                     )
                     return tx_hash_hex, "contract_paused_successfully"
                 else:
                     self.logger.error(
-                        f"❌ PAUSE FAILED{attempt_suffix} - Transaction failed for contract {contract_address}. TxHash: {tx_hash_hex}"
+                        f"❌ PAUSE FAILED{attempt_suffix} - Transaction failed for contract "
+                        f"{contract_address}. TxHash: {tx_hash_hex}"
                     )
                     return None, "transaction_failed"
             except TimeoutError:
@@ -113,7 +117,8 @@ class SagaContractManager:
         except Exception as e:
             attempt_suffix = f" (Attempt {attempt})" if attempt > 1 else ""
             self.logger.error(
-                f"❌ PAUSE ERROR{attempt_suffix} - Failed to pause contract {contract_address} for query {query_id[:16]}...: {e}"
+                f"❌ PAUSE ERROR{attempt_suffix} - Failed to pause contract {contract_address} "
+                f"for query {query_id[:16]}...: {e}"
             )
             return None, f"error: {str(e)}"
 
@@ -168,19 +173,22 @@ class SagaContractManager:
                 # On timeout, check if we should retry
                 if attempt < max_retries:
                     self.logger.warning(
-                        f"🔄 RETRY PAUSE - Attempting retry {attempt + 1}/{max_retries} for contract {contract_address} due to timeout"
+                        f"🔄 RETRY PAUSE - Attempting retry {attempt + 1}/{max_retries} "
+                        f"for contract {contract_address} due to timeout"
                     )
                     # Check if contract got paused during the timeout
                     is_paused_now = await self.is_paused(contract_address)
                     if is_paused_now:
                         self.logger.critical(
-                            f"✅ PAUSE CONFIRMED - Contract {contract_address} was paused during timeout. Previous TxHash: {tx_hash}"
+                            f"✅ PAUSE CONFIRMED - Contract {contract_address} was paused during timeout. "
+                            f"Previous TxHash: {tx_hash}"
                         )
                         return tx_hash, "contract_paused_successfully"
                 else:
                     # Final timeout
                     self.logger.error(
-                        f"❌ PAUSE TIMEOUT - Final timeout after {max_retries} attempts for contract {contract_address}. Last TxHash: {tx_hash}"
+                        f"❌ PAUSE TIMEOUT - Final timeout after {max_retries} attempts "
+                        f"for contract {contract_address}. Last TxHash: {tx_hash}"
                     )
                     return tx_hash, "final_timeout"
 
