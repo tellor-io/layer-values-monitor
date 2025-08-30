@@ -288,7 +288,10 @@ class TestSagaContractManager:
 
                     result = await saga_manager.pause_contract("0x9fe237b245466A5f088AfE808b27c1305E3027BC", "test_query_id")
 
-                    assert result == ("0xtest_hash", "contract_paused_successfully")  # Should detect contract was paused during timeout
+                    assert result == (
+                        "0xtest_hash",
+                        "contract_paused_successfully",
+                    )  # Should detect contract was paused during timeout
                     mock_logger.warning.assert_called()  # Timeout warning
                     mock_logger.critical.assert_called()  # Success confirmation
 
