@@ -33,7 +33,7 @@ class TestAggReportsQueueHandler:
                 "minor_threshold": 0.15,
                 "major_threshold": 0.2,
                 "pause_threshold": 0.25,
-                "contract_address": "0x9fe237b245466A5f088AfE808b27c1305E3027BC",
+                "datafeed_ca": "0x9fe237b245466A5f088AfE808b27c1305E3027BC",
             }
         }
         return watcher
@@ -138,7 +138,7 @@ class TestAggReportsQueueHandler:
         """Test queue handler with placeholder contract address."""
         # Configure placeholder address
         mock_config_watcher.get_config.return_value = {
-            "test_query_id": {"contract_address": "0x0000000000000000000000000000000000000000"}
+            "test_query_id": {"datafeed_ca": "0x0000000000000000000000000000000000000000"}
         }
 
         queue = asyncio.Queue()

@@ -157,7 +157,7 @@ warning_threshold = 0.10   # 10% for warning disputes
 minor_threshold = 0.15     # 15% for minor disputes  
 major_threshold = 0.25     # 25% for major disputes
 pause_threshold = 0.50     # 50% triggers contract pause if --enable-saga-guard used
-contract_address = "0x9fe237b245466A5f088AfE808b27c1305E3027BC" # saga contract address
+datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC" # saga contract address
 
 # Example: Exact equality check
 [trbbridge]

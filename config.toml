@@ -1,5 +1,5 @@
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
-# ║                         P E R C E N T A G E   M E T R I C S                   ║
+# ║                         SPOT PRICES                                           ║
 # ╚═══════════════════════════════════════════════════════════════════════════════╝
 
 #ETH/USD 
@@ -10,7 +10,7 @@ warning_threshold = 0.25 # if price is >25% off, auto warning dispute
 minor_threshold = 0.99 # If price is >99% off, auto minor dispute
 major_threshold = 0.0 # No major level automatic disputes
 pause_threshold = 0.2 # 20% difference triggers data feed contract pause attempt (if using --enable-saga-gaurd)
-contract_address = "0x0cD65ca12F6c9b10254FABC0CC62d273ABbb3d84" # saga contract address (if using --enable-saga-guard)
+datafeed_ca = "0x0cD65ca12F6c9b10254FABC0CC62d273ABbb3d84" # saga contract address (if using --enable-saga-guard)
 
 #BTC/USD 
 [a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
@@ -20,7 +20,7 @@ warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
 pause_threshold = 0.2
-contract_address = "0x4a397383fE5FbE9AB33879869153fF40ea68815F"
+datafeed_ca = "0x4a397383fE5FbE9AB33879869153fF40ea68815F"
 
 #TRB/USD 
 [5C13CD9C97DBB98F2429C101A2A8150E6C7A0DDAFF6124EE176A3A411067DED0]
@@ -30,7 +30,7 @@ warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
 pause_threshold = 0.2
-contract_address = ""
+datafeed_ca = ""
 
 #SAGA/USD
 [74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d]
@@ -40,7 +40,7 @@ warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
 pause_threshold = 0.2
-contract_address = "0xaA43df021149C34ca3654F387C9aeB9AcABa012a"
+datafeed_ca = "0xaA43df021149C34ca3654F387C9aeB9AcABa012a"
 
 #USDC/USD
 [8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7]
@@ -50,7 +50,7 @@ warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
 pause_threshold = 0.2
-contract_address = "0x6c85266a8D3Ce564058667dc5c7E9d58da454ecc"
+datafeed_ca = "0x6c85266a8D3Ce564058667dc5c7E9d58da454ecc"
 
 #USDT/USD
 [68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264]
@@ -60,7 +60,7 @@ warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
 pause_threshold = 0.2
-contract_address = "0x62E537964E2452aD6F08976dA251C4B33c04B96C"
+datafeed_ca = "0x62E537964E2452aD6F08976dA251C4B33c04B96C"
 
 #FBTC/USD
 [c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e]
@@ -70,15 +70,15 @@ warning_threshold = 0.25
 minor_threshold = 0.99
 major_threshold = 0.0
 pause_threshold = 0.000000001
-contract_address = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
+datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
 
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
-# ║                          E Q U A L I T Y   M E T R I C S                      ║
+# ║                          EQUALITY CHECKS                                      ║
 # ╚═══════════════════════════════════════════════════════════════════════════════╝
 # NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
 # NOTE: pause_threshold is not applicable for equality metrics
 
-# TRBBridge query type configuration - applies to ALL TRBBridge reports
+# TRBBridge query type configuration
 [trbbridge]
 metric = "equality"
 alert_threshold = 1.0
@@ -87,7 +87,7 @@ minor_threshold = 0.0
 major_threshold = 0.0
 
 
-# EVMCall query type configuration - applies to ALL EVMCall reports
+# EVMCall query type configuration
 [evmcall]
 metric = "equality"
 alert_threshold = 1.0

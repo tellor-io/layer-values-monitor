@@ -212,7 +212,7 @@ class TestSagaIntegration:
 
         # Modify config (simulate file change)
         new_config = dict(initial_config)
-        new_config["test_query_id"]["contract_address"] = "0xNEWADDRESS123456789"
+        new_config["test_query_id"]["datafeed_ca"] = "0xNEWADDRESS123456789"
 
         # Mock config watcher to return new config
         with patch.object(saga_config_watcher, "get_config", return_value=new_config):

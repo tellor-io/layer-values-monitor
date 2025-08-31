@@ -105,7 +105,7 @@ def saga_config_file():
             minor_threshold = 0.15
             major_threshold = 0.2
             pause_threshold = 0.25
-            contract_address = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
+            datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
             
             [another_query_id]
             metric = "percentage"
@@ -114,7 +114,7 @@ def saga_config_file():
             minor_threshold = 0.3
             major_threshold = 0.4
             pause_threshold = 0.5
-            contract_address = "0x0000000000000000000000000000000000000000"
+            datafeed_ca = "0x0000000000000000000000000000000000000000"
         """)
 
     time.sleep(0.1)

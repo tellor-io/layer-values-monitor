@@ -554,8 +554,8 @@ async def agg_reports_queue_handler(
                     config = config_watcher.get_config()
                     query_config = config.get(agg_report.query_id.lower())
 
-                    if query_config and query_config.get("contract_address"):
-                        contract_address = query_config.get("contract_address")
+                    if query_config and query_config.get("datafeed_ca"):
+                        contract_address = query_config.get("datafeed_ca")
 
                         # Skip if placeholder address
                         if contract_address != "0x0000000000000000000000000000000000000000":
