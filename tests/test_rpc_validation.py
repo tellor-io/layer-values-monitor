@@ -4,10 +4,11 @@ These tests use both real network calls and mocked responses to validate the RPC
 Some tests may be skipped if network connectivity is unavailable.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from layer_values_monitor.main import validate_rpc_url
+
+import pytest
 
 
 class TestRPCValidation:
@@ -15,13 +16,13 @@ class TestRPCValidation:
 
     @pytest.mark.skipif(
         condition=False,  # Always run for now, can be made conditional later
-        reason="Network test - requires internet connectivity"
+        reason="Network test - requires internet connectivity",
     )
     def test_validate_saga_rpc_with_real_endpoint(self):
         """Test Saga RPC validation with a real public endpoint."""
         # Using the actual Saga endpoint from the env vars fixture
         is_valid, error_msg = validate_rpc_url("https://chainlet-2742.saga.xyz/", "Saga")
-        
+
         # This should succeed if the endpoint is accessible
         # If it fails due to network issues, that's still a valid test
         if is_valid:
@@ -34,7 +35,7 @@ class TestRPCValidation:
     def test_validate_rpc_with_invalid_url(self):
         """Test RPC validation with completely invalid URL."""
         is_valid, error_msg = validate_rpc_url("not-a-url", "Ethereum")
-        
+
         assert is_valid is False
         assert "Failed to connect to Ethereum RPC" in error_msg
         assert "not-a-url" in error_msg
@@ -42,7 +43,7 @@ class TestRPCValidation:
     def test_validate_rpc_with_unreachable_host(self):
         """Test RPC validation with unreachable host."""
         is_valid, error_msg = validate_rpc_url("http://localhost:99999", "Saga")
-        
+
         assert is_valid is False
         assert "Failed to connect to Saga RPC" in error_msg
         assert "localhost:99999" in error_msg
@@ -56,10 +57,10 @@ class TestRPCValidation:
             "",
             "localhost:port",
         ]
-        
+
         for bad_url in test_cases:
             is_valid, error_msg = validate_rpc_url(bad_url, "Ethereum")
-            
+
             assert is_valid is False
             assert "Failed to connect to Ethereum RPC" in error_msg
             assert bad_url in error_msg
@@ -145,7 +146,7 @@ class TestRPCValidation:
                 assert is_valid is True
                 assert error_msg == ""
 
-            # Test different cases for Ethereum  
+            # Test different cases for Ethereum
             mock_w3.eth.chain_id = 1  # Ethereum mainnet
             ethereum_cases = ["ethereum", "Ethereum", "ETHEREUM", "EtHeReUm"]
             for network_name in ethereum_cases:
