@@ -1,6 +1,5 @@
 """Tests for RPC URL validation functionality."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from layer_values_monitor.main import validate_rpc_url

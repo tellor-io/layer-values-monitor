@@ -1,10 +1,11 @@
 """Integration tests for main.py RPC validation during startup."""
 
 import os
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from layer_values_monitor.main import start
+
+import pytest
 
 
 class TestMainRPCValidation:
