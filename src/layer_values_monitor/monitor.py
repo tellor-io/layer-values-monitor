@@ -32,7 +32,8 @@ from telliot_feeds.datafeed import DataFeed
 class HeightTracker:
     """Track the last processed block height to detect missed blocks."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize the height tracker with starting height of 0."""
         self.last_height = 0
 
     def update(self, height: int) -> None:
