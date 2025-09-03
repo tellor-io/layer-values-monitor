@@ -8,6 +8,8 @@ import random
 import time
 from typing import Any
 
+import aiohttp
+
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_feeds import get_custom_trusted_value
@@ -28,6 +30,102 @@ import websockets
 from telliot_feeds.datafeed import DataFeed
 
 
+class HeightTracker:
+    """Track the last processed block height to detect missed blocks."""
+    def __init__(self):
+        self.last_height = 0
+    
+    def update(self, height: int) -> None:
+        """Update the last processed height."""
+        if height > self.last_height:
+            self.last_height = height
+    
+    def get_missed_range(self, current_height: int) -> tuple[int, int] | None:
+        """Get the range of missed blocks, if any."""
+        if current_height > self.last_height + 1:
+            return (self.last_height + 1, current_height - 1)
+        return None
+
+
+async def get_current_height(uri: str) -> int | None:
+    """Get the current blockchain height via RPC."""
+    rpc_url = f"http://{uri}"
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "status",
+        "params": {},
+        "id": 1
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(rpc_url, json=payload) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return int(data["result"]["sync_info"]["latest_block_height"])
+    except Exception:
+        return None
+    return None
+
+
+async def query_block_events(uri: str, height: int) -> dict[str, Any] | None:
+    """Query block events for a specific height via RPC."""
+    rpc_url = f"http://{uri}"
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "block_results",
+        "params": {"height": str(height)},
+        "id": 1
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(rpc_url, json=payload) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("result")
+    except Exception:
+        return None
+    return None
+
+
+async def process_missed_blocks(
+    uri: str, 
+    start_height: int, 
+    end_height: int,
+    raw_data_q: asyncio.Queue,
+    logger: logging
+) -> None:
+    """Process missed blocks and inject events into the raw data queue."""
+    logger.info(f"🔄 Processing missed blocks {start_height}-{end_height}")
+    
+    for height in range(start_height, end_height + 1):
+        block_events = await query_block_events(uri, height)
+        if not block_events:
+            continue
+            
+        # Process both begin_block_events and end_block_events
+        all_events = (block_events.get("begin_block_events", []) + 
+                      block_events.get("end_block_events", []))
+        
+        for event in all_events:
+            # Convert event to WebSocket format for processing
+            if event.get("type") in ["new_report", "aggregate_report"]:
+                # Build attributes dict
+                attributes = {attr["key"]: [attr["value"]] for attr in event.get("attributes", [])}
+                attributes["tx.height"] = [str(height)]
+                
+                ws_format = {
+                    "result": {
+                        "events": attributes,
+                        "data": {"type": "tendermint/event/NewBlockEvents"}
+                    }
+                }
+                await raw_data_q.put(ws_format)
+    
+    logger.info(f"✅ Completed processing missed blocks {start_height}-{end_height}")
+
+
 def decode_hex_value(hex_value: str) -> float:
     """Decode a hex value to a readable number."""
     # Remove 0x prefix if present
@@ -43,13 +141,20 @@ def decode_hex_value(hex_value: str) -> float:
     return value_scaled
 
 
-async def listen_to_websocket_events(uri: str, queries: list[str], q: asyncio.Queue, logger: logging) -> None:
+async def listen_to_websocket_events(
+    uri: str, 
+    queries: list[str], 
+    q: asyncio.Queue, 
+    logger: logging, 
+    height_tracker: HeightTracker
+) -> None:
     """Connect to a layer websocket and fetch events, adding them to queue for monitoring.
 
     uri: address to chain (ie localhost:26657)
     queries: list of query strings to subscribe to
     q: queue to store raw response for later processing
     logger: logger instance
+    height_tracker: height tracker to detect missed blocks
     """
     logger.info(f"Starting WebSocket connection for {len(queries)} subscriptions...")
 
@@ -60,15 +165,15 @@ async def listen_to_websocket_events(uri: str, queries: list[str], q: asyncio.Qu
             json.dumps({"jsonrpc": "2.0", "method": "subscribe", "id": i, "params": {"query": query_string}})
         )
 
-    uri = f"ws://{uri}/websocket"
+    ws_uri = f"ws://{uri}/websocket"
     retry_count = 0
     base_delay = 1
     max_delay = 60
 
     while True:
         try:
-            logger.info(f"Connecting to WebSocket at {uri}... (Attempt {retry_count + 1})")
-            async with websockets.connect(uri) as websocket:
+            logger.info(f"Connecting to WebSocket at {ws_uri}... (Attempt {retry_count + 1})")
+            async with websockets.connect(ws_uri) as websocket:
                 # Send all subscription messages
                 for i, msg in enumerate(subscription_messages):
                     await websocket.send(msg)
@@ -87,7 +192,23 @@ async def listen_to_websocket_events(uri: str, queries: list[str], q: asyncio.Qu
             logger.error(f"WebSocket error: {e}")
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
+        
         logger.info("going through the retry phase since connection was closed")
+        
+        # Process missed blocks on reconnection
+        if retry_count == 0:  # Only on first reconnection attempt
+            try:
+                # Get current height from RPC
+                current_height = await get_current_height(uri)
+                if current_height:
+                    missed_range = height_tracker.get_missed_range(current_height)
+                    if missed_range:
+                        start_height, end_height = missed_range
+                        await process_missed_blocks(uri, start_height, end_height, q, logger)
+                        height_tracker.update(current_height)
+            except Exception as e:
+                logger.error(f"Failed to process missed blocks: {e}")
+        
         # Calculate delay with exponential backoff and jitter for reconnection
         delay = min(base_delay * (2**retry_count), max_delay)
         # Add jitter to prevent thundering herd problem
@@ -104,6 +225,7 @@ async def raw_data_queue_handler(
     new_reports_q: asyncio.Queue,
     agg_reports_q: asyncio.Queue | None,
     logger: logging,
+    height_tracker: HeightTracker,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
 ) -> None:
     """Process raw WebSocket data and route to appropriate queues.
@@ -177,6 +299,8 @@ async def raw_data_queue_handler(
                         await new_reports_q.put(dict(reports_collections))
                         reports_collections.clear()
                     current_height = height
+                    # Track height for missed block detection
+                    height_tracker.update(height)
 
                 reports_collected = reports_collections.get(report.query_id, None)
                 if reports_collected is None:
@@ -215,6 +339,10 @@ async def raw_data_queue_handler(
                     micro_report_height=events["aggregate_report.micro_report_height"][0],
                     height=height,
                 )
+                
+                # Track height for missed block detection
+                if height:
+                    height_tracker.update(height)
 
                 await agg_reports_q.put(agg_report)
             except (KeyError, IndexError) as e:

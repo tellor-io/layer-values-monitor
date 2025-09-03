@@ -3,7 +3,7 @@ import json
 import logging
 from unittest.mock import MagicMock, patch
 
-from layer_values_monitor.monitor import listen_to_websocket_events
+from layer_values_monitor.monitor import HeightTracker, listen_to_websocket_events
 
 import pytest
 import websockets
@@ -26,7 +26,7 @@ async def test_websocket_connection(mock_websockets_connect, mock_websocket, eve
     mock_websocket.recv.side_effect = websockets.ConnectionClosed(None, None)
 
     queries = ["new_report.reporter_power > 0"]
-    listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger))
+    listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger, HeightTracker()))
     await asyncio.sleep(0.1)
 
     mock_websockets_connect.assert_called_once_with("ws://test-server.com/websocket")
@@ -57,7 +57,7 @@ async def test_message_processing(mock_websockets_connect, mock_websocket, event
     mock_websocket.recv.side_effect = mock_recv
 
     queries = ["new_report.reporter_power > 0"]
-    listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger))
+    listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger, HeightTracker()))
     await asyncio.sleep(0.1)
 
     listener_task.cancel()
@@ -81,7 +81,8 @@ async def test_connection_closed_handling(mock_websockets_connect, mock_websocke
 
     with patch("layer_values_monitor.main.logger") as patched_logger:
         queries = ["new_report.reporter_power > 0"]
-        listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, patched_logger))
+        height_tracker = HeightTracker()
+        listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, patched_logger, height_tracker))
         await asyncio.sleep(0.1)
 
         listener_task.cancel()
@@ -102,7 +103,7 @@ async def test_multiple_messages_before_close(mock_websockets_connect, mock_webs
 
     mock_websocket.recv.side_effect = test_messages + [websockets.ConnectionClosed(None, None)]
     queries = ["new_report.reporter_power > 0"]
-    listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger))
+    listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger, HeightTracker()))
     await asyncio.sleep(0.1)
 
     listener_task.cancel()

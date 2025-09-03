@@ -8,7 +8,7 @@ uv run pytest tests/test_multi_query_logging.py::test_multi_query_logging -v -s
 import asyncio
 import logging
 
-from layer_values_monitor.monitor import raw_data_queue_handler
+from layer_values_monitor.monitor import HeightTracker, raw_data_queue_handler
 
 import pytest
 
@@ -84,7 +84,8 @@ async def test_multi_query_logging():
     }
     await raw_data_q.put(trigger_data)
 
-    await raw_data_queue_handler(raw_data_q, new_reports_q, None, logger, max_iterations=7)
+    height_tracker = HeightTracker()
+    await raw_data_queue_handler(raw_data_q, new_reports_q, None, logger, height_tracker, max_iterations=7)
 
 
 if __name__ == "__main__":

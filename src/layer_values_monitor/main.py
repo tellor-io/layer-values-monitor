@@ -12,6 +12,7 @@ from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.dispute import process_disputes
 from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
+    HeightTracker,
     agg_reports_queue_handler,
     listen_to_websocket_events,
     new_reports_queue_handler,
@@ -220,6 +221,9 @@ async def start() -> None:
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
+    
+    # Height tracker for missed block detection
+    height_tracker = HeightTracker()
 
     # TODO: validate user options to check if they conflict
     try:
@@ -232,12 +236,13 @@ async def start() -> None:
 
         # Build list of tasks to run concurrently
         tasks = [
-            listen_to_websocket_events(uri, queries, raw_data_queue, logger),
+            listen_to_websocket_events(uri, queries, raw_data_queue, logger, height_tracker),
             raw_data_queue_handler(
                 raw_data_queue,
                 new_reports_queue,
                 agg_reports_queue if args.enable_saga_guard else None,
-                logger=logger,
+                logger,
+                height_tracker,
             ),
             new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
             process_disputes(
