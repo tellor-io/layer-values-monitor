@@ -8,8 +8,6 @@ import random
 import time
 from typing import Any
 
-import aiohttp
-
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_feeds import get_custom_trusted_value
@@ -26,20 +24,22 @@ from layer_values_monitor.threshold_config import ThresholdConfig
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
 from layer_values_monitor.utils import add_to_table, get_metric, remove_0x_prefix
 
+import aiohttp
 import websockets
 from telliot_feeds.datafeed import DataFeed
 
 
 class HeightTracker:
     """Track the last processed block height to detect missed blocks."""
+
     def __init__(self):
         self.last_height = 0
-    
+
     def update(self, height: int) -> None:
         """Update the last processed height."""
         if height > self.last_height:
             self.last_height = height
-    
+
     def get_missed_range(self, current_height: int) -> tuple[int, int] | None:
         """Get the range of missed blocks, if any."""
         if current_height > self.last_height + 1:
@@ -50,13 +50,8 @@ class HeightTracker:
 async def get_current_height(uri: str) -> int | None:
     """Get the current blockchain height via RPC."""
     rpc_url = f"http://{uri}"
-    payload = {
-        "jsonrpc": "2.0",
-        "method": "status",
-        "params": {},
-        "id": 1
-    }
-    
+    payload = {"jsonrpc": "2.0", "method": "status", "params": {}, "id": 1}
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(rpc_url, json=payload) as response:
@@ -71,13 +66,8 @@ async def get_current_height(uri: str) -> int | None:
 async def query_block_events(uri: str, height: int) -> dict[str, Any] | None:
     """Query block events for a specific height via RPC."""
     rpc_url = f"http://{uri}"
-    payload = {
-        "jsonrpc": "2.0",
-        "method": "block_results",
-        "params": {"height": str(height)},
-        "id": 1
-    }
-    
+    payload = {"jsonrpc": "2.0", "method": "block_results", "params": {"height": str(height)}, "id": 1}
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(rpc_url, json=payload) as response:
@@ -90,39 +80,29 @@ async def query_block_events(uri: str, height: int) -> dict[str, Any] | None:
 
 
 async def process_missed_blocks(
-    uri: str, 
-    start_height: int, 
-    end_height: int,
-    raw_data_q: asyncio.Queue,
-    logger: logging
+    uri: str, start_height: int, end_height: int, raw_data_q: asyncio.Queue, logger: logging
 ) -> None:
     """Process missed blocks and inject events into the raw data queue."""
     logger.info(f"🔄 Processing missed blocks {start_height}-{end_height}")
-    
+
     for height in range(start_height, end_height + 1):
         block_events = await query_block_events(uri, height)
         if not block_events:
             continue
-            
+
         # Process both begin_block_events and end_block_events
-        all_events = (block_events.get("begin_block_events", []) + 
-                      block_events.get("end_block_events", []))
-        
+        all_events = block_events.get("begin_block_events", []) + block_events.get("end_block_events", [])
+
         for event in all_events:
             # Convert event to WebSocket format for processing
             if event.get("type") in ["new_report", "aggregate_report"]:
                 # Build attributes dict
                 attributes = {attr["key"]: [attr["value"]] for attr in event.get("attributes", [])}
                 attributes["tx.height"] = [str(height)]
-                
-                ws_format = {
-                    "result": {
-                        "events": attributes,
-                        "data": {"type": "tendermint/event/NewBlockEvents"}
-                    }
-                }
+
+                ws_format = {"result": {"events": attributes, "data": {"type": "tendermint/event/NewBlockEvents"}}}
                 await raw_data_q.put(ws_format)
-    
+
     logger.info(f"✅ Completed processing missed blocks {start_height}-{end_height}")
 
 
@@ -132,21 +112,20 @@ def decode_hex_value(hex_value: str) -> float:
     if hex_value.startswith("0x"):
         hex_value = hex_value[2:]
 
+    # Validate hex value length - oracle values should be 32 bytes (64 hex chars)
+    if len(hex_value) > 64:
+        raise ValueError(f"Hex value too long ({len(hex_value)} chars) - expected ≤64 chars: {hex_value[:100]}...")
+    
     # Convert from hex to int
     value_int = int(hex_value, 16)
 
-    # Most oracle values are scaled by 10^18 (wei)
     value_scaled = value_int / (10**18)
 
     return value_scaled
 
 
 async def listen_to_websocket_events(
-    uri: str, 
-    queries: list[str], 
-    q: asyncio.Queue, 
-    logger: logging, 
-    height_tracker: HeightTracker
+    uri: str, queries: list[str], q: asyncio.Queue, logger: logging, height_tracker: HeightTracker
 ) -> None:
     """Connect to a layer websocket and fetch events, adding them to queue for monitoring.
 
@@ -192,9 +171,9 @@ async def listen_to_websocket_events(
             logger.error(f"WebSocket error: {e}")
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
-        
+
         logger.info("going through the retry phase since connection was closed")
-        
+
         # Process missed blocks on reconnection
         if retry_count == 0:  # Only on first reconnection attempt
             try:
@@ -208,7 +187,7 @@ async def listen_to_websocket_events(
                         height_tracker.update(current_height)
             except Exception as e:
                 logger.error(f"Failed to process missed blocks: {e}")
-        
+
         # Calculate delay with exponential backoff and jitter for reconnection
         delay = min(base_delay * (2**retry_count), max_delay)
         # Add jitter to prevent thundering herd problem
@@ -339,7 +318,7 @@ async def raw_data_queue_handler(
                     micro_report_height=events["aggregate_report.micro_report_height"][0],
                     height=height,
                 )
-                
+
                 # Track height for missed block detection
                 if height:
                     height_tracker.update(height)
@@ -581,8 +560,8 @@ async def inspect_aggregate_report(
     # Decode the aggregate hex value
     try:
         reported_value = decode_hex_value(agg_report.value)
-    except OverflowError:
-        logger.error(f"🚨 Skipping aggregate report - hex value too large to process: {agg_report.value}")
+    except (OverflowError, ValueError) as e:
+        logger.error(f"🚨 Skipping aggregate report - invalid hex value: {e}")
         return None
 
     # Check if disputable using same logic
@@ -672,10 +651,10 @@ async def agg_reports_queue_handler(
                 f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: {decoded_value:.6f} "
                 f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
             )
-        except OverflowError:
-            logger.error(f"🚨 Skipping aggregate report - hex value too large to process: {agg_report.value}")
+        except (OverflowError, ValueError) as e:
+            logger.error(f"🚨 Skipping aggregate report - invalid hex value: {e}")
             logger.info(
-                f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: OVERFLOW_ERROR "
+                f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: DECODE_ERROR "
                 f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
             )
             agg_reports_q.task_done()

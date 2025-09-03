@@ -221,7 +221,7 @@ async def start() -> None:
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
-    
+
     # Height tracker for missed block detection
     height_tracker = HeightTracker()
 

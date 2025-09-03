@@ -82,7 +82,9 @@ async def test_connection_closed_handling(mock_websockets_connect, mock_websocke
     with patch("layer_values_monitor.main.logger") as patched_logger:
         queries = ["new_report.reporter_power > 0"]
         height_tracker = HeightTracker()
-        listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, patched_logger, height_tracker))
+        listener_task = asyncio.create_task(
+            listen_to_websocket_events(uri, queries, event_queue, patched_logger, height_tracker)
+        )
         await asyncio.sleep(0.1)
 
         listener_task.cancel()

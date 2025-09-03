@@ -154,7 +154,9 @@ async def test_raw_data_queue_handler_empty_queue(mock_logger):
 
     # Create and run the task with a short timeout
     height_tracker = HeightTracker()
-    task = asyncio.create_task(raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=1))
+    task = asyncio.create_task(
+        raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=1)
+    )
 
     await raw_data_q.put({})
 
@@ -176,7 +178,9 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     new_reports_q = asyncio.Queue()
 
     height_tracker = HeightTracker()
-    task = asyncio.create_task(raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=5))
+    task = asyncio.create_task(
+        raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=5)
+    )
 
     # Wait for the task to start
     await asyncio.sleep(0.1)
