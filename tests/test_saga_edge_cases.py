@@ -260,6 +260,25 @@ class TestSagaEdgeCases:
             result = decode_hex_value(hex_value)
             assert abs(result - expected) < 1e-10  # Allow for floating point precision
 
+    def test_decode_hex_value_overflow(self):
+        """Test decode_hex_value with extremely large values that cause OverflowError."""
+        from layer_values_monitor.monitor import decode_hex_value
+        
+        # Test cases that should cause OverflowError
+        overflow_test_cases = [
+            "f" * 1000,  # Extremely large hex value (1000 f's)
+            "f" * 500,   # Very large hex value (500 f's) 
+            "1" + "0" * 999,  # Large power of 16
+        ]
+        
+        for hex_value in overflow_test_cases:
+            with pytest.raises(OverflowError, match="integer division result too large for a float"):
+                decode_hex_value(hex_value)
+        
+        # Test with 0x prefix as well
+        with pytest.raises(OverflowError):
+            decode_hex_value("0x" + "f" * 1000)
+
     @pytest.mark.asyncio
     async def test_rapid_fire_aggregate_reports(self, mock_saga_contract_manager, saga_config_watcher):
         """Test handling rapid succession of aggregate reports."""

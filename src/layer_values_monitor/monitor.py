@@ -579,7 +579,11 @@ async def inspect_aggregate_report(
         return None
 
     # Decode the aggregate hex value
-    reported_value = decode_hex_value(agg_report.value)
+    try:
+        reported_value = decode_hex_value(agg_report.value)
+    except OverflowError:
+        logger.error(f"🚨 Skipping aggregate report - hex value too large to process: {agg_report.value}")
+        return None
 
     # Check if disputable using same logic
     alertable, disputable, diff = is_disputable(
@@ -662,11 +666,20 @@ async def agg_reports_queue_handler(
             processed_reports[report_key] = current_time
 
         # Log the aggregate report with decoded value for readability
-        decoded_value = decode_hex_value(agg_report.value)
-        logger.info(
-            f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: {decoded_value:.6f} "
-            f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
-        )
+        try:
+            decoded_value = decode_hex_value(agg_report.value)
+            logger.info(
+                f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: {decoded_value:.6f} "
+                f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
+            )
+        except OverflowError:
+            logger.error(f"🚨 Skipping aggregate report - hex value too large to process: {agg_report.value}")
+            logger.info(
+                f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: OVERFLOW_ERROR "
+                f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
+            )
+            agg_reports_q.task_done()
+            continue
 
         # Inspect aggregate report using same logic as individual reports
         inspection_result = await inspect_aggregate_report(agg_report, config_watcher, logger, threshold_config)
