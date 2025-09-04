@@ -46,7 +46,7 @@ class SagaContractManager:
             },
         ]
 
-        self.logger.info(f"Initialized Saga contract manager with account: {self.account.address}")
+        self.logger.info(f"💡 Initialized Saga contract manager with account: {self.account.address}")
 
     async def _execute_pause_transaction(
         self, contract_address: str, query_id: str, attempt: int = 1

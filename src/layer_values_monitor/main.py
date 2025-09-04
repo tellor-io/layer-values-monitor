@@ -199,7 +199,7 @@ async def start() -> None:
         )
 
         logger.info(
-            f"Power thresholds configured: immediate={immediate_threshold * 100}%, "
+            f"💡 Power thresholds configured: immediate={immediate_threshold * 100}%, "
             f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
         )
 
@@ -213,24 +213,28 @@ async def start() -> None:
             raise ValueError("SAGA_PRIVATE_KEY environment variable is required when using --enable-saga-guard")
 
         # Validate Saga RPC URL connectivity
-        logger.info("Validating Saga EVM RPC connection...")
+        logger.info("💡 Validating Saga EVM RPC connection...")
         is_valid, error_msg = validate_rpc_url(saga_rpc_url, "Saga")
         if not is_valid:
             raise ValueError(f"Saga RPC validation failed: {error_msg}")
 
         saga_contract_manager = create_saga_contract_manager(logger)
+        if saga_contract_manager:
+            logger.info("💡 Saga contract manager initialized successfully")
 
     threshold_config = ThresholdConfig.from_args(args)
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     config_watcher = ConfigWatcher(config_path)
+    logger.info("💡 Config watcher initialized")
 
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events
     agg_reports_queue = asyncio.Queue(maxsize=500)  # Aggregate reports for Saga Guard
     new_reports_queue = asyncio.Queue(maxsize=200)  # Batched new reports
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
+    logger.info("💡 Message queues initialized")
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
 
@@ -238,7 +242,7 @@ async def start() -> None:
     max_catchup_blocks = int(os.getenv("MAX_CATCHUP_BLOCKS", "15"))
     height_tracker = HeightTracker(max_catchup_blocks=max_catchup_blocks)
 
-    logger.info(f"Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
+    logger.info(f"💡 Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
 
     # TODO: validate user options to check if they conflict
     try:
@@ -282,6 +286,7 @@ async def start() -> None:
                 )
             )
 
+        logger.info("💡 Starting Layer Values Monitor...")
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         print("shutting down running tasks")

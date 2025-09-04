@@ -188,7 +188,7 @@ async def listen_to_websocket_events(
     logger: logger instance
     height_tracker: height tracker to detect missed blocks
     """
-    logger.info(f"Starting WebSocket connection for {len(queries)} subscriptions...")
+    logger.info(f"💡 Starting WebSocket connection for {len(queries)} subscriptions...")
 
     # Prepare subscription messages
     subscription_messages = []
@@ -204,7 +204,7 @@ async def listen_to_websocket_events(
 
     while True:
         try:
-            logger.info(f"Connecting to WebSocket at {ws_uri}... (Attempt {retry_count + 1})")
+            logger.info(f"💡 Connecting to WebSocket at {ws_uri}... (Attempt {retry_count + 1})")
             async with websockets.connect(ws_uri) as websocket:
                 # Send all subscription messages
                 for i, msg in enumerate(subscription_messages):
@@ -213,6 +213,7 @@ async def listen_to_websocket_events(
 
                 # Reset retry count on successful connection
                 retry_count = 0
+                logger.info("✅ WebSocket connection established successfully")
                 while True:
                     response = await websocket.recv()
                     parsed_response = json.loads(response)
@@ -246,10 +247,11 @@ async def listen_to_websocket_events(
                                 f"({start_height}-{end_height}) to prevent stale price comparisons"
                             )
                         else:
-                            logger.info(f"🔄 Processing {total_missed} missed blocks ({start_height}-{end_height})")
+                            logger.info(f"✅ Processing {total_missed} missed blocks ({start_height}-{end_height})")
 
                         await process_missed_blocks(uri, start_height, end_height, q, logger)
                         height_tracker.update(current_height)
+                        logger.info("✅ Catch-up processing completed successfully")
             except Exception as e:
                 logger.error(f"Failed to process missed blocks: {e}")
 
