@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
+from layer_values_monitor.custom_types import PowerThresholds
 from layer_values_monitor.dispute import process_disputes
 from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
@@ -209,6 +210,23 @@ async def start() -> None:
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     config_watcher = ConfigWatcher(config_path)
 
+    # Initialize power thresholds for Saga pausing logic
+    power_thresholds = None
+    if args.enable_saga_guard:
+        # Read power thresholds from environment variables with defaults
+        immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
+        delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
+        
+        power_thresholds = PowerThresholds(
+            immediate_pause_threshold=immediate_threshold,
+            delayed_pause_threshold=delayed_threshold
+        )
+        
+        logger.info(
+            f"Power thresholds configured: immediate={immediate_threshold*100}%, "
+            f"delayed={delayed_threshold*100}%, delay=12h (fixed)"
+        )
+
     # Initialize Saga contract manager for pausing contracts (if enabled)
     saga_contract_manager = None
     if args.enable_saga_guard:
@@ -262,7 +280,15 @@ async def start() -> None:
         # Only add Saga-related tasks if enabled
         if args.enable_saga_guard:
             tasks.append(
-                agg_reports_queue_handler(agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager)
+                agg_reports_queue_handler(
+                    agg_reports_queue, 
+                    config_watcher, 
+                    logger, 
+                    threshold_config, 
+                    saga_contract_manager,
+                    uri,
+                    power_thresholds
+                )
             )
 
         await asyncio.gather(*tasks)
