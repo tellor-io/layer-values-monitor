@@ -41,9 +41,10 @@ from telliot_feeds.datafeed import DataFeed
 class HeightTracker:
     """Track the last processed block height to detect missed blocks."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_catchup_blocks: int = 15) -> None:
         """Initialize the height tracker with starting height of 0."""
         self.last_height = 0
+        self.max_catchup_blocks = max_catchup_blocks
 
     def update(self, height: int) -> None:
         """Update the last processed height."""
@@ -51,9 +52,17 @@ class HeightTracker:
             self.last_height = height
 
     def get_missed_range(self, current_height: int) -> tuple[int, int] | None:
-        """Get the range of missed blocks, if any."""
+        """Get the range of missed blocks, if any, limited to max_catchup_blocks."""
         if current_height > self.last_height + 1:
-            return (self.last_height + 1, current_height - 1)
+            start_height = self.last_height + 1
+            end_height = current_height - 1
+            
+            # Limit catch-up to max_catchup_blocks to prevent processing stale reports
+            if end_height - start_height + 1 > self.max_catchup_blocks:
+                start_height = max(start_height, current_height - self.max_catchup_blocks)
+                return (start_height, end_height)
+            
+            return (start_height, end_height)
         return None
 
 
@@ -313,6 +322,18 @@ async def listen_to_websocket_events(
                     missed_range = height_tracker.get_missed_range(current_height)
                     if missed_range:
                         start_height, end_height = missed_range
+                        total_missed = end_height - start_height + 1
+                        
+                        # Log if we're limiting catch-up
+                        if total_missed > height_tracker.max_catchup_blocks:
+                            logger.warning(
+                                f"⚠️ CATCHUP LIMITED - {total_missed} blocks missed, "
+                                f"processing only last {height_tracker.max_catchup_blocks} blocks "
+                                f"({start_height}-{end_height}) to prevent stale price comparisons"
+                            )
+                        else:
+                            logger.info(f"🔄 Processing {total_missed} missed blocks ({start_height}-{end_height})")
+                        
                         await process_missed_blocks(uri, start_height, end_height, q, logger)
                         height_tracker.update(current_height)
             except Exception as e:

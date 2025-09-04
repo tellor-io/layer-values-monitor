@@ -240,7 +240,10 @@ async def start() -> None:
     cfg.main.chain_id = 1
 
     # Height tracker for missed block detection
-    height_tracker = HeightTracker()
+    max_catchup_blocks = int(os.getenv("MAX_CATCHUP_BLOCKS", "15"))
+    height_tracker = HeightTracker(max_catchup_blocks=max_catchup_blocks)
+    
+    logger.info(f"Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
 
     # TODO: validate user options to check if they conflict
     try:
