@@ -8,12 +8,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
 from layer_values_monitor.dispute import process_disputes
 from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
-    HeightTracker,
     agg_reports_queue_handler,
     listen_to_websocket_events,
     new_reports_queue_handler,
@@ -32,7 +32,7 @@ for logger_name in logging.root.manager.loggerDict:
 
 
 def validate_rpc_url(rpc_url: str, network_name: str) -> tuple[bool, str]:
-    """Validate RPC URL by checking connectivity and network compatibility.
+    """Validate RPC URL in .env.
 
     Args:
         rpc_url: The RPC URL to validate
@@ -43,16 +43,14 @@ def validate_rpc_url(rpc_url: str, network_name: str) -> tuple[bool, str]:
 
     """
     try:
-        # Create Web3 instance
         w3 = Web3(Web3.HTTPProvider(rpc_url))
-
         # Test basic connectivity by getting block number
         block_number = w3.eth.block_number
 
         # Get chain ID to determine network
         chain_id = w3.eth.chain_id
 
-        # Validate chain ID for supported networks
+        # Validate chain ID
         if network_name.lower() == "saga":
             # Saga chainlets typically use custom chain IDs
             # Just verify we can connect and get a valid chain ID
@@ -180,8 +178,32 @@ async def start() -> None:
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
 
+    # Validate Ethereum RPC URL
+    ethereum_rpc_url = os.getenv("ETHEREUM_RPC_URL")
+    if ethereum_rpc_url:
+        logger.info("Validating Ethereum RPC connection...")
+        is_valid, error_msg = validate_rpc_url(ethereum_rpc_url, "Ethereum")
+        if not is_valid:
+            raise ValueError(f"Ethereum RPC validation failed: {error_msg}")
+
     # Validate Saga environment variables if Saga guard is enabled
+    power_thresholds = None
+    saga_contract_manager = None
     if args.enable_saga_guard:
+        # Set aggregate report power thresholds
+        immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
+        delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
+
+        power_thresholds = PowerThresholds(
+            immediate_pause_threshold=immediate_threshold, delayed_pause_threshold=delayed_threshold
+        )
+
+        logger.info(
+            f"Power thresholds configured: immediate={immediate_threshold * 100}%, "
+            f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
+        )
+
+        # Validate Saga RPC URL and private key
         saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
         saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
 
@@ -196,40 +218,13 @@ async def start() -> None:
         if not is_valid:
             raise ValueError(f"Saga RPC validation failed: {error_msg}")
 
-        # Also validate Ethereum RPC URL if it's configured (for TRBBridge monitoring)
-        ethereum_rpc_url = os.getenv("ETHEREUM_RPC_URL")
-        if ethereum_rpc_url:
-            logger.info("Validating Ethereum RPC connection...")
-            is_valid, error_msg = validate_rpc_url(ethereum_rpc_url, "Ethereum")
-            if not is_valid:
-                raise ValueError(f"Ethereum RPC validation failed: {error_msg}")
+        saga_contract_manager = create_saga_contract_manager(logger)
 
     threshold_config = ThresholdConfig.from_args(args)
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     config_watcher = ConfigWatcher(config_path)
-
-    # Initialize power thresholds for Saga pausing logic
-    power_thresholds = None
-    if args.enable_saga_guard:
-        # Read power thresholds from environment variables with defaults
-        immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
-        delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
-
-        power_thresholds = PowerThresholds(
-            immediate_pause_threshold=immediate_threshold, delayed_pause_threshold=delayed_threshold
-        )
-
-        logger.info(
-            f"Power thresholds configured: immediate={immediate_threshold * 100}%, "
-            f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
-        )
-
-    # Initialize Saga contract manager for pausing contracts (if enabled)
-    saga_contract_manager = None
-    if args.enable_saga_guard:
-        saga_contract_manager = create_saga_contract_manager(logger)
 
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events
@@ -242,7 +237,7 @@ async def start() -> None:
     # Height tracker for missed block detection
     max_catchup_blocks = int(os.getenv("MAX_CATCHUP_BLOCKS", "15"))
     height_tracker = HeightTracker(max_catchup_blocks=max_catchup_blocks)
-    
+
     logger.info(f"Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
 
     # TODO: validate user options to check if they conflict

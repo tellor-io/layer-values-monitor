@@ -1,6 +1,5 @@
-# ╔═══════════════════════════════════════════════════════════════════════════════╗
-# ║                         SPOT PRICES                                           ║
-# ╚═══════════════════════════════════════════════════════════════════════════════╝
+#============================================================================
+# SPOT PRICES
 
 #ETH/USD 
 [83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992] # queryId or queryType
@@ -72,9 +71,8 @@ major_threshold = 0.0
 pause_threshold = 0.000000001
 datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
 
-# ╔═══════════════════════════════════════════════════════════════════════════════╗
-# ║                          EQUALITY CHECKS                                      ║
-# ╚═══════════════════════════════════════════════════════════════════════════════╝
+#============================================================================
+# EQUALITY TYPES
 # NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
 # NOTE: pause_threshold is not applicable for equality metrics
 

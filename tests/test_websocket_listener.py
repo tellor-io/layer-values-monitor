@@ -3,7 +3,8 @@ import json
 import logging
 from unittest.mock import MagicMock, patch
 
-from layer_values_monitor.monitor import HeightTracker, listen_to_websocket_events
+from layer_values_monitor.catchup import HeightTracker
+from layer_values_monitor.monitor import listen_to_websocket_events
 
 import pytest
 import websockets

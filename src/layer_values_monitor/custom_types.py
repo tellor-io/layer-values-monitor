@@ -61,10 +61,9 @@ class Metrics:
 class PowerThresholds:
     """Define power-based thresholds for Saga pausing logic."""
 
-    immediate_pause_threshold: float = 0.66  # >66% can pause immediately
-    delayed_pause_threshold: float = 0.33  # >33% can pause after delay
+    immediate_pause_threshold: float = 0.66  # >66% power can pause immediately
+    delayed_pause_threshold: float = 0.33  # >33% power can pause after delay
 
-    # Delay hours is fixed at 12 hours (not configurable)
     @property
     def pause_delay_hours(self) -> int:
         """Fixed 12-hour delay for delayed pauses."""

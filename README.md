@@ -45,14 +45,14 @@ uv run layer-values-monitor --use-custom-config
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `URI` | Layer node WebSocket endpoint | `localhost:26657` |
-| `CHAIN_ID` | Layer chain identifier | `layer-testnet-3` |
+| `CHAIN_ID` | Layer chain identifier | `layertest-4` |
 | `DISCORD_WEBHOOK_URL_1` | Discord notifications webhook 1 | _(none)_ |
 | `MAX_TABLE_ROWS` | Maximum rows in reports tables | `1000000` |
 
 
 ### Optional Environment Variables 
 
-For a lighter startup command, log
+For lighter startup commands, set these in `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -68,6 +68,9 @@ For a lighter startup command, log
 | | | |
 | `SAGA_EVM_RPC_URL` | Saga EVM RPC endpoint | _(none)_ |
 | `SAGA_PRIVATE_KEY` | Guardian private key | _(none)_ |
+| `SAGA_IMMEDIATE_PAUSE_THRESHOLD` | Power threshold for immediate pause| `0.666666666666` |
+| `SAGA_DELAYED_PAUSE_THRESHOLD` | Power threshold for delayed pause | `0.333333333333` |
+| `MAX_CATCHUP_BLOCKS` | Max blocks to process when catching up | `15` |
 | `CG_API_KEY` | CoinGecko API key for price data | _(none)_ |
 | `CMC_API_KEY` | CoinMarketCap API key for price data | _(none)_ |
 
@@ -103,8 +106,8 @@ Set global dispute thresholds for all queries.
 
 ## Configuration Strategies
 
-### Strategy 1: Fully configure .env and config.toml
-Set all configuration in your `.env` and `config.toml` files:
+### Strategy 1: Full Configuration (Recommended)
+Set all configuration in `.env` and `config.toml`:
 ```sh
 uv run layer-values-monitor --use-custom-config
 ```
@@ -173,6 +176,8 @@ major_threshold = 0.0
 
 Enable automatic contract pausing when aggregate report values are incorrect. Threshold for incorrect can be set in config.toml. Only relevant for contract guardians.
 
+Thresholds for pausing given % differences and minimum aggregate report powers configurable in config.toml
+
 ### Requirements
 - Guardian permissions on target contracts
 - Valid `SAGA_EVM_RPC_URL` and `SAGA_PRIVATE_KEY`
@@ -182,6 +187,16 @@ Enable automatic contract pausing when aggregate report values are incorrect. Th
 1. Listen for aggregate report events
 2. Compare aggregate value against trusted data sources
 3. If `pause_threshold` exceeded, pause configured contracts
+
+### Power-Based Pausing Logic
+The system uses two power thresholds for contract pausing:
+- **Immediate Pause**: When aggregate report power exceeds `SAGA_IMMEDIATE_PAUSE_THRESHOLD` (default: 66% of total non-jailed reporting power)
+- **Delayed Pause**: When aggregate report power exceeds `SAGA_DELAYED_PAUSE_THRESHOLD` (default: 33% of total non-jailed reporting power)
+
+### Catch-Up Configuration
+If the websocket disconnects/reconnects, it can process missed blocks:
+- `MAX_CATCHUP_BLOCKS`: Maximum number of blocks to process during catch-up (default: 15)
+- Prevents processing too many historical blocks on startup
 
 ## Examples
 

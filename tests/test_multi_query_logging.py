@@ -8,7 +8,8 @@ uv run pytest tests/test_multi_query_logging.py::test_multi_query_logging -v -s
 import asyncio
 import logging
 
-from layer_values_monitor.monitor import HeightTracker, raw_data_queue_handler
+from layer_values_monitor.catchup import HeightTracker
+from layer_values_monitor.monitor import raw_data_queue_handler
 
 import pytest
 

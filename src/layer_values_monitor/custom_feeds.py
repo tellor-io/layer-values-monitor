@@ -17,10 +17,9 @@ async def get_custom_trusted_value(query_id: str, logger: logging.Logger) -> flo
         float: The averaged trusted price value from multiple sources or None if unable to fetch
 
     """
-    # Normalize query_id to lowercase for comparison
+    # TODO: Remove this, implement all new sources in telliot
     query_id_lower = query_id.lower()
 
-    # Define unsupported query IDs that need custom price lookup
     UNSUPPORTED_QUERY_IDS = {
         "c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e",  # FBTC/USD
         "74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d",  # SAGA/USD

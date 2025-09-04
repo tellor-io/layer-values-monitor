@@ -8,6 +8,7 @@ import random
 import time
 from typing import Any
 
+from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_feeds import get_custom_trusted_value
@@ -36,66 +37,6 @@ from layer_values_monitor.utils import add_to_table, get_metric, remove_0x_prefi
 import aiohttp
 import websockets
 from telliot_feeds.datafeed import DataFeed
-
-
-class HeightTracker:
-    """Track the last processed block height to detect missed blocks."""
-
-    def __init__(self, max_catchup_blocks: int = 15) -> None:
-        """Initialize the height tracker with starting height of 0."""
-        self.last_height = 0
-        self.max_catchup_blocks = max_catchup_blocks
-
-    def update(self, height: int) -> None:
-        """Update the last processed height."""
-        if height > self.last_height:
-            self.last_height = height
-
-    def get_missed_range(self, current_height: int) -> tuple[int, int] | None:
-        """Get the range of missed blocks, if any, limited to max_catchup_blocks."""
-        if current_height > self.last_height + 1:
-            start_height = self.last_height + 1
-            end_height = current_height - 1
-            
-            # Limit catch-up to max_catchup_blocks to prevent processing stale reports
-            if end_height - start_height + 1 > self.max_catchup_blocks:
-                start_height = max(start_height, current_height - self.max_catchup_blocks)
-                return (start_height, end_height)
-            
-            return (start_height, end_height)
-        return None
-
-
-async def get_current_height(uri: str) -> int | None:
-    """Get the current blockchain height via RPC."""
-    rpc_url = f"http://{uri}"
-    payload = {"jsonrpc": "2.0", "method": "status", "params": {}, "id": 1}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(rpc_url, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return int(data["result"]["sync_info"]["latest_block_height"])
-    except Exception:
-        return None
-    return None
-
-
-async def query_block_events(uri: str, height: int) -> dict[str, Any] | None:
-    """Query block events for a specific height via RPC."""
-    rpc_url = f"http://{uri}"
-    payload = {"jsonrpc": "2.0", "method": "block_results", "params": {"height": str(height)}, "id": 1}
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(rpc_url, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("result")
-    except Exception:
-        return None
-    return None
 
 
 async def query_reporters(uri: str, logger: logging.Logger) -> ReporterQueryResponse | None:
@@ -218,33 +159,6 @@ def parse_reporters_response(data: dict[str, Any], logger: logging.Logger) -> Re
         return None
 
 
-async def process_missed_blocks(
-    uri: str, start_height: int, end_height: int, raw_data_q: asyncio.Queue, logger: logging
-) -> None:
-    """Process missed blocks and inject events into the raw data queue."""
-    logger.info(f"🔄 Processing missed blocks {start_height}-{end_height}")
-
-    for height in range(start_height, end_height + 1):
-        block_events = await query_block_events(uri, height)
-        if not block_events:
-            continue
-
-        # Process both begin_block_events and end_block_events
-        all_events = block_events.get("begin_block_events", []) + block_events.get("end_block_events", [])
-
-        for event in all_events:
-            # Convert event to WebSocket format for processing
-            if event.get("type") in ["new_report", "aggregate_report"]:
-                # Build attributes dict
-                attributes = {attr["key"]: [attr["value"]] for attr in event.get("attributes", [])}
-                attributes["tx.height"] = [str(height)]
-
-                ws_format = {"result": {"events": attributes, "data": {"type": "tendermint/event/NewBlockEvents"}}}
-                await raw_data_q.put(ws_format)
-
-    logger.info(f"✅ Completed processing missed blocks {start_height}-{end_height}")
-
-
 def decode_hex_value(hex_value: str) -> float:
     """Decode a hex value to a readable number."""
     # Remove 0x prefix if present
@@ -323,7 +237,7 @@ async def listen_to_websocket_events(
                     if missed_range:
                         start_height, end_height = missed_range
                         total_missed = end_height - start_height + 1
-                        
+
                         # Log if we're limiting catch-up
                         if total_missed > height_tracker.max_catchup_blocks:
                             logger.warning(
@@ -333,7 +247,7 @@ async def listen_to_websocket_events(
                             )
                         else:
                             logger.info(f"🔄 Processing {total_missed} missed blocks ({start_height}-{end_height})")
-                        
+
                         await process_missed_blocks(uri, start_height, end_height, q, logger)
                         height_tracker.update(current_height)
             except Exception as e:
@@ -539,11 +453,11 @@ async def inspect_reports(
             metrics.minor_threshold,
             metrics.major_threshold,
         ]
-        
+
         # Only check pause_threshold for non-equality metrics
         if metrics.metric != "equality":
             required_fields.append(metrics.pause_threshold)
-        
+
         if any(x is None for x in required_fields):
             logger.error(f"config for {query_id} not set properly")
             return None
@@ -700,11 +614,11 @@ async def inspect_aggregate_report(
             metrics.minor_threshold,
             metrics.major_threshold,
         ]
-        
+
         # Only check pause_threshold for non-equality metrics
         if metrics.metric != "equality":
             required_fields.append(metrics.pause_threshold)
-        
+
         if any(x is None for x in required_fields):
             logger.error(f"Config for aggregate report {query_id} not set properly")
             return None
@@ -758,8 +672,7 @@ async def inspect_aggregate_report(
                 if power_info["should_pause_immediately"]:
                     immediate_threshold = power_thresholds.immediate_pause_threshold * 100
                     reason += (
-                        f" | Power: {power_info['power_percentage']:.1f}% "
-                        f"(>{immediate_threshold}%) - PAUSE IMMEDIATELY"
+                        f" | Power: {power_info['power_percentage']:.1f}% (>{immediate_threshold}%) - PAUSE IMMEDIATELY"
                     )
                 elif power_info["should_pause_delayed"]:
                     delayed_threshold = power_thresholds.delayed_pause_threshold * 100
@@ -771,10 +684,7 @@ async def inspect_aggregate_report(
                 else:
                     should_pause = False
                     delayed_threshold = power_thresholds.delayed_pause_threshold * 100
-                    reason += (
-                        f" | Power: {power_info['power_percentage']:.1f}% "
-                        f"(<{delayed_threshold}%) - NO PAUSE"
-                    )
+                    reason += f" | Power: {power_info['power_percentage']:.1f}% (<{delayed_threshold}%) - NO PAUSE"
             else:
                 # Fallback to immediate pause if power calculation fails
                 should_pause = True

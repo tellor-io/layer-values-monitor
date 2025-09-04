@@ -92,7 +92,7 @@ class SagaContractManager:
                 f"Contract: {contract_address} TxHash: {tx_hash_hex}"
             )
 
-            # Wait for transaction receipt (with timeout)
+            # Wait for transaction receipt (with 90s timeout)
             try:
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
                 if receipt.status == 1:
@@ -123,7 +123,7 @@ class SagaContractManager:
             return None, f"error: {str(e)}"
 
     async def pause_contract(self, contract_address: str, query_id: str, max_retries: int = 2) -> tuple[str | None, str]:
-        """Pause a Saga contract by calling its pause() function.
+        """Pause a datafeed contract by calling its pause() function.
 
         Args:
             contract_address: The contract address to pause
