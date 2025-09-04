@@ -216,15 +216,14 @@ async def start() -> None:
         # Read power thresholds from environment variables with defaults
         immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
         delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
-        
+
         power_thresholds = PowerThresholds(
-            immediate_pause_threshold=immediate_threshold,
-            delayed_pause_threshold=delayed_threshold
+            immediate_pause_threshold=immediate_threshold, delayed_pause_threshold=delayed_threshold
         )
-        
+
         logger.info(
-            f"Power thresholds configured: immediate={immediate_threshold*100}%, "
-            f"delayed={delayed_threshold*100}%, delay=12h (fixed)"
+            f"Power thresholds configured: immediate={immediate_threshold * 100}%, "
+            f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
         )
 
     # Initialize Saga contract manager for pausing contracts (if enabled)
@@ -281,13 +280,7 @@ async def start() -> None:
         if args.enable_saga_guard:
             tasks.append(
                 agg_reports_queue_handler(
-                    agg_reports_queue, 
-                    config_watcher, 
-                    logger, 
-                    threshold_config, 
-                    saga_contract_manager,
-                    uri,
-                    power_thresholds
+                    agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager, uri, power_thresholds
                 )
             )
 

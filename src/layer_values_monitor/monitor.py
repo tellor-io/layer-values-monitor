@@ -11,7 +11,16 @@ from typing import Any
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_feeds import get_custom_trusted_value
-from layer_values_monitor.custom_types import AggregateReport, Metrics, Msg, NewReport, PendingPause, PowerThresholds, Reporter, ReporterQueryResponse
+from layer_values_monitor.custom_types import (
+    AggregateReport,
+    Metrics,
+    Msg,
+    NewReport,
+    PendingPause,
+    PowerThresholds,
+    Reporter,
+    ReporterQueryResponse,
+)
 from layer_values_monitor.discord import generic_alert
 from layer_values_monitor.dispute import (
     determine_dispute_category,
@@ -82,49 +91,45 @@ async def query_block_events(uri: str, height: int) -> dict[str, Any] | None:
 
 async def query_reporters(uri: str, logger: logging.Logger) -> ReporterQueryResponse | None:
     """Query all reporters and calculate total non-jailed power.
-    
+
     Args:
         uri: RPC endpoint URI (e.g., "localhost:26657")
         logger: Logger instance
-        
+
     Returns:
         ReporterQueryResponse with reporters list and total non-jailed power, or None if query fails
+
     """
     rpc_url = f"http://{uri}"
-    
+
     # Query reporters using ABCI query
-    query_data = "/cosmos.base.query.v1beta1.PageRequest"
     payload = {
         "jsonrpc": "2.0",
         "method": "abci_query",
-        "params": {
-            "path": "/layer.reporter.Query/Reporters",
-            "data": "",
-            "prove": False
-        },
-        "id": 1
+        "params": {"path": "/layer.reporter.Query/Reporters", "data": "", "prove": False},
+        "id": 1,
     }
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(rpc_url, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
-                    
+
                     if "error" in data:
                         logger.error(f"RPC error querying reporters: {data['error']}")
                         return None
-                        
+
                     result = data.get("result")
                     if not result or "response" not in result:
                         logger.error("Invalid response structure when querying reporters")
                         return None
-                        
+
                     # The response.value contains base64 encoded protobuf data
                     # For now, we'll try a different approach using REST API if available
                     logger.debug("Trying alternative approach to query reporters...")
                     return await query_reporters_rest(uri, logger)
-                    
+
     except Exception as e:
         logger.error(f"Failed to query reporters via RPC: {e}")
         return None
@@ -132,79 +137,73 @@ async def query_reporters(uri: str, logger: logging.Logger) -> ReporterQueryResp
 
 async def query_reporters_rest(uri: str, logger: logging.Logger) -> ReporterQueryResponse | None:
     """Query reporters using REST API endpoint.
-    
+
     Args:
         uri: Base URI (e.g., "localhost:26657")
         logger: Logger instance
-        
+
     Returns:
         ReporterQueryResponse with reporters list and total non-jailed power, or None if query fails
+
     """
     # Try common REST API ports
     rest_ports = ["1317", "1316", "26617"]
     base_host = uri.split(":")[0] if ":" in uri else uri
-    
+
     for port in rest_ports:
         rest_url = f"http://{base_host}:{port}/layer/reporter/reporters"
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(rest_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         data = await response.json()
                         return parse_reporters_response(data, logger)
-                        
+
         except Exception as e:
             logger.debug(f"Failed to query reporters via REST on port {port}: {e}")
             continue
-            
+
     logger.error("Failed to query reporters via all available methods")
     return None
 
 
 def parse_reporters_response(data: dict[str, Any], logger: logging.Logger) -> ReporterQueryResponse | None:
     """Parse the reporters query response and calculate total non-jailed power.
-    
+
     Args:
         data: Response data from reporters query
         logger: Logger instance
-        
+
     Returns:
         ReporterQueryResponse with parsed reporters and total power
+
     """
     try:
         reporters_data = data.get("reporters", [])
         reporters = []
         total_non_jailed_power = 0
-        
+
         for reporter_data in reporters_data:
             address = reporter_data.get("address", "")
             power = int(reporter_data.get("power", "0"))
-            
+
             # Check if reporter is jailed
             metadata = reporter_data.get("metadata", {})
             jailed = metadata.get("jailed", False)
             moniker = metadata.get("moniker", "")
-            
-            reporter = Reporter(
-                address=address,
-                power=power,
-                jailed=jailed,
-                moniker=moniker
-            )
+
+            reporter = Reporter(address=address, power=power, jailed=jailed, moniker=moniker)
             reporters.append(reporter)
-            
+
             # Add to total power if not jailed
             if not jailed:
                 total_non_jailed_power += power
-                
+
         logger.info(f"Queried {len(reporters)} reporters, total non-jailed power: {total_non_jailed_power}")
-        
-        return ReporterQueryResponse(
-            reporters=reporters,
-            total_non_jailed_power=total_non_jailed_power
-        )
-        
+
+        return ReporterQueryResponse(reporters=reporters, total_non_jailed_power=total_non_jailed_power)
+
     except Exception as e:
         logger.error(f"Failed to parse reporters response: {e}")
         return None
@@ -246,7 +245,7 @@ def decode_hex_value(hex_value: str) -> float:
     # Validate hex value length - oracle values should be 32 bytes (64 hex chars)
     if len(hex_value) > 64:
         raise ValueError(f"Hex value too long ({len(hex_value)} chars) - expected ≤64 chars: {hex_value[:100]}...")
-    
+
     # Convert from hex to int
     value_int = int(hex_value, 16)
 
@@ -723,17 +722,30 @@ async def inspect_aggregate_report(
                 f"Aggregate report deviation ({diff:.4f}) exceeds pause threshold "
                 f"({metrics.pause_threshold:.4f}) - EVALUATING POWER THRESHOLDS"
             )
-            
+
             power_info = await calculate_power_percentage(agg_report, uri, power_thresholds, logger)
             if power_info:
                 should_pause = power_info["should_pause_immediately"]
                 if power_info["should_pause_immediately"]:
-                    reason += f" | Power: {power_info['power_percentage']:.1f}% (>{power_thresholds.immediate_pause_threshold*100}%) - PAUSE IMMEDIATELY"
+                    immediate_threshold = power_thresholds.immediate_pause_threshold * 100
+                    reason += (
+                        f" | Power: {power_info['power_percentage']:.1f}% "
+                        f"(>{immediate_threshold}%) - PAUSE IMMEDIATELY"
+                    )
                 elif power_info["should_pause_delayed"]:
-                    reason += f" | Power: {power_info['power_percentage']:.1f}% (>{power_thresholds.delayed_pause_threshold*100}%) - PAUSE AFTER {power_thresholds.pause_delay_hours}H DELAY"
+                    delayed_threshold = power_thresholds.delayed_pause_threshold * 100
+                    delay_hours = power_thresholds.pause_delay_hours
+                    reason += (
+                        f" | Power: {power_info['power_percentage']:.1f}% "
+                        f"(>{delayed_threshold}%) - PAUSE AFTER {delay_hours}H DELAY"
+                    )
                 else:
                     should_pause = False
-                    reason += f" | Power: {power_info['power_percentage']:.1f}% (<{power_thresholds.delayed_pause_threshold*100}%) - NO PAUSE"
+                    delayed_threshold = power_thresholds.delayed_pause_threshold * 100
+                    reason += (
+                        f" | Power: {power_info['power_percentage']:.1f}% "
+                        f"(<{delayed_threshold}%) - NO PAUSE"
+                    )
             else:
                 # Fallback to immediate pause if power calculation fails
                 should_pause = True
@@ -745,7 +757,7 @@ async def inspect_aggregate_report(
                 f"Aggregate report deviation ({diff:.4f}) exceeds pause threshold "
                 f"({metrics.pause_threshold:.4f}) - CIRCUIT BREAKER ACTIVATED"
             )
-        
+
     elif disputable and metrics.warning_threshold > 0:
         # Use same category determination logic for non-pause alerts
         category = determine_dispute_category(
@@ -776,15 +788,16 @@ async def calculate_power_percentage(
     logger: logging.Logger,
 ) -> dict[str, Any] | None:
     """Calculate the power percentage of an aggregate report relative to total non-jailed power.
-    
+
     Args:
         agg_report: The aggregate report to analyze
         uri: RPC endpoint URI
         power_thresholds: Power threshold configuration
         logger: Logger instance
-        
+
     Returns:
         Dict with power analysis results or None if query fails
+
     """
     try:
         # Query all reporters
@@ -792,28 +805,28 @@ async def calculate_power_percentage(
         if not reporters_response:
             logger.error("Failed to query reporters for power calculation")
             return None
-            
+
         # Get aggregate power from the report
         aggregate_power = int(agg_report.aggregate_power)
         total_power = reporters_response.total_non_jailed_power
-        
+
         if total_power == 0:
             logger.error("Total non-jailed power is 0 - cannot calculate percentage")
             return None
-            
+
         # Calculate power percentage
         power_percentage = (aggregate_power / total_power) * 100.0
-        
+
         # Determine pause decisions based on thresholds
         should_pause_immediately = power_percentage > (power_thresholds.immediate_pause_threshold * 100)
         should_pause_delayed = power_percentage > (power_thresholds.delayed_pause_threshold * 100)
-        
+
         logger.info(
             f"Power analysis: aggregate={aggregate_power}, total={total_power}, "
             f"percentage={power_percentage:.2f}%, immediate_pause={should_pause_immediately}, "
             f"delayed_pause={should_pause_delayed}"
         )
-        
+
         return {
             "aggregate_power": aggregate_power,
             "total_power": total_power,
@@ -824,7 +837,7 @@ async def calculate_power_percentage(
             "immediate_threshold": power_thresholds.immediate_pause_threshold * 100,
             "delayed_threshold": power_thresholds.delayed_pause_threshold * 100,
         }
-        
+
     except Exception as e:
         logger.error(f"Error calculating power percentage: {e}")
         return None
@@ -837,31 +850,32 @@ async def process_pending_pauses(
     current_time: float,
 ) -> None:
     """Process pending pauses that have reached their delay timeout.
-    
+
     Args:
         pending_pauses: Dictionary of pending pauses by query_id
         saga_contract_manager: Saga contract manager for pausing
         logger: Logger instance
         current_time: Current timestamp
+
     """
     expired_pauses = []
-    
+
     for query_id, pending_pause in pending_pauses.items():
         delay_seconds = pending_pause.power_info["delay_hours"] * 3600
         if current_time >= pending_pause.trigger_time + delay_seconds:
             expired_pauses.append(query_id)
-            
+
             logger.critical(
                 f"🕐 DELAYED PAUSE TRIGGERED - {pending_pause.reason} - "
                 f"Delay period ({pending_pause.power_info['delay_hours']}h) expired"
             )
-            
+
             # Execute the pause
             if saga_contract_manager and pending_pause.contract_address != "0x0000000000000000000000000000000000000000":
                 tx_hash, status = await saga_contract_manager.pause_contract(
                     pending_pause.contract_address, pending_pause.query_id
                 )
-                
+
                 if tx_hash:
                     if status == "success":
                         logger.critical(f"🚨 DELAYED CONTRACT PAUSED SUCCESSFULLY - TxHash: {tx_hash}")
@@ -871,14 +885,16 @@ async def process_pending_pauses(
                     if status == "already_paused":
                         logger.warning(f"⚠️ CONTRACT ALREADY PAUSED - Address: {pending_pause.contract_address}")
                     else:
-                        logger.error(f"❌ DELAYED PAUSE FAILED - Address: {pending_pause.contract_address}, Status: {status}")
+                        logger.error(
+                            f"❌ DELAYED PAUSE FAILED - Address: {pending_pause.contract_address}, Status: {status}"
+                        )
             else:
                 logger.warning("⚠️ DELAYED PAUSE SKIPPED - Saga contract manager not available")
-    
+
     # Remove expired pauses
     for query_id in expired_pauses:
         del pending_pauses[query_id]
-        
+
     if expired_pauses:
         logger.info(f"Processed {len(expired_pauses)} expired pending pauses")
 
@@ -890,12 +906,13 @@ async def execute_contract_pause(
     logger: logging.Logger,
 ) -> None:
     """Execute contract pause for an aggregate report.
-    
+
     Args:
         saga_contract_manager: Saga contract manager for pausing
         agg_report: The aggregate report triggering the pause
         config_watcher: Configuration watcher
         logger: Logger instance
+
     """
     if saga_contract_manager is not None:
         # Get contract address from config
@@ -907,9 +924,7 @@ async def execute_contract_pause(
 
             # Skip if placeholder address
             if contract_address != "0x0000000000000000000000000000000000000000":
-                tx_hash, status = await saga_contract_manager.pause_contract(
-                    contract_address, agg_report.query_id
-                )
+                tx_hash, status = await saga_contract_manager.pause_contract(contract_address, agg_report.query_id)
                 if tx_hash:
                     if status == "success":
                         logger.critical(f"🚨 CONTRACT PAUSED SUCCESSFULLY - TxHash: {tx_hash}")
@@ -919,30 +934,22 @@ async def execute_contract_pause(
                     if status == "already_paused":
                         logger.warning(f"⚠️ CONTRACT ALREADY PAUSED - Address: {contract_address}")
                     elif status == "not_guardian":
-                        logger.error(
-                            f"❌ NOT AUTHORIZED - Account is not a guardian for contract {contract_address}"
-                        )
+                        logger.error(f"❌ NOT AUTHORIZED - Account is not a guardian for contract {contract_address}")
                     elif status == "no_contract":
                         logger.error(f"❌ NO CONTRACT FOUND - Address: {contract_address}")
                     elif status == "invalid_address":
                         logger.error(f"❌ INVALID ADDRESS - Address: {contract_address}")
                     else:
-                        logger.error(
-                            f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}, Status: {status}"
-                        )
+                        logger.error(f"❌ FAILED TO PAUSE CONTRACT - Address: {contract_address}, Status: {status}")
             else:
                 logger.warning(
-                    f"⚠️ PAUSE SKIPPED - No valid contract address configured "
-                    f"for query {agg_report.query_id[:16]}..."
+                    f"⚠️ PAUSE SKIPPED - No valid contract address configured for query {agg_report.query_id[:16]}..."
                 )
         else:
-            logger.warning(
-                f"⚠️ PAUSE SKIPPED - No contract address found in config for query {agg_report.query_id[:16]}..."
-            )
+            logger.warning(f"⚠️ PAUSE SKIPPED - No contract address found in config for query {agg_report.query_id[:16]}...")
     else:
         logger.warning(
-            "⚠️ PAUSE SKIPPED - Saga contract manager not initialized "
-            "(check SAGA_EVM_RPC_URL and SAGA_PRIVATE_KEY)"
+            "⚠️ PAUSE SKIPPED - Saga contract manager not initialized (check SAGA_EVM_RPC_URL and SAGA_PRIVATE_KEY)"
         )
 
 
@@ -957,11 +964,11 @@ async def agg_reports_queue_handler(
 ) -> None:
     """Handle aggregate reports from the queue and check for pause conditions."""
     processed_reports = {}  # Track processed reports with timestamps to detect duplicates
-    pending_pauses = {}    # Track pending pauses for delayed power thresholds {query_id: PendingPause}
+    pending_pauses = {}  # Track pending pauses for delayed power thresholds {query_id: PendingPause}
     last_cleanup_time = time.time()
     last_pending_check = time.time()
     cleanup_interval = 24 * 60 * 60  # 24 hours in seconds
-    pending_check_interval = 60      # Check pending pauses every minute
+    pending_check_interval = 60  # Check pending pauses every minute
 
     while True:
         # Check for pending pauses that have reached their delay timeout
@@ -1011,7 +1018,9 @@ async def agg_reports_queue_handler(
             continue
 
         # Inspect aggregate report using same logic as individual reports
-        inspection_result = await inspect_aggregate_report(agg_report, config_watcher, logger, threshold_config, uri, power_thresholds)
+        inspection_result = await inspect_aggregate_report(
+            agg_report, config_watcher, logger, threshold_config, uri, power_thresholds
+        )
 
         if inspection_result:
             # Handle both 2-tuple and 3-tuple return formats for backward compatibility
@@ -1020,18 +1029,18 @@ async def agg_reports_queue_handler(
             else:
                 should_pause, reason = inspection_result
                 power_info = None
-            
+
             # Check if this report should trigger immediate pause or delayed pause
             immediate_pause = should_pause
             delayed_pause = False
-            
+
             if power_info and not should_pause:
                 # Check if this meets delayed pause criteria
                 delayed_pause = power_info.get("should_pause_delayed", False)
-            
+
             if immediate_pause:
                 logger.critical(f"🚨 CIRCUIT BREAKER ACTIVATED: {reason}")
-                
+
                 # Remove any existing pending pause for this query (superseded by immediate pause)
                 if agg_report.query_id in pending_pauses:
                     del pending_pauses[agg_report.query_id]
@@ -1039,17 +1048,17 @@ async def agg_reports_queue_handler(
 
                 # Execute immediate pause
                 await execute_contract_pause(saga_contract_manager, agg_report, config_watcher, logger)
-                
+
             elif delayed_pause:
                 logger.critical(f"🕐 DELAYED PAUSE SCHEDULED: {reason}")
-                
+
                 # Get contract address for delayed pause
                 config = config_watcher.get_config()
                 query_config = config.get(agg_report.query_id.lower())
-                
+
                 if query_config and query_config.get("datafeed_ca"):
                     contract_address = query_config.get("datafeed_ca")
-                    
+
                     if contract_address != "0x0000000000000000000000000000000000000000":
                         # Check if there's already a pending pause for this query
                         if agg_report.query_id in pending_pauses:
@@ -1062,16 +1071,19 @@ async def agg_reports_queue_handler(
                                 trigger_time=current_time,
                                 power_info=power_info,
                                 agg_report=agg_report,
-                                reason=reason
+                                reason=reason,
                             )
                             pending_pauses[agg_report.query_id] = pending_pause
-                            
+
                             logger.critical(
-                                f"⏰ PAUSE SCHEDULED - Will pause {contract_address} for query {agg_report.query_id[:16]}... "
+                                f"⏰ PAUSE SCHEDULED - Will pause {contract_address} "
+                                f"for query {agg_report.query_id[:16]}... "
                                 f"in {power_info['delay_hours']} hours if not disputed"
                             )
                     else:
-                        logger.warning(f"⚠️ DELAYED PAUSE SKIPPED - No valid contract address for query {agg_report.query_id[:16]}...")
+                        logger.warning(
+                            f"⚠️ DELAYED PAUSE SKIPPED - No valid contract address for query {agg_report.query_id[:16]}..."
+                        )
                 else:
                     logger.warning(f"⚠️ DELAYED PAUSE SKIPPED - No contract config for query {agg_report.query_id[:16]}...")
             else:

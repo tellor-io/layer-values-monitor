@@ -266,8 +266,8 @@ class TestSagaEdgeCases:
 
         # Test cases that should cause ValueError (too long)
         too_long_test_cases = [
-            "f" * 100,   # Too long but won't overflow
-            "f" * 500,   # Very large hex value
+            "f" * 100,  # Too long but won't overflow
+            "f" * 500,  # Very large hex value
             "f" * 1000,  # Extremely large hex value
             "1" + "0" * 200,  # Way too long
         ]
@@ -279,12 +279,12 @@ class TestSagaEdgeCases:
         # Test with 0x prefix as well
         with pytest.raises(ValueError, match="Hex value too long"):
             decode_hex_value("0x" + "f" * 100)
-        
+
         # Test that exactly 64 chars still works (normal oracle values)
         normal_64_char = "f" * 64
         result = decode_hex_value(normal_64_char)
         assert result > 0  # Should decode successfully
-        
+
         # Test that 65 chars fails
         with pytest.raises(ValueError, match="Hex value too long"):
             decode_hex_value("f" * 65)
