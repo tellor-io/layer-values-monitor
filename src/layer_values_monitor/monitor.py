@@ -531,17 +531,20 @@ async def inspect_reports(
         )
         # logger.debug(f"Using config metrics: alert_threshold={metrics.alert_threshold}")
 
-        if any(
-            x is None
-            for x in [
-                metrics.metric,
-                metrics.alert_threshold,
-                metrics.warning_threshold,
-                metrics.minor_threshold,
-                metrics.major_threshold,
-                metrics.pause_threshold,
-            ]
-        ):
+        # For equality metrics, pause_threshold is not applicable and can be None
+        required_fields = [
+            metrics.metric,
+            metrics.alert_threshold,
+            metrics.warning_threshold,
+            metrics.minor_threshold,
+            metrics.major_threshold,
+        ]
+        
+        # Only check pause_threshold for non-equality metrics
+        if metrics.metric != "equality":
+            required_fields.append(metrics.pause_threshold)
+        
+        if any(x is None for x in required_fields):
             logger.error(f"config for {query_id} not set properly")
             return None
 
@@ -689,15 +692,20 @@ async def inspect_aggregate_report(
             pause_threshold=_config.get("pause_threshold"),
         )
 
-        thresholds = [
+        # For equality metrics, pause_threshold is not applicable and can be None
+        required_fields = [
             metrics.metric,
             metrics.alert_threshold,
             metrics.warning_threshold,
             metrics.minor_threshold,
             metrics.major_threshold,
-            metrics.pause_threshold,
         ]
-        if any(x is None for x in thresholds):
+        
+        # Only check pause_threshold for non-equality metrics
+        if metrics.metric != "equality":
+            required_fields.append(metrics.pause_threshold)
+        
+        if any(x is None for x in required_fields):
             logger.error(f"Config for aggregate report {query_id} not set properly")
             return None
 

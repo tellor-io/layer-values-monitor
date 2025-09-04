@@ -85,6 +85,7 @@ alert_threshold = 1.0
 warning_threshold = 1.0
 minor_threshold = 0.0
 major_threshold = 0.0
+pause_threshold = 0.0
 
 
 # EVMCall query type configuration
@@ -94,5 +95,6 @@ alert_threshold = 1.0
 warning_threshold = 1.0
 minor_threshold = 0.0
 major_threshold = 0.0
+pause_threshold = 0.0
 
 
