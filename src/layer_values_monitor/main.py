@@ -244,6 +244,11 @@ async def start() -> None:
 
     logger.info(f"💡 Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
 
+    # Initialize row counter for CSV file management
+    from layer_values_monitor.utils import initialize_row_counter
+
+    initialize_row_counter()
+
     # TODO: validate user options to check if they conflict
     try:
         # Build list of queries to subscribe to

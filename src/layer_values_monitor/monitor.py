@@ -627,7 +627,14 @@ async def inspect_aggregate_report(
 
     # Get feed and trusted value (same logic as inspect_reports)
     query = get_query(query_data)
+    if query is None:
+        logger.error(f"Unable to parse query data for aggregate report query id: {query_id}")
+        return None
+        
     feed = await get_feed(query_id, query, logger)
+    if feed is None:
+        logger.error(f"Unable to get feed for aggregate report query id: {query_id}")
+        return None
 
     trusted_value, _ = await fetch_value(feed)
     if trusted_value is None:
