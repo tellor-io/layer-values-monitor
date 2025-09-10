@@ -65,6 +65,17 @@ async def _fetch_fbtc_price(logger: logging.Logger) -> float | None:
 
     # Calculate average if we have valid prices
     if len(prices) > 0:
+        # Check price % differ if we have exactly 2 sources
+        if len(prices) == 2:
+            price_diff_pct = abs(prices[0] - prices[1]) / max(prices) * 100
+            if price_diff_pct > 10: 
+                logger.warning(
+                    f"FBTC/USD prices differ significantly: {prices[0]:.6f} vs {prices[1]:.6f} "
+                    f"({price_diff_pct:.2f}% difference). Potential data quality issues."
+                )
+            else:
+                logger.info(f"FBTC/USD price sources are consistent: {price_diff_pct:.2f}% difference")
+        
         average_price = sum(prices) / len(prices)
         individual_prices = [f"${p:.6f}" for p in prices]
         logger.info(
@@ -100,6 +111,17 @@ async def _fetch_saga_price(logger: logging.Logger) -> float | None:
 
     # Calculate average if we have valid prices
     if len(prices) > 0:
+        # Check price difference if we have exactly 2 sources
+        if len(prices) == 2:
+            price_diff_pct = abs(prices[0] - prices[1]) / max(prices) * 100
+            if price_diff_pct > 10:  # More than 10% difference
+                logger.warning(
+                    f"SAGA/USD prices differ significantly: {prices[0]:.6f} vs {prices[1]:.6f} "
+                    f"({price_diff_pct:.2f}% difference). Potential data quality issues."
+                )
+            else:
+                logger.info(f"SAGA/USD price sources are consistent: {price_diff_pct:.2f}% difference")
+        
         average_price = sum(prices) / len(prices)
         individual_prices = [f"${p:.6f}" for p in prices]
         logger.info(
