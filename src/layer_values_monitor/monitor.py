@@ -338,7 +338,7 @@ async def raw_data_queue_handler(
                         ]
 
                         logger.info(
-                            f"New Reports({total_reports}) found at height {current_height}, "
+                            f"New Reports({total_reports}) found at height {height}, "
                             f"qIds: [{', '.join(query_counts)}]"
                         )
 
@@ -365,17 +365,14 @@ async def raw_data_queue_handler(
                 query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
 
                 logger.info(
-                    f"New Reports({total_reports}) found at height {current_height}, qIds: [{', '.join(query_counts)}]"
+                    f"New Reports({total_reports}) found at height {height}, qIds: [{', '.join(query_counts)}]"
                 )
 
                 await new_reports_q.put(dict(reports_collections))
                 reports_collections.clear()
 
             try:
-                # Handle optional fields gracefully with fallbacks
-                height = None
-                if "tx.height" in events and len(events["tx.height"]) > 0:
-                    height = int(events["tx.height"][0])
+                height = current_height
 
                 agg_report = AggregateReport(
                     query_id=events["aggregate_report.query_id"][0],
@@ -954,13 +951,13 @@ async def agg_reports_queue_handler(
             decoded_value = decode_hex_value(agg_report.value)
             logger.info(
                 f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: {decoded_value:.6f} "
-                f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
+                f"power: {agg_report.aggregate_power} height: {agg_report.height}"
             )
         except (OverflowError, ValueError) as e:
             logger.error(f"🚨 Skipping aggregate report - invalid hex value: {e}")
             logger.info(
                 f"Aggregate Report found - qId: {agg_report.query_id[:16]}... value: DECODE_ERROR "
-                f"power: {agg_report.aggregate_power} height: {agg_report.micro_report_height}"
+                f"power: {agg_report.aggregate_power} height: {agg_report.height}"
             )
             agg_reports_q.task_done()
             continue
