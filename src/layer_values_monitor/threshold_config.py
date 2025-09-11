@@ -21,6 +21,8 @@ class ThresholdConfig:
         equality_warning: float | None = None,
         equality_minor: float | None = None,
         equality_major: float | None = None,
+        # pause threshold for circuit breaker
+        pause_threshold: float | None = None,
     ) -> None:
         """Initialize the ThresholdConfig with default values."""
         # Set all properties
@@ -38,6 +40,8 @@ class ThresholdConfig:
         self.equality_warning = equality_warning
         self.equality_minor = equality_minor
         self.equality_major = equality_major
+
+        self.pause_threshold = pause_threshold
 
     @classmethod
     def from_args(cls, args: object) -> "ThresholdConfig":

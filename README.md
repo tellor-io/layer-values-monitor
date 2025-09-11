@@ -3,104 +3,242 @@
 
 # Layer Values Monitor
 
-### Install uv
+A monitoring system that listens to new_report and aggregate_report events on Layer. New_report values are compared aginst trusted values and can be automatically disputed/alerted about through a discord webhook. Aggregate_report values are compared against trusted values and the related data feed contract can be paused.
+
+**NOTE**: All preset thresholds are arbitrary and should be carefully considered.
+## Quick Start
+
+### 1. Install Dependencies
+# Install uv package manager
 ```sh
 https://docs.astral.sh/uv/#installation
 ```
-### Create virtual environment
+
+# Create and activate virtual environment
 ```sh
 uv venv
 # https://docs.astral.sh/uv/reference/cli/#uv-venv
 ```
-### Tests
+
+### 2. Configure Environment
 ```sh
-uv run pytest
+# Copy example environment file
+cp env.example .env
+
+# Edit .env file with your settings
+nano .env
+
+# OPTIONAL BUT RECOMMENDED: edit all config thresholds
+nano config.toml
 ```
-### Values monitor
+
+### 3. Run the Monitor
+```sh
+# Basic monitoring 
+uv run layer-values-monitor --use-custom-config
+```
+
+## Env Configuration
+
+### Required Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `URI` | Layer node WebSocket endpoint | `localhost:26657` |
+| `CHAIN_ID` | Layer chain identifier | `layertest-4` |
+| `DISCORD_WEBHOOK_URL_1` | Discord notifications webhook 1 | _(none)_ |
+| `MAX_TABLE_ROWS` | Maximum rows in reports tables | `1000000` |
+
+
+### Optional Environment Variables 
+
+For lighter startup commands, set these in `.env`:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LAYER_BINARY_PATH` | Path to Layer executable | `/usr/local/bin/layerd` |
+| `LAYER_KEY_NAME` | Key name for transactions | `alice` |
+| `LAYER_KEYRING_BACKEND` | Keyring backend type | `test` |
+| `LAYER_KEYRING_DIR` | Keyring directory | `~/.layer` |
+| `PAYFROM_BOND` | Pay dispute fees from bond | `false` |
+| | | |
+| `TRBBRIDGE_CONTRACT_ADDRESS` | TRB Bridge contract address | _(none)_ |
+| `TRBBRIDGE_CHAIN_ID` | Chain ID for bridge contract (default sepolia) | `11155111` |
+| `ETHEREUM_RPC_URL` | Ethereum RPC endpoint (for TRB Bridge) | _(none)_ |
+| | | |
+| `SAGA_EVM_RPC_URL` | Saga EVM RPC endpoint | _(none)_ |
+| `SAGA_PRIVATE_KEY` | Guardian private key | _(none)_ |
+| `SAGA_IMMEDIATE_PAUSE_THRESHOLD` | Power threshold for immediate pause| `0.666666666666` |
+| `SAGA_DELAYED_PAUSE_THRESHOLD` | Power threshold for delayed pause | `0.333333333333` |
+| `MAX_CATCHUP_BLOCKS` | Max blocks to process when catching up | `15` |
+| `CG_API_KEY` | CoinGecko API key for price data | _(none)_ |
+| `CMC_API_KEY` | CoinMarketCap API key for price data | _(none)_ |
+
+## Command Line Options
+
+### Basic Usage
+```sh
+uv run layer-values-monitor [options]
+```
+
+### Available Flags
+
+| Flag | Description |
+|------|-------------|
+| `--use-custom-config` | Use config.toml for query-specific settings |
+| `--enable-saga-guard` | Enable aggregate report and Saga contract guarding |
+| `--payfrom-bond` | Pay dispute fees from reporter bond, defaults to false |
+
+### Global Thresholds
+
+Set global dispute thresholds for all queries.
+
+**NOTE:** If you do not want to auto dispute a certain queryId or queryType, set all threshold values to 0 for it in `config.toml`.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--global-percentage-alert-threshold` | Percentage threshold for alerts | `0.1` |
+| `--global-percentage-warning-threshold` | Warning dispute threshold | `0.0` |
+| `--global-percentage-minor-threshold` | Minor dispute threshold | `0.0` |
+| `--global-percentage-major-threshold` | Major dispute threshold | `0.0` |
+| `--global-range-...-threshold` | Range-based thresholds | `0.0` |
+| `--global-equality-...-threshold` | Equality thresholds | `0.0` |
+
+## Configuration Strategies
+
+### Strategy 1: Full Configuration (Recommended)
+Set all configuration in `.env` and `config.toml`:
+```sh
+uv run layer-values-monitor --use-custom-config
+```
+
+### Strategy 2: Custom config, no optional env fields
+Use custom thresholds and more command line parameters:
+```sh
+uv run layer-values-monitor /path/to/layerd alice test ~/.layer --payfrom-bond --use-custom-config
+```
+
+### Strategy 3: Minimum .env setting, set thresholds in start command
+Set everything via command line:
 ```sh
 uv run layer-values-monitor \
---use-custom-config \
-binary_path=./layer \
-key_name=alice \
-keyring_backend=test \
-keyring_dir=~/.layer/alice \
-payfrom_bond=False
+  /path/to/layerd \
+  alice \
+  test \
+  ~/.layer/alice \
+  --payfrom-bond \
+  --global-percentage-alert-threshold 0.1 \
+  --global-percentage-warning-threshold 0.2 \
+  --global-percentage-minor-threshold 0.4 \
+  --global-percentage-major-threshold 0.6 \
+  --global-range-alert-threshold 1.0 \
+  --global-range-warning-threshold 1.0 \
+  --global-range-minor-threshold 0 \
+  --global-range-major-threshold 0 \
+  --global-equality-alert-threshold 1.0 \
+  --global-equality-warning-threshold 1.0 \
+  --global-equality-minor-threshold 0 \
+  --global-equality-major-threshold 0
 ```
 
-### Configuration
+### Strategy 4: Global + Custom
+Combine global thresholds with query-specific overrides:
+```sh
+uv run layer-values-monitor \
+  --global-percentage-warning-threshold 0.05 \
+  --use-custom-config
+```
 
-The Layer Values Monitor can be configured using either a configuration file or command-line parameters.
-
-#### Global Configuration
-
-The global configurations are set in the command-line and requires setting the alert threshold plus the different categories warning, minor, and major for all three threshold types: percentage, range, and equality.
-The configuration file is located in the parent directory at `config.toml`. This is where you can customize setting threshold values for monitoring by specific query ids.
-
-#### Custom Configuration
-
-To use custom configuration settings:
-
-1. **Command-line parameters**: Pass the `--use-custom-config` flag followed by key=value pairs as shown in the example above.
-
-#### Required args for starting the monitor
-
-| Args | Description |
-|--------|-------------|
-| `binary_path` | Path to the Layer executable |
-| `key_name` | Name of the key to use for signing transactions |
-| `keyring_backend` | Keyring backend to use (ie os, test) |
-| `keyring_dir` | Directory for the keyring |
-| `payfrom_bond` | Whether to use the bond for paying transaction fees |
-
-#### Option 1
-
-Set the global threshold for monitoring all the submitted values.
-| Args | Description |
-|--------|-------------|
-| `--global-percentage-alert-threshold` | Percentage alert threshold |
-| `--global-percentage-warning-threshold ` | Percentage warning level threshold |
-| `--global-percentage-minor-threshold` | Percentage minor level threshold |
-| `--global-percentage-major-threshold` | Percentage major level threshold |
-| `--global-range-alert-threshold ` | Range alert threshold |
-| `--global-range-warning-threshold` | Range warning level threshold |
-| `--global-range-minor-threshold` | Range minor level threshold|
-| `--global-range-major-threshold` | Range major level threshold |
-| `--global-equality-threshold` | Directory for the keyring |
-
-#### Option 2
-For only monitoring the config.toml file set the following flag: `--use-custom-config` with the above required args.
-
-#### Option 3
-Do both option 1 and 2.  Set the global thresholds without the `--use-custom-config` flag and add custom configurations to the `config.toml`
-
-#### ENV file configs (required)
-| Variables | Description |
-|-----------|-------------|
-| `CHAIN_ID` | Chain ID of the Layer network (ie `layer-testnet`) |
-| `URI` | URI of the Layer node to connect to (ie `localhost:26657`) |
-| `DISCORD_WEBHOOK_URL_1` | Discord webhook url to recieve to notifications on |
-
-#### Threshold Settings
-
-The configuration file also allows you to set thresholds for monitoring values. These thresholds determine when the monitor should take action.
-
-| Threshold | Description |
-|-----------|-------------|
-| `metric` | The metric to use for a specific query (percentage, range, equality) |
-| `alert_threshold` | the threshold for alerts only |
-| `warning_threshold` | Lowest level dispute category threshold |
-| `minor_threshold` | Middle level dispute category threshold |
-| `major_threshold` | Highest level in  dispute category threshold |
-
-**NOTE** For disputing at minimum the warning category has to be set greater than 0. The thresholds should `float` types. The equality metric is 1.0 for True and 0.0 for False.
-
-#### Example Config File (TOML format)
+## Query-Specific Configuration (config.toml)
 
 ```toml
-[some_random_query_id]
+# Example: BTC/USD price feed monitoring
+[a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
+metric = "percentage"
+alert_threshold = 0.05     # 5% deviation for alerts
+warning_threshold = 0.10   # 10% for warning disputes
+minor_threshold = 0.15     # 15% for minor disputes  
+major_threshold = 0.25     # 25% for major disputes
+pause_threshold = 0.50     # 50% triggers contract pause if --enable-saga-guard used
+datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC" # saga contract address
+
+# Example: Exact equality check
+[trbbridge]
 metric = "equality"
-alert_threshold = 1.0
-warning_threshold = 0.0
+alert_threshold = 1.0 # any difference triggers alert
+warning_threshold = 1.0 # any difference triggers warning dispute
 minor_threshold = 0.0
 major_threshold = 0.0
 ```
+
+
+## Saga Guard
+
+Enable automatic contract pausing when aggregate report values are incorrect. Threshold for incorrect can be set in config.toml. Only relevant for contract guardians.
+
+Thresholds for pausing given % differences and minimum aggregate report powers configurable in config.toml
+
+### Requirements
+- Guardian permissions on target contracts
+- Valid `SAGA_EVM_RPC_URL` and `SAGA_PRIVATE_KEY`
+- Use `--enable-saga-guard` flag in start command
+
+### How It Works
+1. Listen for aggregate report events
+2. Compare aggregate value against trusted data sources
+3. If `pause_threshold` exceeded, pause configured contracts
+
+### Power-Based Pausing Logic
+The system uses two power thresholds for contract pausing:
+- **Immediate Pause**: When aggregate report power exceeds `SAGA_IMMEDIATE_PAUSE_THRESHOLD` (default: 66% of total non-jailed reporting power)
+- **Delayed Pause**: When aggregate report power exceeds `SAGA_DELAYED_PAUSE_THRESHOLD` (default: 33% of total non-jailed reporting power)
+
+### Catch-Up Configuration
+If the websocket disconnects/reconnects, it can process missed blocks:
+- `MAX_CATCHUP_BLOCKS`: Maximum number of blocks to process during catch-up (default: 15)
+- Prevents processing too many historical blocks on startup
+
+## Examples
+
+### Basic Report Monitoring
+```sh
+# New report monitoring with 5% auto alert threshold
+# no auto disputes on spot prices
+uv run layer-values-monitor \
+  --global-percentage-alert-threshold 0.1 \
+  --global-percentage-warning-threshold 0.0 \
+  --global-percentage-minor-threshold 0.0 \
+  --global-percentage-major-threshold 0.0 \
+```
+
+### Production Setup with Saga Guard
+```sh
+# New report and aggregate report monitoring using config thresholds
+uv run layer-values-monitor \
+  --enable-saga-guard \
+  --use-custom-config
+```
+
+## Development
+
+### Run Tests
+```sh
+uv run pytest -v
+```
+
+### Build Package
+```sh
+uv build
+```
+
+### Linting
+```sh
+uv run ruff check
+uv run ruff format
+```
+
+### Logs
+
+- **Console**: INFO level and above
+- **File**: All logs saved to `monitor_log.log`  
+- **CSV Data**: Report details saved to `logs/table_*.csv`

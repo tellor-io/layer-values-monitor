@@ -70,12 +70,16 @@ def get_source_from_data(query_data: bytes, logger: logging) -> DataSource | Non
     return source
 
 
-async def get_feed(query_id: str, query: AbiQuery | JsonQuery, logger: logging) -> DataFeed | None:
+async def get_feed(query_id: str, query: AbiQuery | JsonQuery | None, logger: logging) -> DataFeed | None:
     """Get the current value for a query from API sources available in telliot-feeds.
 
     query_id: the hash of the query data used to fetch the value.
-    quer: query object that has the source and feed used to get value from relevant API.
+    query: query object that has the source and feed used to get value from relevant API.
     """
+    if query is None:
+        logger.warning(f"No query data found for query_id: {query_id}")
+        return None
+        
     catalog_entry = query_catalog.find(query_id=query_id)
     if len(catalog_entry) == 0:
         source = get_source_from_data(query_data=query.query_data)

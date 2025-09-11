@@ -1,8 +1,10 @@
 """Type."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 DisputeCategory = Literal["warning", "minor", "major"]
 
@@ -52,3 +54,59 @@ class Metrics:
     warning_threshold: float
     minor_threshold: float
     major_threshold: float
+    pause_threshold: float
+
+
+@dataclass
+class PowerThresholds:
+    """Define power-based thresholds for Saga pausing logic."""
+
+    immediate_pause_threshold: float = 0.66  # >66% power can pause immediately
+    delayed_pause_threshold: float = 0.33  # >33% power can pause after delay
+
+    @property
+    def pause_delay_hours(self) -> int:
+        """Fixed 12-hour delay for delayed pauses."""
+        return 12
+
+
+@dataclass
+class PendingPause:
+    """Store information about a pending pause for delayed power thresholds."""
+
+    query_id: str
+    contract_address: str
+    trigger_time: float
+    power_info: dict[str, Any]
+    agg_report: AggregateReport
+    reason: str
+
+
+@dataclass
+class Reporter:
+    """Store information about a reporter."""
+
+    address: str
+    power: int
+    jailed: bool
+    moniker: str | None = None
+
+
+@dataclass
+class ReporterQueryResponse:
+    """Store the response from querying all reporters."""
+
+    reporters: list[Reporter]
+    total_non_jailed_power: int
+
+
+@dataclass
+class AggregateReport:
+    """Store information about an aggregate report event."""
+
+    query_id: str
+    query_data: str
+    value: str
+    aggregate_power: str
+    micro_report_height: str
+    height: int | None = None

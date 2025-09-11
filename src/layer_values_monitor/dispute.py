@@ -61,7 +61,7 @@ def propose_msg(
     try:
         result = subprocess.run(cmd, capture_output=True)
         if result.returncode != 0:
-            logger.error("Error calling dispute transaction in cli:", result.stderr)
+            logger.error(f"Error calling dispute transaction in cli: {result.stderr}")
             return None
         signed_tx = json.loads(result.stdout)
         code = signed_tx["code"]

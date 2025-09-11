@@ -569,6 +569,7 @@ name = "layer-values-monitor"
 version = "0.1.4"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "discordwebhook" },
     { name = "eth-abi" },
     { name = "pandas" },
@@ -585,6 +586,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "discordwebhook", specifier = ">=1.0.3" },
     { name = "eth-abi", specifier = "==5.2.0" },
     { name = "pandas", specifier = ">=2.2.3" },

@@ -16,10 +16,31 @@ from pandas import DataFrame
 load_dotenv()
 MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "100000"))
 
+# Global counter to track current row count without reading file
+_current_row_count = 0
+
 
 def get_current_csv_path() -> str:
     """Get the full path to the current CSV file."""
     return os.path.join(LOGS_DIR, CURRENT_CSV_FILE)
+
+
+def initialize_row_counter() -> None:
+    """Initialize the row counter by counting existing rows in current CSV file."""
+    global _current_row_count
+    current_file = get_current_csv_path()
+
+    if os.path.exists(current_file):
+        try:
+            # Only read the file once at startup to get current row count
+            df = pd.read_csv(current_file)
+            _current_row_count = len(df)
+            logging.info(f"Initialized row counter: {_current_row_count} rows in current CSV file")
+        except Exception as e:
+            logging.error(f"Error initializing row counter: {e}")
+            _current_row_count = 0
+    else:
+        _current_row_count = 0
 
 
 def should_create_new_file() -> bool:
@@ -39,6 +60,7 @@ def should_create_new_file() -> bool:
 
 def create_new_csv_file() -> str:
     """Create a new CSV file with current timestamp and return its path."""
+    global _current_row_count
     timestamp = int(datetime.now(UTC).timestamp())
     new_filename = CSV_FILE_PATTERN.format(timestamp=timestamp)
     new_filepath = os.path.join(LOGS_DIR, new_filename)
@@ -46,6 +68,9 @@ def create_new_csv_file() -> str:
     # Update the current CSV file constant
     global CURRENT_CSV_FILE
     CURRENT_CSV_FILE = new_filename
+
+    # Reset row counter for new file
+    _current_row_count = 0
 
     return new_filepath
 
@@ -69,6 +94,7 @@ def get_metric(
             warning_threshold=threshold_config.percentage_warning,
             minor_threshold=threshold_config.percentage_minor,
             major_threshold=threshold_config.percentage_major,
+            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for percentage metric
         )
     elif metric == "range":
         return Metrics(
@@ -77,6 +103,7 @@ def get_metric(
             warning_threshold=threshold_config.range_warning,
             minor_threshold=threshold_config.range_minor,
             major_threshold=threshold_config.range_major,
+            pause_threshold=0.0,  # Pause threshold not applicable for range metrics
         )
     elif metric == "equality":
         return Metrics(
@@ -85,6 +112,7 @@ def get_metric(
             warning_threshold=threshold_config.equality_warning,
             minor_threshold=threshold_config.equality_minor,
             major_threshold=threshold_config.equality_major,
+            pause_threshold=0.0,  # Pause threshold not applicable for equality metrics
         )
 
 
@@ -96,18 +124,24 @@ def remove_0x_prefix(s: str) -> str:
 
 
 def add_to_table(entry: dict[str, str]) -> None:
-    """Add entry to table and print it."""
+    """Add entry to table and save to CSV (without console output)."""
+    global _current_row_count
     TABLE.append(entry)
-    os.system("clear")
-    df = DataFrame(TABLE).sort_values(by="TIMESTAMP")
-    print(df.to_string(index=False, justify="center"))
+    _current_row_count += 1
 
-    # Check if we need to create a new file
-    if should_create_new_file():
-        csv_file = create_new_csv_file()
-        # Create new file with header
-        DataFrame([entry]).to_csv(csv_file, mode="w", header=True, index=False)
+    # Only check file size every 1000 entries or when approaching limit
+    # This eliminates the expensive file reading on every single report
+    if _current_row_count % 1000 == 0 or _current_row_count >= MAX_TABLE_ROWS:
+        if should_create_new_file():
+            csv_file = create_new_csv_file()
+            # Create new file with header
+            DataFrame([entry]).to_csv(csv_file, mode="w", header=True, index=False)
+            _current_row_count = 1  # Reset counter for new file
+        else:
+            csv_file = get_current_csv_path()
+            # Append to existing file
+            DataFrame([entry]).to_csv(csv_file, mode="a", header=False, index=False)
     else:
+        # Just append without checking - much faster
         csv_file = get_current_csv_path()
-        # Append to existing file
         DataFrame([entry]).to_csv(csv_file, mode="a", header=False, index=False)
