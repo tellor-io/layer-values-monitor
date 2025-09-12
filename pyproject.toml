@@ -14,7 +14,7 @@ dependencies = [
     "eth-abi==5.2.0",
     "pandas>=2.2.3",
     "python-dotenv>=1.0.1",
-    "telliot-feeds>=0.2.2",
+    "telliot-feeds @ git+https://github.com/tellor-io/telliot-feeds.git@129e8ae94ebde0b5f7e7358e2e93f2e3541b5dc4",
     "websockets==13.1",
 ]
 [project.scripts]

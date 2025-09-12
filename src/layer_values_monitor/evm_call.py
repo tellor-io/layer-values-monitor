@@ -10,7 +10,8 @@ from telliot_core.apps.telliot_config import TelliotConfig
 from telliot_feeds.feeds import DataFeed
 from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
-from web3.middleware import geth_poa_middleware
+from web3.middleware import ExtraDataToPOAMiddleware
+
 
 
 async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed) -> HexBytes:
@@ -56,7 +57,7 @@ def get_block_number_at_timestamp(chain_id: int, timestamp: int) -> int | None:
         try:
             block = w3.eth.get_block(midpoint)
         except ExtraDataLengthError:
-            w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware(), layer=0)
             block = w3.eth.get_block(midpoint)
 
         if block.timestamp == timestamp:
