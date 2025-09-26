@@ -16,3 +16,4 @@ wheels/
 
 *.csv
 *.log
+uv.lock

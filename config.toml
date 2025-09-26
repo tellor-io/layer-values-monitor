@@ -11,7 +11,7 @@ major_threshold = 0.0 # No major level automatic disputes
 pause_threshold = 0.2 # 20% difference triggers data feed contract pause attempt (if using --enable-saga-gaurd)
 datafeed_ca = "0x0cD65ca12F6c9b10254FABC0CC62d273ABbb3d84" # saga contract address (if using --enable-saga-guard)
 
-#BTC/USD 
+#BTC/USD
 [a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
 metric = "percentage"
 alert_threshold = 0.05
@@ -71,6 +71,106 @@ major_threshold = 0.0
 pause_threshold = 0.000000001
 datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
 
+#USDN/USD
+[e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x8f5bb98bdcC11B663c40e8299507b660D59831a8"
+
+#sUSDS/USD
+[59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0xD9f9d0B4ed529B975265546b83d6B40FD171de42"
+
+#tBTC/USD
+[76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x9494Ed94280E9A8c5b52B1cDa9Ac9D21f6307135"
+
+#rETH/USD
+[0bc2d41117ae8779da7623ee76a109c88b84b9bf4d9b404524df04f7d0ca4ca7]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x7B1be2C7B390A1FA29e07504f2a46A8Dc07eD9F4"
+
+#wstETH/USD
+[1962cde2f19178fe2bb2229e78a6d386e6406979edc7b9a1966d89d83b3ebf2e]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0xAD4Ed25C667e6FecEB0fee67E2c52eb5481B9322"
+
+#KING/USD
+[d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x0Efc8e534F3f4e73cbDB8623cb23e76d955e2130"
+
+#sUSDe/USD
+[03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x7B5B292EB1d80164D693733f365fe0a588991eFE"
+
+#vyUSD/USD
+[91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x43790B86579CBE3f6b5A1D470777E55363F9f8F0"
+
+#sUSN/USD
+[187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0x4458F3c67f4131D297F2f4c1D56c40F93aE3Cd2C"
+
+#sfrxUSD/USD
+[ab30caa3e7827a27c153063bce02c0b260b29c0c164040c003f0f9ec66002510]
+metric = "percentage"
+alert_threshold = 0.05
+warning_threshold = 0.25
+minor_threshold = 0.99
+major_threshold = 0.0
+pause_threshold = 0.2
+datafeed_ca = "0xDff5F0aE4C062EF32E170EeB8dc0f30CBeDB505f"
+
 #============================================================================
 # EQUALITY TYPES
 # NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
@@ -94,5 +194,3 @@ warning_threshold = 1.0
 minor_threshold = 0.0
 major_threshold = 0.0
 pause_threshold = 0.0
-
-
