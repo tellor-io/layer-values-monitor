@@ -61,16 +61,6 @@ major_threshold = 0.0
 pause_threshold = 0.2
 datafeed_ca = "0x62E537964E2452aD6F08976dA251C4B33c04B96C"
 
-#FBTC/USD
-[c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e]
-metric = "percentage"
-alert_threshold = 0.05
-warning_threshold = 0.25
-minor_threshold = 0.99
-major_threshold = 0.0
-pause_threshold = 0.000000001
-datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
-
 #============================================================================
 # EQUALITY TYPES
 # NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
