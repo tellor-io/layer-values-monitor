@@ -1,6 +1,5 @@
 """Test Discord alert message formatting for different report types."""
 
-import pytest
 
 from layer_values_monitor.discord import build_alert_message, format_difference, format_values
 from layer_values_monitor.telliot_feeds import extract_query_info
@@ -146,7 +145,10 @@ def test_build_alert_message_evmcall():
     """Test building alert message for EVMCall query."""
     msg = build_alert_message(
         query_info="EVMCall",
-        value_display="**Reported:** 0x00000000000000000000000000000000000000000000000000000000000f4240\n**Trusted:** 0x00000000000000000000000000000000000000000000000000000000000f4241",
+        value_display=(
+            "**Reported:** 0x00000000000000000000000000000000000000000000000000000000000f4240\n"
+            "**Trusted:** 0x00000000000000000000000000000000000000000000000000000000000f4241"
+        ),
         diff_str="1.0",
         reporter="layer1mnopqrstuvwxyz123456789abcdefghi",
         power="2500",

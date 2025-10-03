@@ -105,6 +105,7 @@ def extract_query_info(query: AbiQuery | JsonQuery | None, query_type: str | Non
         
     Returns:
         str: Formatted query info (e.g., "BTC/USD", "EVMCall", "TRBBridge", etc.)
+
     """
     if query is None:
         return query_type or "Unknown"
