@@ -1268,10 +1268,7 @@ async def inspect(
             tx_hash=report.tx_hash,
         )
         
-        logger.info(
-            f"found an alertable value. asset: {query_info}, trusted: {trusted_value}, "
-            f"reported: {reported_value}, diff: {diff_str}"
-        )
+        logger.info(f"Alertable value detected:\n{msg}")
         generic_alert(msg)
 
     display["DISPUTABLE"] = disputable
