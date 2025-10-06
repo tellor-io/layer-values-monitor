@@ -112,7 +112,7 @@ def test_build_alert_message_spot_price():
     assert "**Reported:** 7.44" in msg
     assert "**Trusted:** 6.827876242343322" in msg
     assert "**Difference:** 8.96%" in msg
-    assert "layer1ab...123456" in msg  # First 8 chars + last 6 chars
+    assert "layer1abcdefghijklmnopqrstuvwxyz123456" in msg
     assert "**Power:** 1000" in msg
     assert "CC0CD8EB401B4FCBCC77A67DAD43BF886FFD301B87B58C1782459B814C2BFA07" in msg
 

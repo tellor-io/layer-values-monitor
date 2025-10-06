@@ -78,12 +78,11 @@ def build_alert_message(
     tx_hash: str,
 ) -> str:
     """Build the formatted Discord alert message."""
-    reporter_short = f"{reporter[:8]}...{reporter[-6:]}" if len(reporter) > 14 else reporter
     return (
         f"**Asset:** {query_info}\n"
         f"{value_display}\n"
         f"**Difference:** {diff_str}\n"
-        f"**Reporter:** {reporter_short}\n"
+        f"**Reporter:** {reporter}\n"
         f"**Power:** {power}\n"
         f"**Tx Hash:** {tx_hash}"
     )
