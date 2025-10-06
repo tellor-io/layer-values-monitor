@@ -425,7 +425,7 @@ wheels = [
 
 [[package]]
 name = "eth-tester"
-version = "0.11.0b2"
+version = "0.13.0b1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "eth-abi" },
@@ -435,9 +435,9 @@ dependencies = [
     { name = "rlp" },
     { name = "semantic-version" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a2/7b/249a37b69da25d73b5040adcdd40c5f661f6dc74e5c8f788e58cd7f2f416/eth_tester-0.11.0b2.tar.gz", hash = "sha256:b46e9acfb5cb5f3f62fd729d796ca0af231f117e35ce6f2f2f5bb55d4108edcd", size = 98972, upload-time = "2024-04-22T18:23:39.604Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/3d/d9b8191fd252b3c99c86f939d2fbe5c3cd259984e61505052ccf2a91bc85/eth_tester-0.13.0b1.tar.gz", hash = "sha256:87fb561d450cd3639ce82eed52e566c902a0ac241f3e9581c6b7545690fcece5", size = 102766, upload-time = "2025-04-23T21:02:29.906Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/e8/d910312d33c0e582371644eae2bdde949d2e75aabc06966180e1bbca23dc/eth_tester-0.11.0b2-py3-none-any.whl", hash = "sha256:d352cd1f99511dac6f38a0c449f77315a1ddbe234c8a3f3fe6ff90ac172622f3", size = 75193, upload-time = "2024-04-22T18:23:37.526Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/81/809ff0b461a7f7688925675cb99071b272bf3863e8d16e01a91434f03633/eth_tester-0.13.0b1-py3-none-any.whl", hash = "sha256:872108cea7df1340f56bab25b9ed5cf0f835aa467c1a8195d0891238c0e73ab3", size = 76168, upload-time = "2025-04-23T21:02:28.67Z" },
 ]
 
 [[package]]
@@ -601,7 +601,7 @@ requires-dist = [
     { name = "eth-abi", specifier = "==5.2.0" },
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "telliot-feeds", git = "https://github.com/tellor-io/telliot-feeds.git?rev=fdf9830b061c6b40e783d9c8cd46cfcf18af26b1" },
+    { name = "telliot-feeds", specifier = "==0.4.0" },
     { name = "websockets", specifier = "==13.1" },
 ]
 
@@ -1201,8 +1201,8 @@ wheels = [
 
 [[package]]
 name = "telliot-feeds"
-version = "0.4.0.dev0"
-source = { git = "https://github.com/tellor-io/telliot-feeds.git?rev=fdf9830b061c6b40e783d9c8cd46cfcf18af26b1#fdf9830b061c6b40e783d9c8cd46cfcf18af26b1" }
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiosignal" },
@@ -1256,6 +1256,10 @@ dependencies = [
     { name = "web3" },
     { name = "websockets" },
     { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cd/3d/c8d713979edc0a1c2d1c0eb7434c7e1dd3a725a4ba8b9aea4e5114f5cacf/telliot_feeds-0.4.0.tar.gz", hash = "sha256:93415777b33fec2e405d9e35312cd3e47fe82e4384c4952a3b769122266da577", size = 585888, upload-time = "2025-10-06T18:16:24.709Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/aa/c4/7da5de97e8d16a6ae4787373e773b3ad0aafddedf884cec16dff219167b9/telliot_feeds-0.4.0-py3-none-any.whl", hash = "sha256:ef55b6189c64dc85dd41235e924901b0df317279f93a4668d7714ab5165b0e0e", size = 471131, upload-time = "2025-10-06T18:16:23.366Z" },
 ]
 
 [[package]]
