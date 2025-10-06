@@ -13,7 +13,6 @@ from web3.exceptions import ExtraDataLengthError
 from web3.middleware import ExtraDataToPOAMiddleware
 
 
-
 async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed) -> HexBytes:
     """Get trusted value for EVMCall query type."""
     if not isinstance(reported_val, tuple):
