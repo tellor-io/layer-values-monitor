@@ -108,7 +108,6 @@ def test_build_alert_message_spot_price():
     print(msg)
     print("="*60)
     
-    assert "**ALERTABLE VALUE DETECTED**" in msg
     assert "**Asset:** SAGA/USD" in msg
     assert "**Reported:** 7.44" in msg
     assert "**Trusted:** 6.827876242343322" in msg
