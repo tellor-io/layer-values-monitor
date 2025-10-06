@@ -45,6 +45,7 @@ uv run layer-values-monitor --use-custom-config
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `URI` | Layer node WebSocket endpoint | `localhost:26657` |
+| `MONITOR_NAME` | Name identifier for this monitor instance | _(none)_ |
 | `CHAIN_ID` | Layer chain identifier | `layertest-4` |
 | `DISCORD_WEBHOOK_URL_1` | Discord notifications webhook 1 | _(none)_ |
 | `MAX_TABLE_ROWS` | Maximum rows in reports tables | `1000000` |
