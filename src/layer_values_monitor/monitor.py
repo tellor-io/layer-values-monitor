@@ -512,7 +512,7 @@ async def inspect_reports(
 
         for r in reports:
             reported_value = query.value_type.decode(bytes.fromhex(r.value))
-            await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger)
+            await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=query)
         return None
 
     # For other query types, use standard telliot-feeds pipeline
@@ -532,7 +532,7 @@ async def inspect_reports(
         return None
     for r in reports:
         reported_value = query.value_type.decode(bytes.fromhex(r.value))
-        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger)
+        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=query)
 
     return None
 
@@ -1132,7 +1132,9 @@ async def inspect_evm_call_reports(
         if trusted_value is None:
             logger.error(f"unable to fetch trusted value for query id: {query_id}")
             continue
-        await inspect(r, r.value, trusted_value, disputes_q, metrics, logger)
+        # For EVMCall, pass feed.query if available
+        query = feed.query if feed else None
+        await inspect(r, r.value, trusted_value, disputes_q, metrics, logger, query=query)
     return None
 
 
@@ -1208,7 +1210,8 @@ async def inspect_trbbridge_reports(
         # Note: We don't need to store the matches result since we use exact equality for TRBBridge
 
         # For TRBBridge, we expect exact equality
-        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger)
+        # Note: TRBBridge doesn't have a standard query object, pass None
+        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=None)
 
     return None
 
@@ -1220,6 +1223,7 @@ async def inspect(
     disputes_q: asyncio.Queue,
     metrics: Metrics,
     logger: logging,
+    query: Any = None,
 ) -> None:
     """Inspect a new report and check if it is disputable."""
     display = {
@@ -1248,9 +1252,24 @@ async def inspect(
     if alertable is None:
         return None
     if alertable:
-        msg = f"found an alertable value. trusted value: {trusted_value}, reported value: {reported_value}"
-        logger.info(msg)
-        generic_alert(msg + f" tx hash: {report.tx_hash}")
+        from layer_values_monitor.discord import build_alert_message, format_difference, format_values
+        from layer_values_monitor.telliot_feeds import extract_query_info
+        
+        query_info = extract_query_info(query, query_type=report.query_type)
+        diff_str = format_difference(diff, metrics.metric)
+        value_display = format_values(reported_value, trusted_value)
+        
+        msg = build_alert_message(
+            query_info=query_info,
+            value_display=value_display,
+            diff_str=diff_str,
+            reporter=report.reporter,
+            power=report.power,
+            tx_hash=report.tx_hash,
+        )
+        
+        logger.info(f"Alertable value detected:\n{msg}")
+        generic_alert(msg)
 
     display["DISPUTABLE"] = disputable
 
