@@ -82,7 +82,7 @@ async def get_feed(query_id: str, query: AbiQuery | JsonQuery | None, logger: lo
         
     catalog_entry = query_catalog.find(query_id=query_id)
     if len(catalog_entry) == 0:
-        source = get_source_from_data(query_data=query.query_data)
+        source = get_source_from_data(query_data=query.query_data, logger=logger)
         if source is None:
             logger.warning("no source found in telliot feeds found for query")
             return None

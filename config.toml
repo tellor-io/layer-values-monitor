@@ -190,7 +190,7 @@ pause_threshold = 0.0
 [evmcall]
 metric = "equality"
 alert_threshold = 1.0
-warning_threshold = 1.0
+warning_threshold = 0.0
 minor_threshold = 0.0
 major_threshold = 0.0
 pause_threshold = 0.0
