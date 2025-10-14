@@ -338,8 +338,7 @@ async def raw_data_queue_handler(
                         ]
 
                         logger.info(
-                            f"New Reports({total_reports}) found at height {height}, "
-                            f"qIds: [{', '.join(query_counts)}]"
+                            f"New Reports({total_reports}) found at height {height}, qIds: [{', '.join(query_counts)}]"
                         )
 
                         await new_reports_q.put(dict(reports_collections))
@@ -364,9 +363,7 @@ async def raw_data_queue_handler(
                 total_reports = sum(len(reports) for reports in reports_collections.values())
                 query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
 
-                logger.info(
-                    f"New Reports({total_reports}) found at height {height}, qIds: [{', '.join(query_counts)}]"
-                )
+                logger.info(f"New Reports({total_reports}) found at height {height}, qIds: [{', '.join(query_counts)}]")
 
                 await new_reports_q.put(dict(reports_collections))
                 reports_collections.clear()
@@ -627,7 +624,7 @@ async def inspect_aggregate_report(
     if query is None:
         logger.error(f"Unable to parse query data for aggregate report query id: {query_id}")
         return None
-        
+
     feed = await get_feed(query_id, query, logger)
     if feed is None:
         logger.error(f"Unable to get feed for aggregate report query id: {query_id}")
