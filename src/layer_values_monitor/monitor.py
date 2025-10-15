@@ -1057,7 +1057,10 @@ def is_disputable(
         return percent_diff >= alert_threshold, percent_diff >= dispute_threshold, percent_diff
 
     if metric.lower() == "equality":
-        logger.info(f"checking equality of values, reported value: {reported_value}, trusted value: {trusted_value}")
+        # Convert bytes to hex for readable logs
+        reported_hex = reported_value.hex() if isinstance(reported_value, bytes) else reported_value
+        trusted_hex = trusted_value.hex() if isinstance(trusted_value, bytes) else trusted_value
+        logger.info(f"checking equality of values, reported value: {reported_hex}, trusted value: {trusted_hex}")
 
         # Handle None values for thresholds
         if alert_threshold is None:
@@ -1124,14 +1127,46 @@ async def inspect_evm_call_reports(
     metrics: the metrics object for the query id
     logger: the logger object
     """
+    # Get Web3 connection for the target chain
+    from layer_values_monitor.evm_call import get_web3_connection
+    
+    chain_id = feed.query.chainId
+    logger.info(f"EVMCall handler - inspecting {len(reports)} report(s) for chain_id: {chain_id}, query_id: {query_id}")
+    
+    w3 = get_web3_connection(chain_id)
+    if w3 is None:
+        logger.error(f"Failed to get Web3 connection for chain_id {chain_id}")
+        return None
+    
+    logger.info(f"EVMCall handler - successfully connected to chain_id: {chain_id}")
+    
     for r in reports:
-        trusted_value = await get_evm_call_trusted_value(r.value, feed)
+        # Decode the reported value from hex to get (result_bytes, timestamp) tuple
+        try:
+            logger.info(f"EVMCall report decoded - chain_id: {chain_id}, contract: {feed.query.contractAddress}, value: {r.value}")
+            reported_value = feed.query.value_type.decode(bytes.fromhex(r.value))
+        except Exception as e:
+            logger.error(f"Failed to decode EVMCall reported value for chain_id {chain_id}: {e}")
+            continue
+
+        trusted_value = await get_evm_call_trusted_value(reported_value, feed, w3, chain_id)
+        
         if trusted_value is None:
             logger.error(f"unable to fetch trusted value for query id: {query_id}")
             continue
-        # For EVMCall, pass feed.query if available
-        query = feed.query if feed else None
-        await inspect(r, r.value, trusted_value, disputes_q, metrics, logger, query=query)
+        
+        # Decode the reported value from abi.encode(value) to get the raw value
+        # EVMCall format: reporters submit abi.encode(abi.encode(value), timestamp)
+        # reported_value[0] is abi.encode(value), we need to decode it to get the raw value
+        from eth_abi import decode
+        try:
+            # Decode as dynamic bytes
+            decoded_reported = decode(['bytes'], reported_value[0])[0]
+        except Exception as e:
+            logger.error(f"Failed to decode reported value for chain_id {chain_id}: {e}")
+            continue
+        
+        await inspect(r, decoded_reported, trusted_value, disputes_q, metrics, logger)
     return None
 
 

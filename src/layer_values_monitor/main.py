@@ -236,6 +236,7 @@ async def start() -> None:
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
     logger.info("💡 Message queues initialized")
     cfg = TelliotConfig()
+    logger.info(f"💡 TelliotConfig initialized")
     cfg.main.chain_id = 1
 
     # Height tracker for missed block detection
