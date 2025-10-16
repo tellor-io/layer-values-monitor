@@ -63,8 +63,8 @@ def format_difference(diff: float, metric: str) -> str:
 def format_values(reported: Any, trusted: Any) -> str:
     """Format reported and trusted values for display."""
     if isinstance(reported, dict):
-        reported_display = "\n".join([f"  - {k}: {v}" for k, v in reported.items()])
-        trusted_display = "\n".join([f"  - {k}: {v}" for k, v in trusted.items()])
+        reported_display = "\n".join([f"  {k}: {v}" for k, v in reported.items()])
+        trusted_display = "\n".join([f"  {k}: {v}" for k, v in trusted.items()])
         return f"**Reported:**\n{reported_display}\n**Trusted:**\n{trusted_display}"
     return f"**Reported:** {reported}\n**Trusted:** {trusted}"
 
@@ -76,13 +76,32 @@ def build_alert_message(
     reporter: str,
     power: str,
     tx_hash: str,
+    query_type: str = None,
 ) -> str:
     """Build the formatted Discord alert message."""
-    return (
-        f"**Asset:** {query_info}\n"
-        f"{value_display}\n"
-        f"**Difference:** {diff_str}\n"
-        f"**Reporter:** {reporter}\n"
-        f"**Power:** {power}\n"
+    # Determine if this is a spot price query
+    is_spot_price = query_type == "SpotPrice" or "/" in query_info
+    
+    # Build the message components
+    components = []
+    
+    # Add Asset field only for spot price queries
+    if is_spot_price:
+        components.append(f"**Asset:** {query_info}")
+    
+    # Add QueryType field
+    if query_type:
+        components.append(f"**QueryType:** {query_type}")
+    # else:
+    #     components.append(f"**QueryType Not Set in Config:** {query_info}")
+    
+    # Add the rest of the fields
+    components.extend([
+        value_display,
+        f"**Difference:** {diff_str}",
+        f"**Reporter:** {reporter}",
+        f"**Power:** {power}",
         f"**Tx Hash:** {tx_hash}"
-    )
+    ])
+    
+    return "\n".join(components)

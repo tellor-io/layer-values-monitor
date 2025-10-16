@@ -132,9 +132,9 @@ async def get_trb_bridge_trusted_value(
         if rpc_url:
             # Use provided RPC endpoint
             w3 = Web3(Web3.HTTPProvider(rpc_url))
-        elif os.getenv("ETHEREUM_RPC_URL"):
+        elif os.getenv("BRIDGE_CHAIN_RPC_URL"):
             # Use RPC endpoint from environment
-            w3 = Web3(Web3.HTTPProvider(os.getenv("ETHEREUM_RPC_URL")))
+            w3 = Web3(Web3.HTTPProvider(os.getenv("BRIDGE_CHAIN_RPC_URL")))
         else:
             # Fall back to TelliotConfig
             cfg = TelliotConfig()
