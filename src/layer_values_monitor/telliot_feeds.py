@@ -98,21 +98,21 @@ async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
 
 def extract_query_info(query: AbiQuery | JsonQuery | None, query_type: str | None = None) -> str:
     """Extract human-readable query information (e.g., asset pair) for discord messages.
-    
+
     Args:
         query: Query object from telliot-feeds
         query_type: Optional query type string from the report
-        
+
     Returns:
         str: Formatted query info (e.g., "BTC/USD", "EVMCall", "TRBBridge", etc.)
 
     """
     if query is None:
         return query_type or "Unknown"
-    
+
     # Try to extract asset/currency for SpotPrice queries
-    if hasattr(query, 'asset') and hasattr(query, 'currency'):
+    if hasattr(query, "asset") and hasattr(query, "currency"):
         return f"{query.asset}/{query.currency}"
-    
+
     # Fall back to query type
-    return getattr(query, 'type', query_type or "Unknown")
+    return getattr(query, "type", query_type or "Unknown")

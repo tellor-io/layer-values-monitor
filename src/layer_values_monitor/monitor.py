@@ -27,7 +27,7 @@ from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
 )
-from layer_values_monitor.evm_call import get_evm_call_trusted_value
+from layer_values_monitor.evm_call import get_evm_call_trusted_value, get_web3_connection
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.threshold_config import ThresholdConfig
@@ -36,6 +36,7 @@ from layer_values_monitor.utils import add_to_table, get_metric, remove_0x_prefi
 
 import aiohttp
 import websockets
+from eth_abi import decode
 from telliot_feeds.datafeed import DataFeed
 
 
@@ -1128,44 +1129,43 @@ async def inspect_evm_call_reports(
     logger: the logger object
     """
     # Get Web3 connection for the target chain
-    from layer_values_monitor.evm_call import get_web3_connection
-    
     chain_id = feed.query.chainId
     logger.info(f"EVMCall handler - inspecting {len(reports)} report(s) for chain_id: {chain_id}, query_id: {query_id}")
-    
+
     w3 = get_web3_connection(chain_id)
     if w3 is None:
         logger.error(f"Failed to get Web3 connection for chain_id {chain_id}")
         return None
-    
+
     logger.info(f"EVMCall handler - successfully connected to chain_id: {chain_id}")
-    
+
     for r in reports:
         # Decode the reported value from hex to get (result_bytes, timestamp) tuple
         try:
-            logger.info(f"EVMCall report decoded - chain_id: {chain_id}, contract: {feed.query.contractAddress}, value: {r.value}")
+            logger.info(
+                f"EVMCall report decoded - chain_id: {chain_id}, contract: {feed.query.contractAddress}, value: {r.value}"
+            )
             reported_value = feed.query.value_type.decode(bytes.fromhex(r.value))
         except Exception as e:
             logger.error(f"Failed to decode EVMCall reported value for chain_id {chain_id}: {e}")
             continue
 
         trusted_value = await get_evm_call_trusted_value(reported_value, feed, w3, chain_id)
-        
+
         if trusted_value is None:
             logger.error(f"unable to fetch trusted value for query id: {query_id}")
             continue
-        
+
         # Decode the reported value from abi.encode(value) to get the raw value
         # EVMCall format: reporters submit abi.encode(abi.encode(value), timestamp)
         # reported_value[0] is abi.encode(value), we need to decode it to get the raw value
-        from eth_abi import decode
         try:
             # Decode as dynamic bytes
-            decoded_reported = decode(['bytes'], reported_value[0])[0]
+            decoded_reported = decode(["bytes"], reported_value[0])[0]
         except Exception as e:
             logger.error(f"Failed to decode reported value for chain_id {chain_id}: {e}")
             continue
-        
+
         await inspect(r, decoded_reported, trusted_value, disputes_q, metrics, logger)
     return None
 
@@ -1191,7 +1191,7 @@ async def inspect_trbbridge_reports(
     # Get TRBBridge configuration from environment variables, default to mainnet if not set
     contract_address = os.getenv("TRBBRIDGE_CONTRACT_ADDRESS")
     chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
-    rpc_url = os.getenv("ETHEREUM_RPC_URL")
+    rpc_url = os.getenv("BRIDGE_CHAIN_RPC_URL")
 
     if not contract_address:
         logger.error("TRBBRIDGE_CONTRACT_ADDRESS environment variable is not set")
@@ -1199,7 +1199,6 @@ async def inspect_trbbridge_reports(
 
     logger.info(f"TRBBridge contract address: {contract_address}")
     logger.info(f"chain ID: {chain_id}")
-    logger.info(f"rpc url: {rpc_url}")
 
     for r in reports:
         # Decode the reported value
@@ -1286,11 +1285,11 @@ async def inspect(
     if alertable:
         from layer_values_monitor.discord import build_alert_message, format_difference, format_values
         from layer_values_monitor.telliot_feeds import extract_query_info
-        
+
         query_info = extract_query_info(query, query_type=report.query_type)
         diff_str = format_difference(diff, metrics.metric)
         value_display = format_values(reported_value, trusted_value)
-        
+
         msg = build_alert_message(
             query_info=query_info,
             value_display=value_display,
@@ -1298,8 +1297,9 @@ async def inspect(
             reporter=report.reporter,
             power=report.power,
             tx_hash=report.tx_hash,
+            query_type=report.query_type,
         )
-        
+
         logger.info(f"Alertable value detected:\n{msg}")
         generic_alert(msg)
 
@@ -1311,7 +1311,7 @@ async def inspect(
 
     # Check if we should auto-dispute based on threshold configuration
     if disputable:
-        logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
+        logger.info(f"disputable: true, diff: {diff}")
 
         # For equality metrics, determine dispute level based on which threshold is set to 1.0
         if metrics.metric.lower() == "equality":
@@ -1346,7 +1346,8 @@ async def inspect(
 
     # Submit dispute if needed
     if should_dispute and dispute_category is not None:
-        logger.info(f"found a disputable value. trusted value: {trusted_value}, reported value: {reported_value}")
+        logger.info(f"Getting ready to send dispute tx... trusted value: {trusted_value}, reported value: {reported_value}")
         fee = determine_dispute_fee(dispute_category, int(report.power))
+        logger.info(f"Fee: {fee.__str__() + DENOM}")
         await disputes_q.put(Msg(report.reporter, report.query_id, report.meta_id, dispute_category, fee.__str__() + DENOM))
     add_to_table(display)

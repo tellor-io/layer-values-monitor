@@ -179,7 +179,7 @@ async def start() -> None:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
 
     # Validate Ethereum RPC URL
-    ethereum_rpc_url = os.getenv("ETHEREUM_RPC_URL")
+    ethereum_rpc_url = os.getenv("BRIDGE_CHAIN_RPC_URL")
     if ethereum_rpc_url:
         logger.info("Validating Ethereum RPC connection...")
         is_valid, error_msg = validate_rpc_url(ethereum_rpc_url, "Ethereum")
@@ -235,9 +235,12 @@ async def start() -> None:
     new_reports_queue = asyncio.Queue(maxsize=200)  # Batched new reports
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
     logger.info("💡 Message queues initialized")
+
+    # TelliotConfig is used for non-EVMCall query types (SpotPrice, etc.)
+    # EVMCall uses direct Web3 connections via get_web3_connection()
     cfg = TelliotConfig()
-    logger.info(f"💡 TelliotConfig initialized")
     cfg.main.chain_id = 1
+    logger.info("💡 TelliotConfig initialized for standard query types")
 
     # Height tracker for missed block detection
     max_catchup_blocks = int(os.getenv("MAX_CATCHUP_BLOCKS", "15"))

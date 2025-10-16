@@ -1,6 +1,7 @@
 """Trusted value for EVMCall query type."""
 
 import math
+import os
 from typing import Any
 
 from layer_values_monitor.logger import logger
@@ -11,10 +12,13 @@ from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
 from web3.middleware import ExtraDataToPOAMiddleware
 
+# Cache Web3 connections to avoid recreating them
+_web3_cache: dict[int, Web3] = {}
+
 
 async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed, w3: Web3, chain_id: int) -> HexBytes:
     """Get trusted value for EVMCall query type.
-    
+
     reported_val is already decoded as (encoded_value, timestamp) tuple by monitor.py
     w3 is a working Web3 connection to the target chain
     chain_id is the target chain ID for logging/verification
@@ -22,47 +26,39 @@ async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed, w3: Web3
     if not isinstance(reported_val, tuple):
         logger.warning(f"Expected tuple for EVMCall reported value, got {type(reported_val)}")
         return None
-    
+
     if len(reported_val) != 2:
         logger.warning(f"Expected tuple of length 2(bytes, timestamp), got {len(reported_val)}")
         return None
-    
-    encoded_value = reported_val[0]
+
     block_timestamp = reported_val[1]
-    
-    logger.info(f"EVMCall get_trusted_value - chain_id: {chain_id}, timestamp: {block_timestamp}, contract: {feed.query.contractAddress}")
+    logger.info(
+        f"EVMCall get_trusted_value - chain_id: {chain_id}, timestamp: {block_timestamp}, "
+        f"contract: {feed.query.contractAddress}"
+    )
 
     # Get block number using the provided Web3 connection
     block_number = get_block_number_at_timestamp(w3, block_timestamp, chain_id)
     if block_number is None:
         logger.error(f"Failed to get block number for timestamp {block_timestamp} on chain_id {chain_id}")
         return None
-    
+
     logger.info(f"found block: {block_number} for timestamp: {block_timestamp}")
-    
+
     # Make the contract call at the specific block
     try:
-        # Verify we're on the right chain
-        actual_chain_id = w3.eth.chain_id
-        logger.info(f"EVMCall VERIFICATION - expected chain_id: {chain_id}, w3.eth.chain_id: {actual_chain_id}")
-        if actual_chain_id != chain_id:
-            logger.error(f"CHAIN MISMATCH! Expected {chain_id} but Web3 is connected to {actual_chain_id}")
-        
-        # Convert address to checksum format (web3.py requirement)
         contract_address = Web3.to_checksum_address(feed.query.contractAddress)
-        
-        logger.info(f"EVMCall eth_call (chain_id: {chain_id}) - contract: {contract_address}, block: {block_number}, calldata: {feed.query.calldata.hex()}")
-        
-        result = w3.eth.call(
-            {
-                'to': contract_address,
-                'data': feed.query.calldata
-            },
-            block_identifier=block_number
+        logger.info(
+            f"EVMCall eth_call (chain_id: {chain_id}) - contract: {contract_address}, "
+            f"block: {block_number}, calldata: {feed.query.calldata.hex()}"
         )
-        
-        logger.info(f"eth_call result (chain_id: {chain_id}): {result.hex() if result else 'empty'}, length: {len(result)} bytes")
-        
+
+        result = w3.eth.call({"to": contract_address, "data": feed.query.calldata}, block_identifier=block_number)
+
+        logger.info(
+            f"eth_call result (chain_id: {chain_id}): {result.hex() if result else 'empty'}, length: {len(result)} bytes"
+        )
+
         # Return the raw eth_call result
         # monitor.py will decode the reported value to compare with this
         return HexBytes(result)
@@ -72,33 +68,44 @@ async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed, w3: Web3
 
 
 def get_web3_connection(chain_id: int) -> Web3 | None:
-    """Get Web3 connection for a given chain_id using INFURA_API_KEY from env.
-    
-    Returns Web3 instance or None on error.
+    """Get cached Web3 connection for a given chain_id using INFURA_API_KEY from env.
+
+    Returns cached Web3 instance or None on error.
     """
-    import os
-    
-    # Get Infura API key from environment
-    infura_key = os.getenv("INFURA_API_KEY")
-    if not infura_key:
-        logger.error(f"INFURA_API_KEY not found in environment variables for chain_id {chain_id}")
-        return None
-    
-    # Construct RPC URL based on chain_id
-    rpc_urls = {
-        1: f"https://mainnet.infura.io/v3/{infura_key}",
-        11155111: f"https://sepolia.infura.io/v3/{infura_key}",
-    }
-    
-    rpc_url = rpc_urls.get(chain_id)
+    # Return cached connection if available
+    if chain_id in _web3_cache:
+        return _web3_cache[chain_id]
+
+    # Check for custom RPC URL env var first (format: EVMCALL_RPC_URL_<CHAIN_ID>)
+    custom_rpc_key = f"EVMCALL_RPC_URL_{chain_id}"
+    rpc_url = os.getenv(custom_rpc_key)
+
     if not rpc_url:
-        logger.error(f"No RPC URL configured for chain_id {chain_id}. Supported: {list(rpc_urls.keys())}")
-        return None
-    
+        # Fallback to Infura for supported chains
+        infura_key = os.getenv("INFURA_API_KEY")
+        if not infura_key:
+            logger.error(f"Neither {custom_rpc_key} nor INFURA_API_KEY found in environment for chain_id {chain_id}")
+            return None
+
+        # Construct RPC URL based on chain_id
+        rpc_urls = {
+            1: f"https://mainnet.infura.io/v3/{infura_key}",
+            11155111: f"https://sepolia.infura.io/v3/{infura_key}",
+        }
+
+        rpc_url = rpc_urls.get(chain_id)
+        if not rpc_url:
+            logger.error(
+                f"No RPC URL configured for chain_id {chain_id}. Set {custom_rpc_key} or "
+                f"use supported chains: {list(rpc_urls.keys())}"
+            )
+            return None
+
     try:
         provider = Web3.HTTPProvider(rpc_url)
         w3 = Web3(provider)
-        logger.info(f"successfully created Web3 instance for chain_id: {chain_id}")
+        _web3_cache[chain_id] = w3
+        logger.info(f"Created and cached Web3 instance for chain_id: {chain_id}")
         return w3
     except Exception as e:
         logger.error(f"Unable to connect to RPC for chain_id {chain_id}: {e}")
@@ -107,7 +114,7 @@ def get_web3_connection(chain_id: int) -> Web3 | None:
 
 def get_block_number_at_timestamp(w3: Web3, timestamp: int, chain_id: int) -> int | None:
     """Get block number for a given timestamp using binary search.
-    
+
     Returns block number or None on error.
     """
     current_block = w3.eth.block_number

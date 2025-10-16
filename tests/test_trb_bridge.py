@@ -115,9 +115,9 @@ class TestTRBBridgeDecoding:
         import os
 
         # Skip test if no RPC URL is configured
-        rpc_url = os.getenv("ETHEREUM_RPC_URL")
+        rpc_url = os.getenv("BRIDGE_CHAIN_RPC_URL")
         if not rpc_url or "{" in rpc_url:  # Check for placeholder like {INFURA_API_KEY}
-            pytest.skip("Test requires ETHEREUM_RPC_URL environment variable with valid RPC endpoint")
+            pytest.skip("Test requires BRIDGE_CHAIN_RPC_URL environment variable with valid RPC endpoint")
 
         query_data = (
             "0x0000000000000000000000000000000000000000000000000000000000000000"
