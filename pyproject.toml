@@ -15,7 +15,7 @@ dependencies = [
     "pandas>=2.2.3",
     "python-dotenv>=1.0.1",
     "ruff>=0.13.3",
-    "telliot-feeds>=0.4.0",
+    "telliot-feeds==0.4.11",
     "websockets==13.1",
 ]
 [project.scripts]
@@ -59,6 +59,12 @@ ignore = [
     "ANN002",
     "ANN003"
 ]
+
+[tool.uv]
+override-dependencies = [
+    "aiohttp>=3.11.15,<4.0.0",
+]
+prerelease = "allow"
 
 [dependency-groups]
 dev = [
