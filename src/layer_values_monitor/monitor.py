@@ -474,77 +474,75 @@ async def inspect_reports(
     query_data = reports[0].query_data
     query_id = reports[0].query_id
     query_type = reports[0].query_type
-    # First try specific query ID, then query type configuration
-    _config: dict[str, str] = config_watcher.get_config().get(query_id.lower())
-    if _config is None:
-        logger.info("no config by queryID found, getting config by query type")
-        _config = config_watcher.get_config().get(query_type.lower())
-
-    if _config is None:
-        # use globals if no specific config for query id or query type
-        logger.info(f"no config found, using global metrics for query id: {query_id}, query type: {query_type}")
-        metrics = get_metric(
-            query_type,
-            logger,
-            threshold_config,
-        )
+    
+    logger.info(f"CONFIG DEBUG: inspect_reports called for query_id: {query_id[:16]}..., query_type: {query_type}")
+    
+    # Check if query type is supported
+    logger.info(f"CONFIG DEBUG: Checking if query type '{query_type}' is supported...")
+    if not config_watcher.is_supported_query_type(query_type):
+        logger.warning(f"CONFIG DEBUG: Query type '{query_type}' is NOT supported")
+        # Extract asset pair if possible for better logging
+        asset_pair = "Unknown"
+        try:
+            query_obj = get_query(query_data)
+            if query_obj and hasattr(query_obj, 'asset') and hasattr(query_obj, 'currency'):
+                asset_pair = f"{query_obj.asset}/{query_obj.currency}"
+        except Exception:
+            pass
         
-        # Check if this is a foreign query (not in configs AND not a supported global query type)
-        is_foreign_query = False
-        if metrics is None:
-            # This is definitely a foreign query - not in our configs and not a supported global query type
-            is_foreign_query = True
-            logger.info(f"Foreign query detected (unsupported global type) - query id: {query_id}, query type: {query_type}")
-        else:
-            # Even if we have global metrics, we should check if this specific query ID is known to telliot
-            # This handles cases like SpotPrice queries that aren't in our configs but are supported globally
-            # First check if the query ID is in the catalog (this is safe)
-            from telliot_feeds.queries.query_catalog import query_catalog
-            catalog_entry = query_catalog.find(query_id=query_id)
-            if len(catalog_entry) == 0:
-                is_foreign_query = True
-                logger.info(f"Foreign query detected (not in telliot catalog) - query id: {query_id}, query type: {query_type}")
-        
-        if is_foreign_query:
-            # Extract asset pair if possible for better logging
-            asset_pair = "Unknown"
-            try:
-                query_obj = get_query(query_data)
-                if query_obj and hasattr(query_obj, 'asset') and hasattr(query_obj, 'currency'):
-                    asset_pair = f"{query_obj.asset}/{query_obj.currency}"
-            except Exception:
-                pass
-            
-            # Send Discord alert for foreign query
-            await send_foreign_query_alert(query_id, query_type, asset_pair, reports[0], logger)
-            
-            # Use 0 thresholds for all alert/dispute/pause thresholds
-            logger.info(f"no config found for {asset_pair} -- using 0 for all config thresholds")
-            metrics = Metrics(
-                metric="percentage",  # Default to percentage for foreign queries
-                alert_threshold=0.0,
-                warning_threshold=0.0,
-                minor_threshold=0.0,
-                major_threshold=0.0,
-                pause_threshold=0.0,
-            )
-            
-            # For foreign queries, we should NOT proceed with telliot-feeds processing
-            # Since we don't have a trusted value, there's no point in inspection
-            logger.info(f"Skipping inspection for foreign query {query_id} - no trusted value available")
-            return None
-        else:
-            logger.debug(f"Using global metrics: alert_threshold={metrics.alert_threshold}")
+        # Send Discord alert for unknown query type
+        await send_unknown_query_type_alert(query_type, query_id, asset_pair, reports[0], logger)
+        return None
     else:
+        logger.info(f"CONFIG DEBUG: Query type '{query_type}' IS supported")
+
+    # Get metrics configuration using new method
+    logger.info(f"CONFIG DEBUG: Getting metrics for query_id: {query_id[:16]}..., query_type: {query_type}")
+    metrics = config_watcher.get_metrics_for_query(query_id, query_type)
+    if metrics is None:
+        logger.error(f"CONFIG DEBUG: Unable to get metrics for query {query_id[:16]}... of type {query_type}")
+        return None
+    else:
+        logger.info(f"CONFIG DEBUG: Successfully got metrics: {metrics}")
+
+    # Check if this is a foreign query (supported query type but unknown query ID)
+    is_foreign_query = False
+    from telliot_feeds.queries.query_catalog import query_catalog
+    catalog_entry = query_catalog.find(query_id=query_id)
+    if len(catalog_entry) == 0:
+        is_foreign_query = True
+        logger.info(f"CONFIG DEBUG: Foreign query detected (not in telliot catalog) - query id: {query_id}, query type: {query_type}")
+    else:
+        logger.info(f"CONFIG DEBUG: Query found in telliot catalog - not a foreign query")
+    
+    if is_foreign_query:
+        logger.info(f"CONFIG DEBUG: Processing foreign query...")
+        # Extract asset pair if possible for better logging
+        asset_pair = "Unknown"
+        try:
+            query_obj = get_query(query_data)
+            if query_obj and hasattr(query_obj, 'asset') and hasattr(query_obj, 'currency'):
+                asset_pair = f"{query_obj.asset}/{query_obj.currency}"
+        except Exception:
+            pass
+        
+        # Send Discord alert for foreign query
+        await send_foreign_query_alert(query_id, query_type, asset_pair, reports[0], logger)
+        
+        # Use 0 thresholds for all alert/dispute/pause thresholds
+        logger.info(f"CONFIG DEBUG: Setting 0 thresholds for foreign query {asset_pair}")
         metrics = Metrics(
-            metric=_config.get("metric"),
-            alert_threshold=_config.get("alert_threshold"),
-            warning_threshold=_config.get("warning_threshold"),
-            minor_threshold=_config.get("minor_threshold"),
-            major_threshold=_config.get("major_threshold"),
-            pause_threshold=_config.get("pause_threshold"),
+            metric="percentage",  # Default to percentage for foreign queries
+            alert_threshold=0.0,
+            warning_threshold=0.0,
+            minor_threshold=0.0,
+            major_threshold=0.0,
+            pause_threshold=0.0,
         )
-        # logger.debug(f"Using config metrics: alert_threshold={metrics.alert_threshold}")
+        
+        # Skip inspection for foreign queries - no trusted value available
+        logger.info(f"CONFIG DEBUG: Skipping inspection for foreign query {query_id} - no trusted value available")
+        return None
 
         # For equality metrics, pause_threshold is not applicable and can be None
         required_fields = [
@@ -1311,6 +1309,38 @@ async def send_foreign_query_alert(
         
     except Exception as e:
         logger.error(f"Failed to send foreign query alert: {e}")
+
+
+async def send_unknown_query_type_alert(
+    query_type: str, 
+    query_id: str, 
+    asset_pair: str, 
+    report: NewReport, 
+    logger: logging.Logger
+) -> None:
+    """Send Discord alert for unknown query types."""
+    try:
+        monitor_name = os.getenv("MONITOR_NAME", "LVM")
+        reported_value = "Unknown"
+        try:
+            query_obj = get_query(report.query_data)
+            if query_obj:
+                reported_value = query_obj.value_type.decode(bytes.fromhex(report.value))
+        except Exception:
+            reported_value = report.value
+        
+        alert_msg = f"**{monitor_name}** does not support query type: {query_type}\n"
+        alert_msg += f"**QueryId:** {query_id}\n"
+        if asset_pair != "Unknown":
+            alert_msg += f"**Asset pair:** {asset_pair}\n"
+        alert_msg += f"**Value:** {reported_value}\n"
+        alert_msg += f"**Reporter:** {report.reporter}\n"
+        alert_msg += f"**Tx Hash:** {report.tx_hash}"
+        
+        logger.info(f"Unknown query type alert:\n{alert_msg}")
+        generic_alert(alert_msg)
+    except Exception as e:
+        logger.error(f"Failed to send unknown query type alert: {e}")
 
 
 async def inspect_trbbridge_reports(
