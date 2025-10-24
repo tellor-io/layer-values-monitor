@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import time
 
@@ -204,6 +205,17 @@ async def process_disputes(
                 if dispute is None:
                     continue
                 logger.warning(f"⚠️ DISPUTE SKIPPED - {key_name} Keyring validation failed, no dispute will be sent for query {dispute.query_id[:16]}... (reporter: {dispute.reporter})")
+                # Send Discord alert for skipped dispute due to keyring issues
+                from layer_values_monitor.discord import generic_alert
+                monitor_name = os.getenv("MONITOR_NAME", "LVM")
+                skipped_msg = f"**{monitor_name}** ⚠️ **DISPUTE SKIPPED - KEYRING ISSUE**\n"
+                skipped_msg += f"**Query ID:** {dispute.query_id}\n"
+                skipped_msg += f"**Reporter:** {dispute.reporter}\n"
+                skipped_msg += f"**Category:** {dispute.category}\n"
+                skipped_msg += f"**Fee:** {dispute.fee}\n"
+                skipped_msg += f"**Reason:** Keyring validation failed - check binary path and key configuration"
+                logger.warning(f"Dispute skipped alert:\n{skipped_msg}")
+                generic_alert(skipped_msg)
             except Exception as e:
                 logger.error(f"❌ Error in disabled dispute processor: {e}", exc_info=True)
         return
@@ -239,8 +251,30 @@ async def process_disputes(
             )
             if result:
                 logger.info(f"✅ Dispute transaction successful: {result}")
+                # Send Discord alert for successful dispute
+                from layer_values_monitor.discord import generic_alert
+                monitor_name = os.getenv("MONITOR_NAME", "LVM")
+                success_msg = f"**{monitor_name}** ✅ **DISPUTE SUBMITTED SUCCESSFULLY**\n"
+                success_msg += f"**Query ID:** {dispute.query_id}\n"
+                success_msg += f"**Reporter:** {dispute.reporter}\n"
+                success_msg += f"**Category:** {dispute.category}\n"
+                success_msg += f"**Fee:** {dispute.fee}\n"
+                success_msg += f"**Dispute Tx Hash:** {result}"
+                logger.info(f"Dispute success alert:\n{success_msg}")
+                generic_alert(success_msg)
             else:
                 logger.warning(f"⚠️ Dispute transaction failed for query {dispute.query_id}")
+                # Send Discord alert for failed dispute
+                from layer_values_monitor.discord import generic_alert
+                monitor_name = os.getenv("MONITOR_NAME", "LVM")
+                failure_msg = f"**{monitor_name}** ❌ **DISPUTE SUBMISSION FAILED**\n"
+                failure_msg += f"**Query ID:** {dispute.query_id}\n"
+                failure_msg += f"**Reporter:** {dispute.reporter}\n"
+                failure_msg += f"**Category:** {dispute.category}\n"
+                failure_msg += f"**Fee:** {dispute.fee}\n"
+                failure_msg += f"**Reason:** Transaction failed - check logs for details"
+                logger.warning(f"Dispute failure alert:\n{failure_msg}")
+                generic_alert(failure_msg)
         except Exception as e:
             logger.error(f"❌ Error processing dispute: {e}", exc_info=True)
             # Continue processing other disputes even if one fails
