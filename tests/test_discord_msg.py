@@ -102,6 +102,8 @@ def test_build_alert_message_spot_price():
         power="1000",
         tx_hash="CC0CD8EB401B4FCBCC77A67DAD43BF886FFD301B87B58C1782459B814C2BFA07",
         query_type="SpotPrice",
+        disputer_info="layer1disputer123456789abcdefghijklmnop, alice",
+        level="warning",
     )
 
     print("\n" + "=" * 60)
@@ -113,12 +115,14 @@ def test_build_alert_message_spot_price():
     # Spot price should have both Asset and QueryType fields
     assert "**Asset:** SAGA/USD" in msg
     assert "**QueryType:** SpotPrice" in msg
+    assert "**Level:** warning" in msg
     assert "**Reported:** 7.44" in msg
     assert "**Trusted:** 6.827876242343322" in msg
     assert "**Difference:** 8.96%" in msg
     assert "layer1abcdefghijklmnopqrstuvwxyz123456" in msg
     assert "**Power:** 1000" in msg
     assert "CC0CD8EB401B4FCBCC77A67DAD43BF886FFD301B87B58C1782459B814C2BFA07" in msg
+    assert "**Disputer:** layer1disputer123456789abcdefghijklmnop, alice" in msg
 
 
 def test_build_alert_message_btc_usd():
@@ -199,6 +203,8 @@ def test_build_alert_message_trbbridge():
         power="3000",
         tx_hash="ABC123456789DEF123456789ABC123456789DEF123456789ABC123456789DEF12",
         query_type="TRBBridge",
+        disputer_info="layer1disputer123456789abcdefghijklmnop, alice",
+        level="major",
     )
 
     print("\n" + "=" * 60)
@@ -210,12 +216,14 @@ def test_build_alert_message_trbbridge():
     # TRBBridge should not have Asset field, only QueryType
     assert "**Asset:**" not in msg
     assert "**QueryType:** TRBBridge" in msg
+    assert "**Level:** major" in msg
     assert "**Reported:**" in msg
     assert "**Trusted:**" in msg
     assert "eth_address: 0x1a2b3c4d5e6f7890abcdef1234567890abcdef12" in msg
     assert "amount: 1000000000000000000" in msg
     assert "amount: 2000000000000000000" in msg
     assert "**Difference:** 1.0" in msg
+    assert "**Disputer:** layer1disputer123456789abcdefghijklmnop, alice" in msg
 
 
 def test_build_alert_message_short_reporter():
@@ -315,3 +323,65 @@ def test_complete_workflow_trbbridge():
     assert "**QueryType:** TRBBridge" in msg
     assert "amount: 1000000000000000000" in msg
     assert "amount: 2000000000000000000" in msg
+
+
+def test_build_alert_message_without_level():
+    """Test building alert message without level info."""
+    msg = build_alert_message(
+        query_info="ETH/USD",
+        value_display="**Reported:** 3850.50\n**Trusted:** 3500.00",
+        diff_str="10.01%",
+        reporter="layer1short",
+        power="100",
+        tx_hash="ABC123",
+        query_type="SpotPrice",
+        disputer_info=None,
+        level=None,
+    )
+
+    # Should not have Level field when level is None
+    assert "**Level:**" not in msg
+    assert "**Asset:** ETH/USD" in msg
+    assert "**QueryType:** SpotPrice" in msg
+
+
+def test_build_alert_message_warning_level():
+    """Test building alert message for warning level (no disputer info)."""
+    msg = build_alert_message(
+        query_info="ETH/USD",
+        value_display="**Reported:** 3850.50\n**Trusted:** 3500.00",
+        diff_str="5.00%",
+        reporter="layer1short",
+        power="100",
+        tx_hash="ABC123",
+        query_type="SpotPrice",
+        disputer_info=None,
+        level="warning",
+    )
+
+    # Warning level should not have Disputer field
+    assert "**Level:** warning" in msg
+    assert "**Disputer:**" not in msg
+    assert "**Asset:** ETH/USD" in msg
+    assert "**QueryType:** SpotPrice" in msg
+
+
+def test_build_alert_message_improperly_configured():
+    """Test building alert message with improperly configured keyring."""
+    msg = build_alert_message(
+        query_info="ETH/USD",
+        value_display="**Reported:** 3850.50\n**Trusted:** 3500.00",
+        diff_str="15.00%",
+        reporter="layer1short",
+        power="100",
+        tx_hash="ABC123",
+        query_type="SpotPrice",
+        disputer_info="alice improperly configured, no dispute sent",
+        level="minor",
+    )
+
+    # Should show improperly configured message
+    assert "**Level:** minor" in msg
+    assert "**Disputer:** alice improperly configured, no dispute sent" in msg
+    assert "**Asset:** ETH/USD" in msg
+    assert "**QueryType:** SpotPrice" in msg

@@ -10,6 +10,75 @@ from layer_values_monitor.custom_types import DisputeCategory, Msg
 from layer_values_monitor.logger import logger
 
 
+def get_disputer_address(binary_path: str, key_name: str, kb: str, kdir: str) -> str | None:
+    """Get the disputer address for the given key name."""
+    try:
+        cmd = [
+            binary_path,
+            "keys",
+            "show",
+            key_name,
+            "--keyring-backend",
+            kb,
+            "--keyring-dir",
+            kdir,
+            "--address",
+            "--output",
+            "json",
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        if result.returncode != 0:
+            logger.error(f"Failed to get disputer address: {result.stderr}")
+            return None
+        
+        address_data = json.loads(result.stdout)
+        return address_data.get("address")
+        
+    except subprocess.TimeoutExpired:
+        logger.error("Getting disputer address timed out")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting disputer address: {e}")
+        return None
+
+
+def validate_keyring_config(binary_path: str, key_name: str, kb: str, kdir: str) -> bool:
+    """Validate that the key exists in the keyring before attempting disputes."""
+    try:
+        cmd = [
+            binary_path,
+            "keys",
+            "list",
+            "--keyring-backend",
+            kb,
+            "--keyring-dir",
+            kdir,
+            "--output",
+            "json",
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        if result.returncode != 0:
+            logger.error(f"Failed to list keys: {result.stderr}")
+            return False
+        
+        keys_data = json.loads(result.stdout)
+        key_names = [key.get("name", "") for key in keys_data]
+        
+        if key_name not in key_names:
+            logger.error(f"Key '{key_name}' not found in keyring. Available keys: {key_names}")
+            return False
+        
+        logger.info(f"✅ Key '{key_name}' found in keyring")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        logger.error("Keyring validation timed out")
+        return False
+    except Exception as e:
+        logger.error(f"Error validating keyring: {e}")
+        return False
+
+
 def propose_msg(
     binary_path: str,
     reporter: str,
@@ -59,7 +128,7 @@ def propose_msg(
 
     time.sleep(5)
     try:
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
         if result.returncode != 0:
             logger.error(f"Error calling dispute transaction in cli: {result.stderr}")
             return None
@@ -71,6 +140,9 @@ def propose_msg(
             return None
         logger.info(f"dispute msg executed successfully: {signed_tx['txhash']}")
         return signed_tx["txhash"]
+    except subprocess.TimeoutExpired:
+        logger.error(f"Dispute transaction timed out after 30 seconds. Command: {' '.join(cmd)}")
+        return None
     except Exception as e:
         logger.error(f"failed to execute dispute msg: {e.__str__()}")
         return None
@@ -119,32 +191,59 @@ async def process_disputes(
     logger: logging,
 ) -> None:
     """Process dispute messages from queue and submit them to the blockchain."""
+    logger.info(f"💡 Dispute processor started with key: {key_name}, keyring: {kb}, dir: {kdir}")
+    
+    # Validate keyring configuration before starting
+    if not validate_keyring_config(binary_path, key_name, kb, kdir):
+        logger.error("❌ Keyring validation failed. Auto-disputing will not work.")
+        # Keep the processor running but just log when disputes come in
+        while True:
+            try:
+                dispute: Msg = await disputes_q.get()
+                disputes_q.task_done()
+                if dispute is None:
+                    continue
+                logger.warning(f"⚠️ DISPUTE SKIPPED - {key_name} Keyring validation failed, no dispute will be sent for query {dispute.query_id[:16]}... (reporter: {dispute.reporter})")
+            except Exception as e:
+                logger.error(f"❌ Error in disabled dispute processor: {e}", exc_info=True)
+        return
+    
+    logger.info("✅ Dispute processing enabled - disputes will be submitted to blockchain")
+    
     while True:
-        dispute: Msg = await disputes_q.get()
-        disputes_q.task_done()
-        if dispute is None:
-            continue
-        time.sleep(2)
-        logger.info(
-            f"sending a dispute msg to layer:\n \
-                    Reporter: {dispute.reporter}\n \
-                    Query ID: {dispute.query_id} \
-                    "
-        )
-        _ = propose_msg(
-            binary_path=binary_path,
-            key_name=key_name,
-            chain_id=chain_id,
-            rpc=rpc,
-            kb=kb,
-            kdir=kdir,
-            reporter=dispute.reporter,
-            query_id=dispute.query_id,
-            meta_id=dispute.meta_id,
-            dispute_category=dispute.category,
-            fee=dispute.fee,
-            payfrom_bond=str(payfrom_bond),
-        )
+        try:
+            dispute: Msg = await disputes_q.get()
+            disputes_q.task_done()
+            if dispute is None:
+                continue
+            time.sleep(2)
+            logger.info(
+                f"sending a dispute msg to layer:\n \
+                        Reporter: {dispute.reporter}\n \
+                        Query ID: {dispute.query_id} \
+                        "
+            )
+            result = propose_msg(
+                binary_path=binary_path,
+                key_name=key_name,
+                chain_id=chain_id,
+                rpc=rpc,
+                kb=kb,
+                kdir=kdir,
+                reporter=dispute.reporter,
+                query_id=dispute.query_id,
+                meta_id=dispute.meta_id,
+                dispute_category=dispute.category,
+                fee=dispute.fee,
+                payfrom_bond=str(payfrom_bond),
+            )
+            if result:
+                logger.info(f"✅ Dispute transaction successful: {result}")
+            else:
+                logger.warning(f"⚠️ Dispute transaction failed for query {dispute.query_id}")
+        except Exception as e:
+            logger.error(f"❌ Error processing dispute: {e}", exc_info=True)
+            # Continue processing other disputes even if one fails
 
 
 if __name__ == "__main__":
