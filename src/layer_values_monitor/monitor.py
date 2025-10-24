@@ -284,12 +284,18 @@ async def raw_data_queue_handler(
     logger.info("Processing raw WebSocket data...")
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
-    # current height being collected for
-    current_height = 0
+    # Smart batching configuration
+    MAX_BATCH_SIZE = 25  # Process if we hit this many reports
+    BATCH_TIMEOUT = 5.0  # Process after 5 seconds regardless
+    # current height being collected for - start as None to detect first height
+    current_height = None
+    last_batch_time = time.time()
     while iterations < max_iterations:
         iterations += 1
+        logger.info(f"DEBUG: Starting iteration {iterations}, waiting for raw_data...")
         raw_data: dict[str, Any] = await raw_data_q.get()
         raw_data_q.task_done()
+        logger.info(f"DEBUG: Got raw_data for iteration {iterations}")
 
         result: dict[str, Any] = raw_data.get("result")
         if result is None:
@@ -309,6 +315,8 @@ async def raw_data_queue_handler(
         # Determine event type by presence of keys
         is_new_report = "new_report.query_id" in events
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
+        
+        logger.info(f"DEBUG: Event type check - is_new_report: {is_new_report}, is_agg_report: {is_agg_report}")
 
         if is_new_report:
             try:
@@ -328,31 +336,72 @@ async def raw_data_queue_handler(
                     meta_id=events["new_report.meta_id"][0],
                     tx_hash=events["tx.hash"][0],
                 )
+                
 
-                # check if height has incremented from the reports we are collecting
-                # then clear collection and start a new collection
-                if height > current_height:
-                    if len(reports_collections) > 0:
-                        total_reports = sum(len(reports) for reports in reports_collections.values())
-                        query_counts = [
-                            f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()
-                        ]
-
-                        logger.info(
-                            f"New Reports({total_reports}) found at height {height}, qIds: [{', '.join(query_counts)}]"
-                        )
-
-                        await new_reports_q.put(dict(reports_collections))
-                        reports_collections.clear()
-                    current_height = height
-                    # Track height for missed block detection
-                    height_tracker.update(height)
-
+                # Add the current report to the collection for the current height
                 reports_collected = reports_collections.get(report.query_id, None)
                 if reports_collected is None:
                     reports_collections[report.query_id] = [report]
                 else:
                     reports_collections[report.query_id].append(report)
+
+                logger.info(f"DEBUG: Added report - Height: {height}, Current Height: {current_height}, Collection Size: {len(reports_collections)}")
+
+                # Smart batching logic: process reports based on multiple conditions
+                should_process = False
+                process_reason = ""
+                
+                # Height has incremented (process previous height's reports)
+                if current_height is not None and height > current_height:
+                    should_process = True
+                    process_reason = f"height increment ({current_height} -> {height})"
+                    logger.info(f"DEBUG: Height increment detected - {current_height} -> {height}")
+                
+                # Batch size threshold reached
+                elif len(reports_collections) >= MAX_BATCH_SIZE:
+                    should_process = True
+                    process_reason = f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})"
+                    logger.info(f"DEBUG: Batch size limit reached - {len(reports_collections)} >= {MAX_BATCH_SIZE}")
+                
+                # Timeout reached
+                elif time.time() - last_batch_time > BATCH_TIMEOUT:
+                    should_process = True
+                    process_reason = f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)"
+                    logger.info(f"DEBUG: Timeout reached - {time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s")
+                
+                # First report (current_height is None) - process immediately
+                elif current_height is None:
+                    should_process = True
+                    process_reason = "first report"
+                    logger.info(f"DEBUG: First report detected - current_height is None")
+                
+                logger.info(f"DEBUG: Processing decision - should_process: {should_process}, reason: {process_reason}")
+                
+                if should_process and len(reports_collections) > 0:
+                    total_reports = sum(len(reports) for reports in reports_collections.values())
+                    query_counts = [
+                        f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()
+                    ]
+                    
+                    collected_height = current_height if current_height is not None else height
+                    logger.info(
+                        f"Processing {total_reports} reports collected at height {collected_height} ({process_reason}), qIds: [{', '.join(query_counts)}]"
+                    )
+                    
+                    logger.info(f"DEBUG: About to send {len(reports_collections)} query collections to queue")
+                    await new_reports_q.put(dict(reports_collections))
+                    reports_collections.clear()
+                    last_batch_time = time.time()
+                    logger.info(f"DEBUG: Cleared reports_collections and updated last_batch_time")
+                
+                # Update current height (either first time or after processing)
+                if current_height is None or height > current_height:
+                    old_height = current_height
+                    current_height = height
+                    logger.info(f"DEBUG: Updated current_height from {old_height} to {current_height}")
+                    # Track height for missed block detection
+                    height_tracker.update(height)
+                
 
             except (KeyError, IndexError) as e:
                 logger.warning(f"malformed new_report returned by websocket: {e.__str__()}")
@@ -364,10 +413,8 @@ async def raw_data_queue_handler(
                 total_reports = sum(len(reports) for reports in reports_collections.values())
                 query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
 
-                logger.info(f"New Reports({total_reports}) found at height {height}, qIds: [{', '.join(query_counts)}]")
+                logger.info(f"Processing {total_reports} reports collected at height {height}, qIds: [{', '.join(query_counts)}]")
 
-                await new_reports_q.put(dict(reports_collections))
-                reports_collections.clear()
 
             try:
                 height = current_height
@@ -392,6 +439,21 @@ async def raw_data_queue_handler(
         else:
             # Unknown or not interested
             continue
+
+    # Cleanup: Process any remaining reports before function exits
+    if len(reports_collections) > 0:
+        total_reports = sum(len(reports) for reports in reports_collections.values())
+        query_counts = [
+            f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()
+        ]
+        
+        collected_height = current_height if current_height is not None else "unknown"
+        logger.info(
+            f"Processing {total_reports} remaining reports collected at height {collected_height} (cleanup), qIds: [{', '.join(query_counts)}]"
+        )
+        
+        await new_reports_q.put(dict(reports_collections))
+        reports_collections.clear()
 
 
 async def inspect_reports(
@@ -426,11 +488,53 @@ async def inspect_reports(
             logger,
             threshold_config,
         )
-        # handle not supported query types
+        
+        # Check if this is a foreign query (not in configs AND not a supported global query type)
+        is_foreign_query = False
         if metrics is None:
-            logger.error("no custom configuration and no global thresholds set so can't check value")
+            # This is definitely a foreign query - not in our configs and not a supported global query type
+            is_foreign_query = True
+            logger.info(f"Foreign query detected (unsupported global type) - query id: {query_id}, query type: {query_type}")
+        else:
+            # Even if we have global metrics, we should check if this specific query ID is known to telliot
+            # This handles cases like SpotPrice queries that aren't in our configs but are supported globally
+            # First check if the query ID is in the catalog (this is safe)
+            from telliot_feeds.queries.query_catalog import query_catalog
+            catalog_entry = query_catalog.find(query_id=query_id)
+            if len(catalog_entry) == 0:
+                is_foreign_query = True
+                logger.info(f"Foreign query detected (not in telliot catalog) - query id: {query_id}, query type: {query_type}")
+        
+        if is_foreign_query:
+            # Extract asset pair if possible for better logging
+            asset_pair = "Unknown"
+            try:
+                query_obj = get_query(query_data)
+                if query_obj and hasattr(query_obj, 'asset') and hasattr(query_obj, 'currency'):
+                    asset_pair = f"{query_obj.asset}/{query_obj.currency}"
+            except Exception:
+                pass
+            
+            # Send Discord alert for foreign query
+            await send_foreign_query_alert(query_id, query_type, asset_pair, reports[0], logger)
+            
+            # Use 0 thresholds for all alert/dispute/pause thresholds
+            logger.info(f"no config found for {asset_pair} -- using 0 for all config thresholds")
+            metrics = Metrics(
+                metric="percentage",  # Default to percentage for foreign queries
+                alert_threshold=0.0,
+                warning_threshold=0.0,
+                minor_threshold=0.0,
+                major_threshold=0.0,
+                pause_threshold=0.0,
+            )
+            
+            # For foreign queries, we should NOT proceed with telliot-feeds processing
+            # Since we don't have a trusted value, there's no point in inspection
+            logger.info(f"Skipping inspection for foreign query {query_id} - no trusted value available")
             return None
-        logger.debug(f"Using global metrics: alert_threshold={metrics.alert_threshold}")
+        else:
+            logger.debug(f"Using global metrics: alert_threshold={metrics.alert_threshold}")
     else:
         metrics = Metrics(
             metric=_config.get("metric"),
@@ -1170,6 +1274,45 @@ async def inspect_evm_call_reports(
     return None
 
 
+async def send_foreign_query_alert(
+    query_id: str, 
+    query_type: str, 
+    asset_pair: str, 
+    report: NewReport, 
+    logger: logging.Logger
+) -> None:
+    """Send Discord alert for foreign queries not in our configs."""
+    try:
+        # Get monitor name from environment
+        monitor_name = os.getenv("MONITOR_NAME", "LVM")
+        
+        # Extract reported value for display
+        reported_value = "Unknown"
+        try:
+            # Try to decode the reported value
+            query_obj = get_query(report.query_data)
+            if query_obj:
+                reported_value = query_obj.value_type.decode(bytes.fromhex(report.value))
+        except Exception:
+            # If we can't decode, just show the raw hex value
+            reported_value = report.value
+        
+        # Build the alert message
+        alert_msg = f"**{monitor_name}** does not have configs for this queryId: {query_id}\n"
+        alert_msg += f"**QueryType:** {query_type}\n"
+        if asset_pair != "Unknown":
+            alert_msg += f"**Asset pair:** {asset_pair}\n"
+        alert_msg += f"**Value:** {reported_value}\n"
+        alert_msg += f"**Reporter:** {report.reporter}\n"
+        alert_msg += f"**Tx Hash:** {report.tx_hash}"
+        
+        logger.info(f"Foreign query alert:\n{alert_msg}")
+        generic_alert(alert_msg)
+        
+    except Exception as e:
+        logger.error(f"Failed to send foreign query alert: {e}")
+
+
 async def inspect_trbbridge_reports(
     reports: list[NewReport],
     disputes_q: asyncio.Queue,
@@ -1282,13 +1425,58 @@ async def inspect(
     )
     if alertable is None:
         return None
+    
+    # Determine dispute level for Discord alert
+    dispute_level = None
+    is_disputable_flag = disputable  # Use the disputable value directly
+    
+    if disputable:
+        if metrics.metric.lower() == "equality":
+            if metrics.warning_threshold == 1.0:
+                dispute_level = "warning"
+            elif metrics.minor_threshold == 1.0:
+                dispute_level = "minor"
+            elif metrics.major_threshold == 1.0:
+                dispute_level = "major"
+        else:
+            category = determine_dispute_category(
+                diff=diff,
+                category_thresholds={
+                    "major": metrics.major_threshold,
+                    "minor": metrics.minor_threshold,
+                    "warning": metrics.warning_threshold,
+                },
+            )
+            if category:
+                dispute_level = category
+    
     if alertable:
         from layer_values_monitor.discord import build_alert_message, format_difference, format_values
         from layer_values_monitor.telliot_feeds import extract_query_info
+        from layer_values_monitor.dispute import get_disputer_address, validate_keyring_config
+        import os
 
         query_info = extract_query_info(query, query_type=report.query_type)
         diff_str = format_difference(diff, metrics.metric)
         value_display = format_values(reported_value, trusted_value)
+
+        # Get disputer information based on dispute level and keyring config
+        disputer_info = None
+        if is_disputable_flag and dispute_level != "warning":
+            # Only show disputer info for disputable alerts (not warnings)
+            binary_path = os.getenv("LAYER_BINARY_PATH")
+            key_name = os.getenv("LAYER_KEY_NAME")
+            kb = os.getenv("LAYER_KEYRING_BACKEND")
+            kdir = os.getenv("LAYER_KEYRING_DIR")
+            
+            if binary_path and key_name and kb and kdir:
+                # Check if keyring is properly configured
+                if validate_keyring_config(binary_path, key_name, kb, kdir):
+                    disputer_address = get_disputer_address(binary_path, key_name, kb, kdir)
+                    if disputer_address:
+                        disputer_info = f"{disputer_address}, {key_name}"
+                else:
+                    disputer_info = f"{key_name} improperly configured, no dispute sent"
 
         msg = build_alert_message(
             query_info=query_info,
@@ -1298,6 +1486,8 @@ async def inspect(
             power=report.power,
             tx_hash=report.tx_hash,
             query_type=report.query_type,
+            disputer_info=disputer_info,
+            level=dispute_level,
         )
 
         logger.info(f"Alertable value detected:\n{msg}")
