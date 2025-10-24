@@ -223,11 +223,29 @@ async def start() -> None:
             logger.info("💡 Saga contract manager initialized successfully")
 
     threshold_config = ThresholdConfig.from_args(args)
+    logger.info(f"CONFIG DEBUG: ThresholdConfig created from args: {threshold_config}")
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
+    logger.info(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
     config_watcher = ConfigWatcher(config_path)
     logger.info("💡 Config watcher initialized")
+    
+    # Log config summary
+    logger.info(f"CONFIG DEBUG: Config summary:")
+    logger.info(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
+    logger.info(f"CONFIG DEBUG: - Query types: {list(config_watcher.query_types.keys())}")
+    logger.info(f"CONFIG DEBUG: - Query configs: {list(config_watcher.query_configs.keys())}")
+    
+    # Test config methods
+    logger.info(f"CONFIG DEBUG: Testing config methods...")
+    test_query_types = ["SpotPrice", "TrbBridge", "EvmCall", "UnknownType"]
+    for query_type in test_query_types:
+        is_supported = config_watcher.is_supported_query_type(query_type)
+        logger.info(f"CONFIG DEBUG: - is_supported_query_type('{query_type}'): {is_supported}")
+        if is_supported:
+            query_type_info = config_watcher.get_query_type_info(query_type)
+            logger.info(f"CONFIG DEBUG:   - get_query_type_info('{query_type}'): {query_type_info}")
 
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events

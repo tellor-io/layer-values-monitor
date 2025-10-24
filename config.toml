@@ -1,56 +1,34 @@
-#============================================================================
-# SPOT PRICES
+# Global default thresholds - used when no specific config exists
+[global_defaults]
+percentage = { alert_threshold = 0.1, warning_threshold = 0.25, minor_threshold = 0.99, major_threshold = 0.0, pause_threshold = 0.2 }
+equality = { alert_threshold = 1.0, warning_threshold = 0.0, minor_threshold = 0.0, major_threshold = 0.0, pause_threshold = 0.0 }
+range = { alert_threshold = 100.0, warning_threshold = 200.0, minor_threshold = 500.0, major_threshold = 1000.0, pause_threshold = 0.0 }
 
-#ETH/USD 
-[83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992] # queryId or queryType
-metric = "percentage" # type of value comparison
-alert_threshold = 0.1 # if price is > 10% off, get discord alert (if setup in env) and alert in logs
-warning_threshold = 0.25 # if price is >25% off, auto warning dispute
-minor_threshold = 0.99 # If price is >99% off, auto minor dispute
-major_threshold = 0.0 # No major level automatic disputes
-pause_threshold = 0.2 # 20% difference triggers data feed contract pause attempt (if using --enable-saga-gaurd)
-datafeed_ca = "0x0cD65ca12F6c9b10254FABC0CC62d273ABbb3d84" # saga contract address (if using --enable-saga-guard)
+# Query type definitions
+[query_types]
+spotprice = { metric = "percentage", description = "Price feeds", handler = "telliot_feeds" }
+trbbridge = { metric = "equality", description = "TRB bridge reports", handler = "trb_bridge" }
+evmcall = { metric = "equality", description = "EVM call reports", handler = "evm_call" }
 
-#BTC/USD
-[a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
-metric = "percentage"
+# Specific query configurations (inherit from global defaults)
+[queries.spotprice.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992]
+# Inherits percentage defaults, only override what's different
+alert_threshold = 0.1
+datafeed_ca = "0x0cD65ca12F6c9b10254FABC0CC62d273ABbb3d84"
+
+[queries.spotprice.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
 alert_threshold = 0.05
-warning_threshold = 0.25
-minor_threshold = 0.99
-major_threshold = 0.0
-pause_threshold = 0.2
 datafeed_ca = "0x4a397383fE5FbE9AB33879869153fF40ea68815F"
 
-#TRB/USD 
-[5C13CD9C97DBB98F2429C101A2A8150E6C7A0DDAFF6124EE176A3A411067DED0]
-metric = "percentage"
+[queries.spotprice.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0]
 alert_threshold = 0.10
-warning_threshold = 0.25
-minor_threshold = 0.99
-major_threshold = 0.0
-pause_threshold = 0.2
 datafeed_ca = ""
 
-#============================================================================
-# EQUALITY TYPES
-# NOTE: For equality metrics, only ONE threshold should be set to 1.0 to indicate dispute level, otherwise the lowest level will be used
-# NOTE: pause_threshold is not applicable for equality metrics
+# Query type level defaults (for queries without specific config)
+[queries.trbbridge.defaults]
+# Inherits equality defaults from global_defaults
+# No overrides needed
 
-# TRBBridge query type configuration
-[trbbridge]
-metric = "equality"
-alert_threshold = 1.0
-warning_threshold = 1.0
-minor_threshold = 0.0
-major_threshold = 0.0
-pause_threshold = 0.0
-
-
-# EVMCall query type configuration
-[evmcall]
-metric = "equality"
-alert_threshold = 1.0
-warning_threshold = 0.0
-minor_threshold = 0.0
-major_threshold = 0.0
-pause_threshold = 0.0
+[queries.evmcall.defaults]
+# Inherits equality defaults from global_defaults
+# No overrides needed
