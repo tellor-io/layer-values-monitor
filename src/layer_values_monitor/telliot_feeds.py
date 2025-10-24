@@ -1,6 +1,9 @@
 """Telliot Feeds helper functions."""
 
+import asyncio
 import logging
+
+logger = logging.getLogger(__name__)
 
 from clamfig.base import Registry
 from eth_abi import decode
@@ -64,7 +67,10 @@ def get_source_from_data(query_data: bytes, logger: logging) -> DataSource | Non
     if feed_builder is None:
         logger.error(f"query type {query_type} not supported by datafeed builder")
         return None
-    source = feed_builder.source
+    
+    source_class = feed_builder.source.__class__
+    source = source_class()
+    
     for key, value in zip(param_names, param_values, strict=False):
         setattr(source, key, value)
     return source
@@ -93,7 +99,15 @@ async def get_feed(query_id: str, query: AbiQuery | JsonQuery | None, logger: lo
 
 async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
     """Fetch the value from the data source in telliot-feeds."""
-    return await feed.source.fetch_new_datapoint()
+    try:
+        # Add timeout to prevent hanging on rate-limited APIs
+        return await asyncio.wait_for(feed.source.fetch_new_datapoint(), timeout=15.0)
+    except asyncio.TimeoutError:
+        logger.warning("Timeout fetching trusted value from telliot-feeds (15s)")
+        return None
+    except Exception as e:
+        logger.warning(f"Error fetching trusted value from telliot-feeds: {e}")
+        return None
 
 
 def extract_query_info(query: AbiQuery | JsonQuery | None, query_type: str | None = None) -> str:
