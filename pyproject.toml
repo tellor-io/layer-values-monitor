@@ -15,7 +15,7 @@ dependencies = [
     "pandas>=2.2.3",
     "python-dotenv>=1.0.1",
     "ruff>=0.13.3",
-    "telliot-feeds==0.4.12",
+    "telliot-feeds==0.4.13",
     "websockets==13.1",
 ]
 [project.scripts]
