@@ -83,33 +83,35 @@ def build_alert_message(
     """Build the formatted Discord alert message."""
     # Determine if this is a spot price query
     is_spot_price = query_type == "SpotPrice" or "/" in query_info
-    
+
     # Build the message components
     components = []
-    
+
     # Add Asset field only for spot price queries
     if is_spot_price:
         components.append(f"**Asset:** {query_info}")
-    
+
     # Add QueryType field
     if query_type:
         components.append(f"**QueryType:** {query_type}")
-    
+
     # Add Level field if available
     if level:
         components.append(f"**Level:** {level}")
-    
+
     # Add the rest of the fields
-    components.extend([
-        value_display,
-        f"**Difference:** {diff_str}",
-        f"**Reporter:** {reporter}",
-        f"**Power:** {power}",
-        f"**Tx Hash:** {tx_hash}"
-    ])
-    
+    components.extend(
+        [
+            value_display,
+            f"**Difference:** {diff_str}",
+            f"**Reporter:** {reporter}",
+            f"**Power:** {power}",
+            f"**Tx Hash:** {tx_hash}",
+        ]
+    )
+
     # Add Disputer field if available
     if disputer_info:
         components.append(f"**Disputer:** {disputer_info}")
-    
+
     return "\n".join(components)
