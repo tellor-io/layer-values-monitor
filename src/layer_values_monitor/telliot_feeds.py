@@ -67,10 +67,10 @@ def get_source_from_data(query_data: bytes, logger: logging) -> DataSource | Non
     if feed_builder is None:
         logger.error(f"query type {query_type} not supported by datafeed builder")
         return None
-    
+
     source_class = feed_builder.source.__class__
     source = source_class()
-    
+
     for key, value in zip(param_names, param_values, strict=False):
         setattr(source, key, value)
     return source
@@ -102,7 +102,7 @@ async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
     try:
         # Add timeout to prevent hanging on rate-limited APIs
         return await asyncio.wait_for(feed.source.fetch_new_datapoint(), timeout=15.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Timeout fetching trusted value from telliot-feeds (15s)")
         return None
     except Exception as e:
