@@ -133,39 +133,6 @@ async def start() -> None:
     parser.add_argument(
         "--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing"
     )
-    # percentage
-    parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
-    parser.add_argument(
-        "--global-percentage-warning-threshold", default=0.0, type=float, help="Global percentage for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-percentage-minor-threshold", default=0.0, type=float, help="Global percentage for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-percentage-major-threshold", default=0.0, type=float, help="Global percentage for a major dispute cat"
-    )
-    # range
-    parser.add_argument("--global-range-alert-threshold", default=0.0, type=float, help="Global range threshold")
-    parser.add_argument(
-        "--global-range-warning-threshold", default=0.0, type=float, help="Global range for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-minor-threshold", default=0.0, type=float, help="Global range for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-major-threshold", default=0.0, type=float, help="Global range for a major dispute cat"
-    )
-    # equality
-    parser.add_argument("--global-equality-alert-threshold", default=1.0, type=float, help="Global equality threshold")
-    parser.add_argument(
-        "--global-equality-warning-threshold", default=1.0, type=float, help="Global equality for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-equality-minor-threshold", default=0.0, type=float, help="Global equality for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-equality-major-threshold", default=0.0, type=float, help="Global equality for a major dispute cat"
-    )
     args = parser.parse_args()
 
     # Validate required arguments are provided either via env vars or command line
@@ -222,23 +189,24 @@ async def start() -> None:
         if saga_contract_manager:
             logger.info("💡 Saga contract manager initialized successfully")
 
+    # Create ThresholdConfig for backward compatibility (will be empty if using new config format)
     threshold_config = ThresholdConfig.from_args(args)
     logger.info(f"CONFIG DEBUG: ThresholdConfig created from args: {threshold_config}")
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     logger.info(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
-    config_watcher = ConfigWatcher(config_path)
+    config_watcher = ConfigWatcher(config_path, threshold_config)
     logger.info("💡 Config watcher initialized")
-    
+
     # Log config summary
-    logger.info(f"CONFIG DEBUG: Config summary:")
+    logger.info("CONFIG DEBUG: Config summary:")
     logger.info(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
     logger.info(f"CONFIG DEBUG: - Query types: {list(config_watcher.query_types.keys())}")
     logger.info(f"CONFIG DEBUG: - Query configs: {list(config_watcher.query_configs.keys())}")
-    
+
     # Test config methods
-    logger.info(f"CONFIG DEBUG: Testing config methods...")
+    logger.info("CONFIG DEBUG: Testing config methods...")
     test_query_types = ["SpotPrice", "TrbBridge", "EvmCall", "UnknownType"]
     for query_type in test_query_types:
         is_supported = config_watcher.is_supported_query_type(query_type)
@@ -290,7 +258,7 @@ async def start() -> None:
                 logger,
                 height_tracker,
             ),
-            new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
+            new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger),
             process_disputes(
                 disputes_q=disputes_queue,
                 binary_path=args.binary_path,
@@ -309,7 +277,7 @@ async def start() -> None:
         if args.enable_saga_guard:
             tasks.append(
                 agg_reports_queue_handler(
-                    agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager, uri, power_thresholds
+                    agg_reports_queue, config_watcher, logger, saga_contract_manager, uri, power_thresholds
                 )
             )
 
