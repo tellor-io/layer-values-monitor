@@ -323,7 +323,7 @@ class TestSagaEdgeCases:
         with patch("layer_values_monitor.monitor.inspect_aggregate_report", side_effect=side_effect):
             task = asyncio.create_task(
                 agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
+                    queue, saga_config_watcher, mock_logger, mock_saga_contract_manager
                 )
             )
 

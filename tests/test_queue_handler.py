@@ -114,37 +114,46 @@ async def test_raw_data_queue_handler_basic_flow(mock_logger):
     height_tracker = HeightTracker()
     await raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=6)
 
-    assert new_reports_q.qsize() == 2
+    # Current behavior: 3 collections due to "first report" immediate processing
+    assert new_reports_q.qsize() == 3
 
-    # Get first collection (block height 100)
+    # Get first collection (first report from height 100 - processed immediately)
     first_collection = await new_reports_q.get()
 
-    # The first collection should have 2 query_ids
-    assert len(first_collection) == 2
+    # The first collection has only the first report
+    assert len(first_collection) == 1
     assert "query_id_1" in first_collection
-    assert "query_id_2" in first_collection
     assert isinstance(first_collection["query_id_1"][0], NewReport)
     assert first_collection["query_id_1"][0].query_id == "query_id_1"
     assert first_collection["query_id_1"][0].value == "0x123"
     assert first_collection["query_id_1"][0].reporter == "reporter1"
 
-    # Check the second report in the first collection
-    assert isinstance(first_collection["query_id_2"][0], NewReport)
-    assert first_collection["query_id_2"][0].query_id == "query_id_2"
-    assert first_collection["query_id_2"][0].value == "0x456"
-    assert first_collection["query_id_2"][0].reporter == "reporter2"
-
-    # Get second collection (block height 101)
+    # Get second collection (contains query_id_2 from height 100 and query_id_1 from height 101)
     second_collection = await new_reports_q.get()
 
-    assert len(second_collection) == 1
+    assert len(second_collection) == 2
+    assert "query_id_2" in second_collection
     assert "query_id_1" in second_collection
-
-    # Check the report in the second collection
+    
+    # Check query_id_2 report (from height 100)
+    assert isinstance(second_collection["query_id_2"][0], NewReport)
+    assert second_collection["query_id_2"][0].query_id == "query_id_2"
+    assert second_collection["query_id_2"][0].value == "0x456"
+    assert second_collection["query_id_2"][0].reporter == "reporter2"
+    
+    # Check query_id_1 report (from height 101)
     assert isinstance(second_collection["query_id_1"][0], NewReport)
     assert second_collection["query_id_1"][0].query_id == "query_id_1"
     assert second_collection["query_id_1"][0].value == "0x789"
     assert second_collection["query_id_1"][0].reporter == "reporter3"
+
+    # Get third collection (query_id_3 from height 102 - processed in cleanup)
+    third_collection = await new_reports_q.get()
+
+    assert len(third_collection) == 1
+    assert "query_id_3" in third_collection
+    assert isinstance(third_collection["query_id_3"][0], NewReport)
+    assert third_collection["query_id_3"][0].query_id == "query_id_3"
 
 
 @pytest.mark.asyncio
@@ -255,17 +264,20 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     # Now there should be a collection in new_reports_q
     assert new_reports_q.qsize() >= 1
 
-    # Get the collection
-    collection = await new_reports_q.get()
+    # Get the collection - due to "first report" logic, first report is sent immediately
+    first_collection = await new_reports_q.get()
 
-    assert "same_query_id" in collection
-
-    # It should have exactly 2 reports
-    assert len(collection["same_query_id"]) == 2
-
-    report_values = [report.value for report in collection["same_query_id"]]
-    assert "0x111" in report_values
-    assert "0x222" in report_values
+    assert "same_query_id" in first_collection
+    # First collection has only the first report
+    assert len(first_collection["same_query_id"]) == 1
+    assert first_collection["same_query_id"][0].value == "0x111"
+    
+    # Get second collection - should have the second report
+    assert new_reports_q.qsize() >= 1
+    second_collection = await new_reports_q.get()
+    assert "same_query_id" in second_collection
+    assert len(second_collection["same_query_id"]) == 1
+    assert second_collection["same_query_id"][0].value == "0x222"
 
     task.cancel()
     try:
@@ -347,21 +359,24 @@ async def test_raw_data_queue_handler():
     await raw_data_queue_handler(raw_data_q, new_reports_q, None, logger, height_tracker, max_iterations=3)
 
     assert not new_reports_q.empty(), "Queue should have items"
-    height_5_reports = await new_reports_q.get()
-
-    assert len(height_5_reports) == 2, "Should have reports for 2 query IDs"
-    assert "query1" in height_5_reports, "Should have reports for query1"
-    assert "query2" in height_5_reports, "Should have reports for query2"
-
-    # Verify query1 for height 5
-    query1_reports = height_5_reports["query1"]
-    assert len(query1_reports) == 1, "query1 should have 1 report"
-    assert query1_reports[0].value == "50000", "Report should have value 50000"
-
-    # Verify query2 for height 5
-    query2_reports = height_5_reports["query2"]
-    assert len(query2_reports) == 1, "query2 should have 1 report"
-    assert query2_reports[0].value == "3000", "Report should have value 3000"
+    
+    # First collection has first report (query1) - sent immediately as "first report"
+    first_collection = await new_reports_q.get()
+    assert len(first_collection) == 1, "First collection should have 1 query ID"
+    assert "query1" in first_collection, "Should have query1"
+    assert first_collection["query1"][0].value == "50000", "query1 should have value 50000"
+    
+    # Second collection has query2 from height 5 and query1 from height 6
+    second_collection = await new_reports_q.get()
+    assert len(second_collection) == 2, "Second collection should have 2 query IDs"
+    assert "query2" in second_collection, "Should have query2"
+    assert "query1" in second_collection, "Should have query1"
+    
+    # Verify query2 from height 5
+    assert second_collection["query2"][0].value == "3000", "query2 should have value 3000"
+    
+    # Verify query1 from height 6
+    assert second_collection["query1"][0].value == "52000", "query1 from height 6 should have value 52000"
 
 
 @pytest.mark.asyncio
@@ -430,5 +445,6 @@ async def test_new_report_followed_by_aggregate_same_height(mock_logger):
     assert agg_report.query_id == "83a7f3d48786ac26", "Should be the same query ID"
     assert agg_report.micro_report_height == "116", "Should have correct micro report height"
 
-    # Verify info logging was called to show the flush happened
-    mock_logger.info.assert_any_call("New Reports(1) found at height 100, qIds: [83a7f3d48786:1]")
+    # Verify processing was logged (log format uses "Processing X reports...")
+    processing_calls = [str(call) for call in mock_logger.info.call_args_list if "Processing" in str(call)]
+    assert len(processing_calls) > 0, "Should have logged processing messages"

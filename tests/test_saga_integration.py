@@ -42,7 +42,7 @@ class TestSagaIntegration:
             # Run the queue handler for a short time
             task = asyncio.create_task(
                 agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
+                    queue, saga_config_watcher, mock_logger, mock_saga_contract_manager
                 )
             )
 
@@ -136,7 +136,7 @@ class TestSagaIntegration:
             # Run the queue handler
             task = asyncio.create_task(
                 agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
+                    queue, saga_config_watcher, mock_logger, mock_saga_contract_manager
                 )
             )
 
@@ -185,7 +185,7 @@ class TestSagaIntegration:
             mock_inspect.return_value = (True, "Should pause")
 
             task = asyncio.create_task(
-                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_manager)
             )
 
             await asyncio.sleep(0.1)
@@ -237,9 +237,9 @@ class TestSagaIntegration:
                 mock_inspect.return_value = (True, "Should pause")
 
                 task = asyncio.create_task(
-                    agg_reports_queue_handler(
-                        queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager
-                    )
+                agg_reports_queue_handler(
+                    queue, saga_config_watcher, mock_logger, mock_saga_manager
+                )
                 )
 
                 await asyncio.sleep(0.1)
