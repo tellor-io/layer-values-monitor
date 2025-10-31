@@ -655,12 +655,16 @@ async def inspect_spotprice_path(
         return None
     logger.info(f"✅ Trusted value fetched: {trusted_value}")
 
+    # Create fetcher lambda for double-check logic
+    async def fetch_trusted_value():
+        return await fetch_value(feed)
+
     logger.info(f"🔎 Inspecting {len(reports)} report(s)...")
     for i, r in enumerate(reports, 1):
         logger.info(f"📊 Report {i}/{len(reports)} - Reporter: {r.reporter}")
         reported_value = query.value_type.decode(bytes.fromhex(r.value))
         logger.info(f"✅ Decoded value: {reported_value}")
-        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=query)
+        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=query, trusted_value_fetcher=fetch_trusted_value)
 
     logger.info("✅ SpotPrice inspection completed")
     return None
@@ -1404,8 +1408,13 @@ async def inspect(
     metrics: Metrics,
     logger: logging,
     query: Any = None,
+    trusted_value_fetcher: Any = None,
 ) -> None:
-    """Inspect a new report and check if it is disputable."""
+    """Inspect a new report and check if it is disputable.
+    
+    Args:
+        trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
+    """
     display = {
         "REPORTER": report.reporter,
         "QUERY_TYPE": report.query_type,
@@ -1420,6 +1429,11 @@ async def inspect(
     display["CURRENT_TIME"] = int(time.time() * 1000)
     display["TIME_DIFF"] = display["CURRENT_TIME"] - (int(report.timestamp))
     display["VALUE"] = reported_value
+    
+    # Store first trusted value timestamp
+    first_trusted_value = trusted_value
+    first_trusted_time = time.time()
+    
     # compare values and check against threshold- three metrics(percentage, equality, range)
     alertable, disputable, diff = is_disputable(
         metrics.metric,
@@ -1456,63 +1470,74 @@ async def inspect(
             if category:
                 dispute_level = category
 
-    if alertable:
-        import os
-
-        from layer_values_monitor.discord import build_alert_message, format_difference, format_values
-        from layer_values_monitor.dispute import get_disputer_address, validate_keyring_config
-        from layer_values_monitor.telliot_feeds import extract_query_info
-
-        query_info = extract_query_info(query, query_type=report.query_type)
-        diff_str = format_difference(diff, metrics.metric)
-        value_display = format_values(reported_value, trusted_value)
-
-        # Get disputer information based on dispute level and keyring config
-        disputer_info = None
-        if is_disputable_flag and dispute_level != "warning":
-            # Only show disputer info for disputable alerts (not warnings)
-            binary_path = os.getenv("LAYER_BINARY_PATH")
-            key_name = os.getenv("LAYER_KEY_NAME")
-            kb = os.getenv("LAYER_KEYRING_BACKEND")
-            kdir = os.getenv("LAYER_KEYRING_DIR")
-
-            if binary_path and key_name and kb and kdir:
-                # Check if keyring is properly configured
-                if validate_keyring_config(binary_path, key_name, kb, kdir):
-                    disputer_address = get_disputer_address(binary_path, key_name, kb, kdir)
-                    if disputer_address:
-                        disputer_info = f"{disputer_address}, {key_name}"
-                else:
-                    disputer_info = f"{key_name} improperly configured, no dispute sent"
-
-        msg = build_alert_message(
-            query_info=query_info,
-            value_display=value_display,
-            diff_str=diff_str,
-            reporter=report.reporter,
-            power=report.power,
-            tx_hash=report.tx_hash,
-            query_type=report.query_type,
-            disputer_info=disputer_info,
-            level=dispute_level,
-        )
-
-        logger.info(f"Alertable value detected:\n{msg}")
-        generic_alert(msg)
-
-    display["DISPUTABLE"] = disputable
-
-    # Handle auto-dispute logic
+    # Double-check logic for SpotPrice queries with trusted_value_fetcher
+    second_trusted_value = None
+    second_trusted_time = None
+    second_check_disputable = None
     should_dispute = False
     dispute_category = None
-
-    # Check if we should auto-dispute based on threshold configuration
-    if disputable:
-        logger.info(f"disputable: true, diff: {diff}")
-
+    
+    if disputable and trusted_value_fetcher is not None:
+        # First check crossed threshold - initiate double-check
+        logger.info(f"⏳ First trusted value check crossed threshold (diff: {diff}). Waiting 10 seconds for second check...")
+        await asyncio.sleep(10)
+        
+        logger.info("📡 Fetching second trusted value for verification...")
+        try:
+            second_trusted_result = await trusted_value_fetcher()
+            if second_trusted_result is not None:
+                # fetch_value returns (value, timestamp) tuple
+                second_trusted_value = second_trusted_result[0] if isinstance(second_trusted_result, tuple) else second_trusted_result
+                second_trusted_time = time.time()
+                logger.info(f"✅ Second trusted value fetched: {second_trusted_value}")
+                
+                # Compare reported value against second trusted value
+                _, second_check_disputable, second_diff = is_disputable(
+                    metrics.metric,
+                    metrics.alert_threshold,
+                    metrics.warning_threshold,
+                    reported_value,
+                    second_trusted_value,
+                    logger=logger,
+                )
+                
+                # Only dispute if BOTH checks cross threshold
+                if second_check_disputable:
+                    logger.info(f"✅ Second check also crossed threshold (diff: {second_diff}). Proceeding with dispute.")
+                    should_dispute = True
+                    
+                    # Determine dispute category
+                    if metrics.metric.lower() == "equality":
+                        if metrics.warning_threshold == 1.0:
+                            dispute_category = "warning"
+                        elif metrics.minor_threshold == 1.0:
+                            dispute_category = "minor"
+                        elif metrics.major_threshold == 1.0:
+                            dispute_category = "major"
+                    else:
+                        category = determine_dispute_category(
+                            diff=second_diff,
+                            category_thresholds={
+                                "major": metrics.major_threshold,
+                                "minor": metrics.minor_threshold,
+                                "warning": metrics.warning_threshold,
+                            },
+                        )
+                        if category is not None:
+                            dispute_category = category
+                else:
+                    logger.info(f"⚠️ Second check did NOT cross threshold (diff: {second_diff}). Dispute cancelled.")
+            else:
+                logger.error("❌ Failed to fetch second trusted value. Cancelling dispute.")
+        except Exception as e:
+            logger.error(f"❌ Error fetching second trusted value: {e}. Cancelling dispute.")
+    
+    elif disputable and trusted_value_fetcher is None:
+        # No fetcher provided - use original single-check logic (EVMCall, TRBBridge)
+        logger.info(f"disputable: true, diff: {diff} (single-check mode)")
+        
         # For equality metrics, determine dispute level based on which threshold is set to 1.0
         if metrics.metric.lower() == "equality":
-            # Check which threshold is set to 1.0 (indicating the dispute level)
             if metrics.warning_threshold == 1.0:
                 dispute_category = "warning"
                 should_dispute = True
@@ -1541,9 +1566,107 @@ async def inspect(
                 dispute_category = category
                 should_dispute = True
 
+    # Send Discord alert AFTER double-check completes (or immediately if no double-check)
+    if alertable or (disputable and trusted_value_fetcher is not None):
+        import os
+        from datetime import datetime
+
+        from layer_values_monitor.discord import build_alert_message, format_difference, format_values
+        from layer_values_monitor.dispute import get_disputer_address, validate_keyring_config
+        from layer_values_monitor.telliot_feeds import extract_query_info
+
+        query_info = extract_query_info(query, query_type=report.query_type)
+        diff_str = format_difference(diff, metrics.metric)
+        
+        # Build message based on whether we did double-check
+        if second_trusted_value is not None:
+            # Double-check was performed - custom message format
+            first_time_str = datetime.fromtimestamp(first_trusted_time).strftime('%Y-%m-%d %H:%M:%S')
+            second_time_str = datetime.fromtimestamp(second_trusted_time).strftime('%Y-%m-%d %H:%M:%S')
+            
+            if should_dispute:
+                alert_header = "🚨 **Second inspection triggered: sending dispute, reported value outside both trusted values**\n\n"
+            else:
+                alert_header = "⚠️ **Second inspection triggered: reported value was past the first trusted value, but not the second**\n\n"
+            
+            # Build custom message
+            msg = alert_header
+            msg += f"**Asset:** {query_info}\n"
+            if report.query_type:
+                msg += f"**QueryType:** {report.query_type}\n"
+            if dispute_level:
+                msg += f"**Level:** {dispute_level}\n"
+            msg += f"**Reported Value:** {reported_value}\n"
+            msg += f"**First Trusted Value:** {first_trusted_value} (retrieved at {first_time_str})\n"
+            msg += f"**Second Trusted Value:** {second_trusted_value} (retrieved at {second_time_str})\n"
+            msg += f"**First Check Difference:** {diff_str}\n"
+            if second_check_disputable is not None:
+                second_diff_str = format_difference(second_diff, metrics.metric)
+                msg += f"**Second Check Difference:** {second_diff_str}\n"
+            msg += f"**Reporter:** {report.reporter}\n"
+            msg += f"**Power:** {report.power}\n"
+            msg += f"**Tx Hash:** {report.tx_hash}\n"
+            
+            # Add disputer info if disputing
+            if should_dispute and dispute_level != "warning":
+                binary_path = os.getenv("LAYER_BINARY_PATH")
+                key_name = os.getenv("LAYER_KEY_NAME")
+                kb = os.getenv("LAYER_KEYRING_BACKEND")
+                kdir = os.getenv("LAYER_KEYRING_DIR")
+
+                if binary_path and key_name and kb and kdir:
+                    if validate_keyring_config(binary_path, key_name, kb, kdir):
+                        disputer_address = get_disputer_address(binary_path, key_name, kb, kdir)
+                        if disputer_address:
+                            msg += f"**Disputer:** {disputer_address}, {key_name}\n"
+                    else:
+                        msg += f"**Disputer:** {key_name} improperly configured, no dispute sent\n"
+            
+            logger.info(f"Double-check alert:\n{msg}")
+            generic_alert(msg)
+            
+        else:
+            # Standard single-check alert (no fetcher or not disputable)
+            value_display = format_values(reported_value, trusted_value)
+
+            # Get disputer information based on dispute level and keyring config
+            disputer_info = None
+            if is_disputable_flag and dispute_level != "warning":
+                # Only show disputer info for disputable alerts (not warnings)
+                binary_path = os.getenv("LAYER_BINARY_PATH")
+                key_name = os.getenv("LAYER_KEY_NAME")
+                kb = os.getenv("LAYER_KEYRING_BACKEND")
+                kdir = os.getenv("LAYER_KEYRING_DIR")
+
+                if binary_path and key_name and kb and kdir:
+                    # Check if keyring is properly configured
+                    if validate_keyring_config(binary_path, key_name, kb, kdir):
+                        disputer_address = get_disputer_address(binary_path, key_name, kb, kdir)
+                        if disputer_address:
+                            disputer_info = f"{disputer_address}, {key_name}"
+                    else:
+                        disputer_info = f"{key_name} improperly configured, no dispute sent"
+
+            msg = build_alert_message(
+                query_info=query_info,
+                value_display=value_display,
+                diff_str=diff_str,
+                reporter=report.reporter,
+                power=report.power,
+                tx_hash=report.tx_hash,
+                query_type=report.query_type,
+                disputer_info=disputer_info,
+                level=dispute_level,
+            )
+
+            logger.info(f"Alertable value detected:\n{msg}")
+            generic_alert(msg)
+
+    display["DISPUTABLE"] = disputable
+
     # Submit dispute if needed
     if should_dispute and dispute_category is not None:
-        logger.info(f"Getting ready to send dispute tx... trusted value: {trusted_value}, reported value: {reported_value}")
+        logger.info(f"Getting ready to send dispute tx... reported value: {reported_value}")
         fee = determine_dispute_fee(dispute_category, int(report.power))
         logger.info(f"Fee: {fee.__str__() + DENOM}")
         await disputes_q.put(Msg(report.reporter, report.query_id, report.meta_id, dispute_category, fee.__str__() + DENOM))
