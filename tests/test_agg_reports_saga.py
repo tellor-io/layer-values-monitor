@@ -75,9 +75,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (True, "Test pause reason")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -113,9 +111,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (True, "Test pause reason")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -149,9 +145,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (True, "Test pause reason")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -219,9 +213,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (False, "Values within threshold")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -252,9 +244,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = None
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -283,7 +273,7 @@ class TestInspectAggregateReport:
     def mock_config_watcher(self):
         """Create a mock config watcher."""
         from layer_values_monitor.custom_types import Metrics
-        
+
         watcher = MagicMock(spec=ConfigWatcher)
         watcher.get_config.return_value = {
             "test_query_id": {
@@ -407,9 +397,7 @@ class TestInspectAggregateReport:
             mock_get_query.return_value = MagicMock()
             mock_get_query.return_value.__class__.__name__ = "SpotPrice"
 
-            result = await inspect_aggregate_report(
-                sample_aggregate_report, mock_config_watcher, mock_logger
-            )
+            result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
 
             assert result is None
             mock_logger.warning.assert_called()
@@ -436,9 +424,7 @@ class TestInspectAggregateReport:
             mock_get_query.return_value = MagicMock()
             mock_get_query.return_value.__class__.__name__ = "SpotPrice"
 
-            result = await inspect_aggregate_report(
-                sample_aggregate_report, mock_config_watcher, mock_logger
-            )
+            result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
 
             assert result is None
             mock_logger.warning.assert_called()

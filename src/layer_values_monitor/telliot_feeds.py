@@ -3,8 +3,6 @@
 import asyncio
 import logging
 
-logger = logging.getLogger(__name__)
-
 from clamfig.base import Registry
 from eth_abi import decode
 from telliot_feeds.datafeed import DataFeed
@@ -14,6 +12,8 @@ from telliot_feeds.feeds import CATALOG_FEEDS, DATAFEED_BUILDER_MAPPING
 from telliot_feeds.queries.abi_query import AbiQuery
 from telliot_feeds.queries.json_query import JsonQuery
 from telliot_feeds.queries.query_catalog import query_catalog
+
+logger = logging.getLogger(__name__)
 
 
 def get_query_from_data(query_data: bytes) -> AbiQuery | JsonQuery | None:

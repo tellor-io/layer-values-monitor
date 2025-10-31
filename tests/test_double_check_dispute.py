@@ -1,11 +1,11 @@
 """Test double-check dispute logic for SpotPrice queries."""
 
 import asyncio
-from unittest.mock import AsyncMock, Mock, patch
-
-import pytest
+from unittest.mock import Mock, patch
 
 from layer_values_monitor.custom_types import Metrics, NewReport
+
+import pytest
 
 
 @pytest.fixture
@@ -48,17 +48,17 @@ async def test_double_check_both_cross_threshold(sample_report, metrics):
     reported_value = 100.0
     first_trusted_value = 90.0  # 11.1% diff - crosses major threshold
     second_trusted_value = 88.0  # 13.6% diff - crosses major threshold
-    
+
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
     mock_query = Mock()
-    
+
     # Mock fetcher that returns second trusted value
     async def mock_fetcher():
         return (second_trusted_value, 1234567890)
-    
+
     # Execute
-    with patch('layer_values_monitor.monitor.generic_alert') as mock_alert:
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
         await inspect(
             sample_report,
             reported_value,
@@ -67,15 +67,15 @@ async def test_double_check_both_cross_threshold(sample_report, metrics):
             metrics,
             mock_logger,
             query=mock_query,
-            trusted_value_fetcher=mock_fetcher
+            trusted_value_fetcher=mock_fetcher,
         )
-    
+
     # Verify dispute was added to queue
     assert not disputes_q.empty()
     dispute = await disputes_q.get()
     assert dispute.reporter == sample_report.reporter
     assert dispute.query_id == sample_report.query_id
-    
+
     # Verify Discord alert was sent with both values
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
@@ -93,17 +93,17 @@ async def test_double_check_second_does_not_cross(sample_report, metrics):
     reported_value = 100.0
     first_trusted_value = 90.0  # 11.1% diff - crosses major threshold
     second_trusted_value = 99.0  # 1.01% diff - does NOT cross warning threshold (2%)
-    
+
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
     mock_query = Mock()
-    
+
     # Mock fetcher that returns second trusted value
     async def mock_fetcher():
         return (second_trusted_value, 1234567890)
-    
+
     # Execute
-    with patch('layer_values_monitor.monitor.generic_alert') as mock_alert:
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
         await inspect(
             sample_report,
             reported_value,
@@ -112,12 +112,12 @@ async def test_double_check_second_does_not_cross(sample_report, metrics):
             metrics,
             mock_logger,
             query=mock_query,
-            trusted_value_fetcher=mock_fetcher
+            trusted_value_fetcher=mock_fetcher,
         )
-    
+
     # Verify NO dispute was added to queue
     assert disputes_q.empty()
-    
+
     # Verify Discord alert was sent with both values
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
@@ -134,12 +134,12 @@ async def test_single_check_mode_without_fetcher(sample_report, metrics):
     # Setup
     reported_value = 100.0
     trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    
+
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
-    
+
     # Execute without fetcher (should use single-check logic)
-    with patch('layer_values_monitor.monitor.generic_alert') as mock_alert:
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
         await inspect(
             sample_report,
             reported_value,
@@ -148,14 +148,14 @@ async def test_single_check_mode_without_fetcher(sample_report, metrics):
             metrics,
             mock_logger,
             query=None,
-            trusted_value_fetcher=None  # No fetcher - single check mode
+            trusted_value_fetcher=None,  # No fetcher - single check mode
         )
-    
+
     # Verify dispute was added to queue (single check)
     assert not disputes_q.empty()
     dispute = await disputes_q.get()
     assert dispute.reporter == sample_report.reporter
-    
+
     # Verify standard alert was sent
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
@@ -170,17 +170,17 @@ async def test_fetcher_error_cancels_dispute(sample_report, metrics):
     # Setup
     reported_value = 100.0
     first_trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    
+
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
     mock_query = Mock()
-    
+
     # Mock fetcher that raises an error
     async def mock_fetcher():
         raise Exception("API Error")
-    
+
     # Execute
-    with patch('layer_values_monitor.monitor.generic_alert') as mock_alert:
+    with patch("layer_values_monitor.monitor.generic_alert"):
         await inspect(
             sample_report,
             reported_value,
@@ -189,12 +189,11 @@ async def test_fetcher_error_cancels_dispute(sample_report, metrics):
             metrics,
             mock_logger,
             query=mock_query,
-            trusted_value_fetcher=mock_fetcher
+            trusted_value_fetcher=mock_fetcher,
         )
-    
+
     # Verify NO dispute was added (error cancels dispute)
     assert disputes_q.empty()
-    
+
     # Verify error was logged
     assert any("Error fetching second trusted value" in str(call) for call in mock_logger.error.call_args_list)
-

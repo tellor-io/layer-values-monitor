@@ -76,14 +76,16 @@ def simulate_catchup_process(start_height: int, end_height: int) -> None:
         batch_heights = [event["height"] for event in batch]
 
         print(
-            f"🔄 Processing batch {i // BATCH_SIZE + 1}: heights {min(batch_heights)}-{max(batch_heights)} ({len(batch)} events)"
+            f"🔄 Processing batch {i // BATCH_SIZE + 1}: heights {min(batch_heights)}-"
+            f"{max(batch_heights)} ({len(batch)} events)"
         )
 
         # Process each event in the batch
         for event_data in batch:
             {"result": {"events": event_data["attributes"], "data": {"type": "tendermint/event/NewBlockEvents"}}}
+            query_id_short = event_data['attributes']['new_report.query_id'][0][:12]
             print(
-                f"  📤 Queued event from height {event_data['height']} with query_id {event_data['attributes']['new_report.query_id'][0][:12]}..."
+                f"  📤 Queued event from height {event_data['height']} with query_id {query_id_short}..."
             )
 
         # Small delay between batches

@@ -1,19 +1,24 @@
 """Module to watch and manage a live configuration."""
 
+from __future__ import annotations
+
 import asyncio
 import time
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from layer_values_monitor.custom_types import Metrics
 from layer_values_monitor.logger import logger
+
+if TYPE_CHECKING:
+    from layer_values_monitor.threshold_config import ThresholdConfig
 
 
 class ConfigWatcher:
     """Class to watch and manage a live configuration."""
 
-    def __init__(self, config_path: Path, threshold_config: "ThresholdConfig | None" = None) -> None:
+    def __init__(self, config_path: Path, threshold_config: ThresholdConfig | None = None) -> None:
         """Initialize the configuration watcher."""
         self.config_path = config_path
         self.config = {}

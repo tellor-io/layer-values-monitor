@@ -355,7 +355,8 @@ async def raw_data_queue_handler(
                     reports_collections[report.query_id].append(report)
 
                 logger.info(
-                    f"DEBUG: Added report - Height: {height}, Current Height: {current_height}, Collection Size: {len(reports_collections)}"
+                    f"DEBUG: Added report - Height: {height}, Current Height: {current_height}, "
+                    f"Collection Size: {len(reports_collections)}"
                 )
 
                 # Smart batching logic: process reports based on multiple conditions
@@ -394,7 +395,8 @@ async def raw_data_queue_handler(
 
                     collected_height = current_height if current_height is not None else height
                     logger.info(
-                        f"Processing {total_reports} reports collected at height {collected_height} ({process_reason}), qIds: [{', '.join(query_counts)}]"
+                        f"Processing {total_reports} reports collected at height {collected_height} "
+                        f"({process_reason}), qIds: [{', '.join(query_counts)}]"
                     )
 
                     logger.info(f"DEBUG: About to send {len(reports_collections)} query collections to queue")
@@ -456,7 +458,8 @@ async def raw_data_queue_handler(
 
         collected_height = current_height if current_height is not None else "unknown"
         logger.info(
-            f"Processing {total_reports} remaining reports collected at height {collected_height} (cleanup), qIds: [{', '.join(query_counts)}]"
+            f"Processing {total_reports} remaining reports collected at height {collected_height} "
+            f"(cleanup), qIds: [{', '.join(query_counts)}]"
         )
 
         await new_reports_q.put(dict(reports_collections))
@@ -542,11 +545,12 @@ async def inspect_spotprice_path(
     metrics: Metrics,
     logger: logging,
 ) -> None:
-    """SpotPrice inspection path with 4 scenarios:
+    """SpotPrice inspection path with 4 scenarios.
+
     1. In config AND in telliot → proceed normally
     2. In telliot but NOT in config → alert + proceed with global defaults
     3. NOT in telliot and NOT in config → alert + skip (foreign query)
-    4. In config but NOT in telliot → NEW alert + skip (can't get trusted value)
+    4. In config but NOT in telliot → NEW alert + skip (can't get trusted value).
     """
     logger.info(f"📊 SpotPrice inspection - QueryID: {query_id[:16]}...")
 
@@ -656,7 +660,7 @@ async def inspect_spotprice_path(
     logger.info(f"✅ Trusted value fetched: {trusted_value}")
 
     # Create fetcher lambda for double-check logic
-    async def fetch_trusted_value():
+    async def fetch_trusted_value() -> tuple[Any, Any]:
         return await fetch_value(feed)
 
     logger.info(f"🔎 Inspecting {len(reports)} report(s)...")
@@ -664,7 +668,16 @@ async def inspect_spotprice_path(
         logger.info(f"📊 Report {i}/{len(reports)} - Reporter: {r.reporter}")
         reported_value = query.value_type.decode(bytes.fromhex(r.value))
         logger.info(f"✅ Decoded value: {reported_value}")
-        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=query, trusted_value_fetcher=fetch_trusted_value)
+        await inspect(
+            r,
+            reported_value,
+            trusted_value,
+            disputes_q,
+            metrics,
+            logger,
+            query=query,
+            trusted_value_fetcher=fetch_trusted_value,
+        )
 
     logger.info("✅ SpotPrice inspection completed")
     return None
@@ -1265,7 +1278,7 @@ async def send_foreign_query_alert(
     """Send Discord alert for foreign queries not in our configs."""
     try:
         # Get monitor name from environment
-        monitor_name = os.getenv("MONITOR_NAME", "LVM")
+        os.getenv("MONITOR_NAME", "LVM")
 
         # Extract reported value for display
         reported_value = "Unknown"
@@ -1409,11 +1422,19 @@ async def inspect(
     logger: logging,
     query: Any = None,
     trusted_value_fetcher: Any = None,
-) -> None:
+)  -> None:
     """Inspect a new report and check if it is disputable.
-    
+
     Args:
+        report: The report to inspect
+        reported_value: The decoded reported value
+        trusted_value: The trusted value to compare against
+        disputes_q: Queue for sending disputes
+        metrics: Threshold metrics configuration
+        logger: Logger instance
+        query: Optional query object from telliot-feeds
         trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
+
     """
     display = {
         "REPORTER": report.reporter,
@@ -1429,11 +1450,11 @@ async def inspect(
     display["CURRENT_TIME"] = int(time.time() * 1000)
     display["TIME_DIFF"] = display["CURRENT_TIME"] - (int(report.timestamp))
     display["VALUE"] = reported_value
-    
+
     # Store first trusted value timestamp
     first_trusted_value = trusted_value
     first_trusted_time = time.time()
-    
+
     # compare values and check against threshold- three metrics(percentage, equality, range)
     alertable, disputable, diff = is_disputable(
         metrics.metric,
@@ -1476,21 +1497,23 @@ async def inspect(
     second_check_disputable = None
     should_dispute = False
     dispute_category = None
-    
+
     if disputable and trusted_value_fetcher is not None:
         # First check crossed threshold - initiate double-check
         logger.info(f"⏳ First trusted value check crossed threshold (diff: {diff}). Waiting 10 seconds for second check...")
         await asyncio.sleep(10)
-        
+
         logger.info("📡 Fetching second trusted value for verification...")
         try:
             second_trusted_result = await trusted_value_fetcher()
             if second_trusted_result is not None:
                 # fetch_value returns (value, timestamp) tuple
-                second_trusted_value = second_trusted_result[0] if isinstance(second_trusted_result, tuple) else second_trusted_result
+                second_trusted_value = (
+                    second_trusted_result[0] if isinstance(second_trusted_result, tuple) else second_trusted_result
+                )
                 second_trusted_time = time.time()
                 logger.info(f"✅ Second trusted value fetched: {second_trusted_value}")
-                
+
                 # Compare reported value against second trusted value
                 _, second_check_disputable, second_diff = is_disputable(
                     metrics.metric,
@@ -1500,12 +1523,12 @@ async def inspect(
                     second_trusted_value,
                     logger=logger,
                 )
-                
+
                 # Only dispute if BOTH checks cross threshold
                 if second_check_disputable:
                     logger.info(f"✅ Second check also crossed threshold (diff: {second_diff}). Proceeding with dispute.")
                     should_dispute = True
-                    
+
                     # Determine dispute category
                     if metrics.metric.lower() == "equality":
                         if metrics.warning_threshold == 1.0:
@@ -1531,11 +1554,11 @@ async def inspect(
                 logger.error("❌ Failed to fetch second trusted value. Cancelling dispute.")
         except Exception as e:
             logger.error(f"❌ Error fetching second trusted value: {e}. Cancelling dispute.")
-    
+
     elif disputable and trusted_value_fetcher is None:
         # No fetcher provided - use original single-check logic (EVMCall, TRBBridge)
         logger.info(f"disputable: true, diff: {diff} (single-check mode)")
-        
+
         # For equality metrics, determine dispute level based on which threshold is set to 1.0
         if metrics.metric.lower() == "equality":
             if metrics.warning_threshold == 1.0:
@@ -1577,18 +1600,24 @@ async def inspect(
 
         query_info = extract_query_info(query, query_type=report.query_type)
         diff_str = format_difference(diff, metrics.metric)
-        
+
         # Build message based on whether we did double-check
         if second_trusted_value is not None:
             # Double-check was performed - custom message format
-            first_time_str = datetime.fromtimestamp(first_trusted_time).strftime('%Y-%m-%d %H:%M:%S')
-            second_time_str = datetime.fromtimestamp(second_trusted_time).strftime('%Y-%m-%d %H:%M:%S')
-            
+            first_time_str = datetime.fromtimestamp(first_trusted_time).strftime("%Y-%m-%d %H:%M:%S")
+            second_time_str = datetime.fromtimestamp(second_trusted_time).strftime("%Y-%m-%d %H:%M:%S")
+
             if should_dispute:
-                alert_header = "🚨 **Second inspection triggered: sending dispute, reported value outside both trusted values**\n\n"
+                alert_header = (
+                    "🚨 **Second inspection triggered: sending dispute, "
+                    "reported value outside both trusted values**\n\n"
+                )
             else:
-                alert_header = "⚠️ **Second inspection triggered: reported value was past the first trusted value, but not the second**\n\n"
-            
+                alert_header = (
+                    "⚠️ **Second inspection triggered: reported value was past "
+                    "the first trusted value, but not the second**\n\n"
+                )
+
             # Build custom message
             msg = alert_header
             msg += f"**Asset:** {query_info}\n"
@@ -1606,7 +1635,7 @@ async def inspect(
             msg += f"**Reporter:** {report.reporter}\n"
             msg += f"**Power:** {report.power}\n"
             msg += f"**Tx Hash:** {report.tx_hash}\n"
-            
+
             # Add disputer info if disputing
             if should_dispute and dispute_level != "warning":
                 binary_path = os.getenv("LAYER_BINARY_PATH")
@@ -1621,10 +1650,10 @@ async def inspect(
                             msg += f"**Disputer:** {disputer_address}, {key_name}\n"
                     else:
                         msg += f"**Disputer:** {key_name} improperly configured, no dispute sent\n"
-            
+
             logger.info(f"Double-check alert:\n{msg}")
             generic_alert(msg)
-            
+
         else:
             # Standard single-check alert (no fetcher or not disputable)
             value_display = format_values(reported_value, trusted_value)

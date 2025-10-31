@@ -33,7 +33,7 @@ class TestSagaIntegration:
         await queue.put(agg_report)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock(spec=ThresholdConfig)
 
         # Mock the inspection to return should_pause=True
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
@@ -41,9 +41,7 @@ class TestSagaIntegration:
 
             # Run the queue handler for a short time
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_saga_contract_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_contract_manager)
             )
 
             await asyncio.sleep(0.1)
@@ -123,7 +121,7 @@ class TestSagaIntegration:
         await queue.put(report2)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock(spec=ThresholdConfig)
 
         # Mock different inspection results
         def side_effect(agg_report, *args):
@@ -135,9 +133,7 @@ class TestSagaIntegration:
         with patch("layer_values_monitor.monitor.inspect_aggregate_report", side_effect=side_effect):
             # Run the queue handler
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_saga_contract_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_contract_manager)
             )
 
             await asyncio.sleep(0.2)  # Give time to process both reports
@@ -179,14 +175,12 @@ class TestSagaIntegration:
         await queue.put(report)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock(spec=ThresholdConfig)
 
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
             mock_inspect.return_value = (True, "Should pause")
 
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_manager))
 
             await asyncio.sleep(0.1)
             task.cancel()
@@ -229,7 +223,7 @@ class TestSagaIntegration:
             await queue.put(report)
 
             mock_logger = MagicMock()
-            mock_threshold_config = MagicMock(spec=ThresholdConfig)
+            MagicMock(spec=ThresholdConfig)
             mock_saga_manager = MagicMock()
             mock_saga_manager.pause_contract = AsyncMock(return_value=("0xtest_hash", "success"))
 
@@ -237,9 +231,7 @@ class TestSagaIntegration:
                 mock_inspect.return_value = (True, "Should pause")
 
                 task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_saga_manager
-                )
+                    agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_manager)
                 )
 
                 await asyncio.sleep(0.1)

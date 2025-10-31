@@ -313,7 +313,7 @@ class TestSagaEdgeCases:
             await queue.put(report)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock(spec=ThresholdConfig)
 
         # Mock inspection to trigger pause for half the reports
         def side_effect(agg_report, *args):
@@ -322,9 +322,7 @@ class TestSagaEdgeCases:
 
         with patch("layer_values_monitor.monitor.inspect_aggregate_report", side_effect=side_effect):
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_saga_contract_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_contract_manager)
             )
 
             await asyncio.sleep(0.5)  # Let it process all reports

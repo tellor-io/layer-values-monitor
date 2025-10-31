@@ -11,7 +11,6 @@ from layer_values_monitor.monitor import (
     parse_reporters_response,
     query_reporters,
 )
-from layer_values_monitor.threshold_config import ThresholdConfig
 
 import pytest
 
@@ -183,7 +182,7 @@ class TestPowerThresholds:
     async def test_inspect_aggregate_report_with_power_thresholds(self, aggregate_report, power_thresholds, mock_logger):
         """Test inspect_aggregate_report with power threshold logic."""
         from layer_values_monitor.custom_types import Metrics
-        
+
         mock_config_watcher = MagicMock(spec=ConfigWatcher)
         mock_config_watcher.get_config.return_value = {
             "test_query_id": {
@@ -256,7 +255,7 @@ class TestPowerThresholds:
     async def test_power_thresholds_override_traditional_pause(self, aggregate_report, power_thresholds, mock_logger):
         """Test that power thresholds override traditional pause logic when enabled."""
         from layer_values_monitor.custom_types import Metrics
-        
+
         mock_config_watcher = MagicMock(spec=ConfigWatcher)
         mock_config_watcher.get_config.return_value = {
             "test_query_id": {

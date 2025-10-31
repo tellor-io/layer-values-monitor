@@ -134,13 +134,13 @@ async def test_raw_data_queue_handler_basic_flow(mock_logger):
     assert len(second_collection) == 2
     assert "query_id_2" in second_collection
     assert "query_id_1" in second_collection
-    
+
     # Check query_id_2 report (from height 100)
     assert isinstance(second_collection["query_id_2"][0], NewReport)
     assert second_collection["query_id_2"][0].query_id == "query_id_2"
     assert second_collection["query_id_2"][0].value == "0x456"
     assert second_collection["query_id_2"][0].reporter == "reporter2"
-    
+
     # Check query_id_1 report (from height 101)
     assert isinstance(second_collection["query_id_1"][0], NewReport)
     assert second_collection["query_id_1"][0].query_id == "query_id_1"
@@ -271,7 +271,7 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     # First collection has only the first report
     assert len(first_collection["same_query_id"]) == 1
     assert first_collection["same_query_id"][0].value == "0x111"
-    
+
     # Get second collection - should have the second report
     assert new_reports_q.qsize() >= 1
     second_collection = await new_reports_q.get()
@@ -359,22 +359,22 @@ async def test_raw_data_queue_handler():
     await raw_data_queue_handler(raw_data_q, new_reports_q, None, logger, height_tracker, max_iterations=3)
 
     assert not new_reports_q.empty(), "Queue should have items"
-    
+
     # First collection has first report (query1) - sent immediately as "first report"
     first_collection = await new_reports_q.get()
     assert len(first_collection) == 1, "First collection should have 1 query ID"
     assert "query1" in first_collection, "Should have query1"
     assert first_collection["query1"][0].value == "50000", "query1 should have value 50000"
-    
+
     # Second collection has query2 from height 5 and query1 from height 6
     second_collection = await new_reports_q.get()
     assert len(second_collection) == 2, "Second collection should have 2 query IDs"
     assert "query2" in second_collection, "Should have query2"
     assert "query1" in second_collection, "Should have query1"
-    
+
     # Verify query2 from height 5
     assert second_collection["query2"][0].value == "3000", "query2 should have value 3000"
-    
+
     # Verify query1 from height 6
     assert second_collection["query1"][0].value == "52000", "query1 from height 6 should have value 52000"
 

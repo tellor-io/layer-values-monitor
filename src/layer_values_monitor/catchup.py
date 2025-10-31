@@ -159,7 +159,8 @@ async def process_missed_blocks(
         batch_heights = [event["height"] for event in batch]
 
         logger.info(
-            f"🔄 Processing batch {i // BATCH_SIZE + 1}: heights {min(batch_heights)}-{max(batch_heights)} ({len(batch)} events)"
+            f"🔄 Processing batch {i // BATCH_SIZE + 1}: heights {min(batch_heights)}-"
+            f"{max(batch_heights)} ({len(batch)} events)"
         )
 
         # Process each event in the batch

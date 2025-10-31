@@ -277,7 +277,9 @@ async def process_disputes(
                 if dispute is None:
                     continue
                 logger.warning(
-                    f"⚠️ DISPUTE SKIPPED - {key_name} Keyring validation failed, no dispute will be sent for query {dispute.query_id[:16]}... (reporter: {dispute.reporter})"
+                    f"⚠️ DISPUTE SKIPPED - {key_name} Keyring validation failed, "
+                    f"no dispute will be sent for query {dispute.query_id[:16]}... "
+                    f"(reporter: {dispute.reporter})"
                 )
                 # Send Discord alert for skipped dispute due to keyring issues
                 from layer_values_monitor.discord import generic_alert

@@ -10,7 +10,7 @@ logger.setLevel(logging.DEBUG)
 file_handler = RotatingFileHandler(
     "monitor_log.log",
     maxBytes=50 * 1024 * 1024,  # 50MB
-    backupCount=20
+    backupCount=20,
 )
 file_handler.setLevel(logging.DEBUG)
 
