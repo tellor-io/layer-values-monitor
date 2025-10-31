@@ -123,6 +123,24 @@ def remove_0x_prefix(s: str) -> str:
     return s
 
 
+def decode_hex_value(hex_value: str) -> float:
+    """Decode a hex value to a readable number."""
+    # Remove 0x prefix if present
+    if hex_value.startswith("0x"):
+        hex_value = hex_value[2:]
+
+    # Validate hex value length - oracle values should be 32 bytes (64 hex chars)
+    if len(hex_value) > 64:
+        raise ValueError(f"Hex value too long ({len(hex_value)} chars) - expected ≤64 chars: {hex_value[:100]}...")
+
+    # Convert from hex to int
+    value_int = int(hex_value, 16)
+
+    value_scaled = value_int / (10**18)
+
+    return value_scaled
+
+
 def add_to_table(entry: dict[str, str]) -> None:
     """Add entry to table and save to CSV (without console output)."""
     global _current_row_count

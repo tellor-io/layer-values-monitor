@@ -65,7 +65,7 @@ For lighter startup commands, set these in `.env`:
 | | | |
 | `TRBBRIDGE_CONTRACT_ADDRESS` | TRB Bridge contract address | _(none)_ |
 | `TRBBRIDGE_CHAIN_ID` | Chain ID for bridge contract (default sepolia) | `11155111` |
-| `ETHEREUM_RPC_URL` | Ethereum RPC endpoint (for TRB Bridge) | _(none)_ |
+| `BRIDGE_CHAIN_RPC_URL` | Ethereum RPC endpoint (for TRB Bridge) | _(none)_ |
 | | | |
 | `SAGA_EVM_RPC_URL` | Saga EVM RPC endpoint | _(none)_ |
 | `SAGA_PRIVATE_KEY` | Guardian private key | _(none)_ |

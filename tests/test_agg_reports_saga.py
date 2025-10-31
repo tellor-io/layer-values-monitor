@@ -75,9 +75,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (True, "Test pause reason")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -113,9 +111,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (True, "Test pause reason")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -149,9 +145,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (True, "Test pause reason")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -188,7 +182,6 @@ class TestAggReportsQueueHandler:
                     queue,
                     mock_config_watcher,
                     mock_logger,
-                    mock_threshold_config,
                     None,  # No saga manager
                 )
             )
@@ -220,9 +213,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = (False, "Values within threshold")
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -253,9 +244,7 @@ class TestAggReportsQueueHandler:
             mock_inspect.return_value = None
 
             # Create task and let it process one item
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, mock_config_watcher, mock_logger, mock_saga_manager))
 
             # Wait a short time for processing
             await asyncio.sleep(0.1)
@@ -283,6 +272,8 @@ class TestInspectAggregateReport:
     @pytest.fixture
     def mock_config_watcher(self):
         """Create a mock config watcher."""
+        from layer_values_monitor.custom_types import Metrics
+
         watcher = MagicMock(spec=ConfigWatcher)
         watcher.get_config.return_value = {
             "test_query_id": {
@@ -294,6 +285,15 @@ class TestInspectAggregateReport:
                 "pause_threshold": 0.25,
             }
         }
+        watcher.is_supported_query_type.return_value = True
+        watcher.get_metrics_for_query.return_value = Metrics(
+            metric="percentage",
+            alert_threshold=0.05,
+            warning_threshold=0.1,
+            minor_threshold=0.15,
+            major_threshold=0.2,
+            pause_threshold=0.25,
+        )
         return watcher
 
     @pytest.fixture
@@ -331,10 +331,11 @@ class TestInspectAggregateReport:
                             mock_is_disputable.return_value = (True, True, 0.3)  # 30% diff > 25% pause threshold
 
                             result = await inspect_aggregate_report(
-                                sample_aggregate_report, mock_config_watcher, mock_logger, mock_threshold_config
+                                sample_aggregate_report, mock_config_watcher, mock_logger
                             )
 
                             assert result is not None
+                            # inspect_aggregate_report returns (should_pause, reason) without power_thresholds
                             should_pause, reason = result
                             assert should_pause is True
                             assert "exceeds pause threshold" in reason
@@ -357,10 +358,11 @@ class TestInspectAggregateReport:
                             mock_is_disputable.return_value = (False, False, 0.05)  # 5% diff < 25% pause threshold
 
                             result = await inspect_aggregate_report(
-                                sample_aggregate_report, mock_config_watcher, mock_logger, mock_threshold_config
+                                sample_aggregate_report, mock_config_watcher, mock_logger
                             )
 
                             assert result is not None
+                            # inspect_aggregate_report returns (should_pause, reason) without power_thresholds
                             should_pause, reason = result
                             assert should_pause is False
                             assert "acceptable deviation:" in reason
@@ -388,15 +390,14 @@ class TestInspectAggregateReport:
     @pytest.mark.asyncio
     async def test_inspect_no_config(self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report):
         """Test inspection with no configuration available."""
-        # Return empty config
-        mock_config_watcher.get_config.return_value = {}
+        # Mock config watcher to return no metrics
+        mock_config_watcher.is_supported_query_type.return_value = False
 
-        with patch("layer_values_monitor.monitor.get_metric") as mock_get_metric:
-            mock_get_metric.return_value = None  # No global config either
+        with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
+            mock_get_query.return_value = MagicMock()
+            mock_get_query.return_value.__class__.__name__ = "SpotPrice"
 
-            result = await inspect_aggregate_report(
-                sample_aggregate_report, mock_config_watcher, mock_logger, mock_threshold_config
-            )
+            result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
 
             assert result is None
             mock_logger.warning.assert_called()
@@ -415,12 +416,18 @@ class TestInspectAggregateReport:
             }
         }
 
-        result = await inspect_aggregate_report(
-            sample_aggregate_report, mock_config_watcher, mock_logger, mock_threshold_config
-        )
+        # Mock config watcher to return None metrics (invalid config)
+        mock_config_watcher.get_metrics_for_query.return_value = None
+        mock_config_watcher.is_supported_query_type.return_value = True
 
-        assert result is None
-        mock_logger.error.assert_called()
+        with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
+            mock_get_query.return_value = MagicMock()
+            mock_get_query.return_value.__class__.__name__ = "SpotPrice"
+
+            result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
+
+            assert result is None
+            mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
     async def test_inspect_disputable_major_threshold(
@@ -442,10 +449,11 @@ class TestInspectAggregateReport:
                                 mock_category.return_value = "major"
 
                                 result = await inspect_aggregate_report(
-                                    sample_aggregate_report, mock_config_watcher, mock_logger, mock_threshold_config
+                                    sample_aggregate_report, mock_config_watcher, mock_logger
                                 )
 
                                 assert result is not None
+                                # inspect_aggregate_report returns (should_pause, reason) without power_thresholds
                                 should_pause, reason = result
                                 assert should_pause is False
                                 assert "major threshold" in reason
