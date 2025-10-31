@@ -1,12 +1,17 @@
 """Logger."""
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# File handler for logging to file
-file_handler = logging.FileHandler("monitor_log.log")
+# File handler for logging to file with rotation
+file_handler = RotatingFileHandler(
+    "monitor_log.log",
+    maxBytes=50 * 1024 * 1024,  # 50MB
+    backupCount=20
+)
 file_handler.setLevel(logging.DEBUG)
 
 # Console handler for logging to terminal
