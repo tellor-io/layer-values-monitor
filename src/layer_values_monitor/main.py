@@ -12,6 +12,7 @@ from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
 from layer_values_monitor.dispute import process_disputes
+from layer_values_monitor.evm_connections import validate_rpc_connection
 from layer_values_monitor.logger import logger
 from layer_values_monitor.monitor import (
     agg_reports_queue_handler,
@@ -24,49 +25,12 @@ from layer_values_monitor.threshold_config import ThresholdConfig
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
-from web3 import Web3
 
 for logger_name in logging.root.manager.loggerDict:
     if logger_name.startswith("telliot_feeds"):
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 
 
-def validate_rpc_url(rpc_url: str, network_name: str) -> tuple[bool, str]:
-    """Validate RPC URL in .env.
-
-    Args:
-        rpc_url: The RPC URL to validate
-        network_name: Human-readable network name for error messages
-
-    Returns:
-        Tuple of (is_valid, error_message)
-
-    """
-    try:
-        w3 = Web3(Web3.HTTPProvider(rpc_url))
-        # Test basic connectivity by getting block number
-        block_number = w3.eth.block_number
-
-        # Get chain ID to determine network
-        chain_id = w3.eth.chain_id
-
-        # Validate chain ID
-        if network_name.lower() == "saga":
-            # Saga chainlets typically use custom chain IDs
-            # Just verify we can connect and get a valid chain ID
-            if chain_id <= 0:
-                return False, f"Invalid chain ID {chain_id} for {network_name} network"
-        elif network_name.lower() == "ethereum":
-            # Ethereum mainnet = 1, Sepolia testnet = 11155111
-            if chain_id not in [1, 11155111]:
-                return False, f"Unsupported Ethereum chain ID {chain_id}. Supported: 1 (mainnet), 11155111 (sepolia)"
-
-        logger.info(f"✅ {network_name} RPC validation successful - Chain ID: {chain_id}, Block: {block_number}")
-        return True, ""
-
-    except Exception as e:
-        error_msg = f"Failed to connect to {network_name} RPC at {rpc_url}: {e}"
-        return False, error_msg
 
 
 def async_run(f: Any) -> Any:
@@ -145,13 +109,22 @@ async def start() -> None:
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
 
-    # Validate Ethereum RPC URL
-    ethereum_rpc_url = os.getenv("BRIDGE_CHAIN_RPC_URL")
-    if ethereum_rpc_url:
-        logger.info("Validating Ethereum RPC connection...")
-        is_valid, error_msg = validate_rpc_url(ethereum_rpc_url, "Ethereum")
-        if not is_valid:
-            raise ValueError(f"Ethereum RPC validation failed: {error_msg}")
+    # Validate that at least one RPC config exists (INFURA_API_KEY or chain-specific URLs)
+    infura_key = os.getenv("INFURA_API_KEY")
+    has_rpc_config = bool(infura_key)
+    
+    # Check for any chain-specific configs
+    if not has_rpc_config:
+        for chain_id in [1, 11155111]:  # Common chains
+            if os.getenv(f"EVM_RPC_URLS_{chain_id}"):
+                has_rpc_config = True
+                break
+    
+    if not has_rpc_config:
+        logger.warning(
+            "No RPC configuration found. Set INFURA_API_KEY (for chains 1, 11155111) "
+            "or EVM_RPC_URLS_{chain_id} for other chains."
+        )
 
     # Validate Saga environment variables if Saga guard is enabled
     power_thresholds = None
@@ -170,20 +143,21 @@ async def start() -> None:
             f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
         )
 
-        # Validate Saga RPC URL and private key
-        saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
+        # Validate Saga RPC URLs and private key
+        saga_rpc_urls = os.getenv("SAGA_RPC_URLS")
         saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
 
-        if not saga_rpc_url:
-            raise ValueError("SAGA_EVM_RPC_URL environment variable is required when using --enable-saga-guard")
+        if not saga_rpc_urls:
+            raise ValueError("SAGA_RPC_URLS environment variable is required when using --enable-saga-guard")
         if not saga_private_key:
             raise ValueError("SAGA_PRIVATE_KEY environment variable is required when using --enable-saga-guard")
 
-        # Validate Saga RPC URL connectivity
+        # Validate Saga RPC URL connectivity (test primary URL)
         logger.info("💡 Validating Saga EVM RPC connection...")
-        is_valid, error_msg = validate_rpc_url(saga_rpc_url, "Saga")
+        primary_saga_url = saga_rpc_urls.split(',')[0].strip()
+        is_valid, error_msg, saga_chain_id = validate_rpc_connection(primary_saga_url, "Saga", logger)
         if not is_valid:
-            raise ValueError(f"Saga RPC validation failed: {error_msg}")
+            logger.warning(f"Primary Saga RPC validation failed: {error_msg}. Will try backups if configured.")
 
         saga_contract_manager = create_saga_contract_manager(logger)
         if saga_contract_manager:

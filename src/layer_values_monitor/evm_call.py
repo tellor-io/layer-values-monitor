@@ -1,9 +1,9 @@
 """Trusted value for EVMCall query type."""
 
 import math
-import os
 from typing import Any
 
+from layer_values_monitor.evm_connections import get_web3_connection
 from layer_values_monitor.logger import logger
 
 from hexbytes import HexBytes
@@ -11,9 +11,6 @@ from telliot_feeds.feeds import DataFeed
 from web3 import Web3
 from web3.exceptions import ExtraDataLengthError
 from web3.middleware import ExtraDataToPOAMiddleware
-
-# Cache Web3 connections to avoid recreating them
-_web3_cache: dict[int, Web3] = {}
 
 
 async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed, w3: Web3, chain_id: int) -> HexBytes:
@@ -67,49 +64,6 @@ async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed, w3: Web3
         return None
 
 
-def get_web3_connection(chain_id: int) -> Web3 | None:
-    """Get cached Web3 connection for a given chain_id using INFURA_API_KEY from env.
-
-    Returns cached Web3 instance or None on error.
-    """
-    # Return cached connection if available
-    if chain_id in _web3_cache:
-        return _web3_cache[chain_id]
-
-    # Check for custom RPC URL env var first (format: EVMCALL_RPC_URL_<CHAIN_ID>)
-    custom_rpc_key = f"EVMCALL_RPC_URL_{chain_id}"
-    rpc_url = os.getenv(custom_rpc_key)
-
-    if not rpc_url:
-        # Fallback to Infura for supported chains
-        infura_key = os.getenv("INFURA_API_KEY")
-        if not infura_key:
-            logger.error(f"Neither {custom_rpc_key} nor INFURA_API_KEY found in environment for chain_id {chain_id}")
-            return None
-
-        # Construct RPC URL based on chain_id
-        rpc_urls = {
-            1: f"https://mainnet.infura.io/v3/{infura_key}",
-            11155111: f"https://sepolia.infura.io/v3/{infura_key}",
-        }
-
-        rpc_url = rpc_urls.get(chain_id)
-        if not rpc_url:
-            logger.error(
-                f"No RPC URL configured for chain_id {chain_id}. Set {custom_rpc_key} or "
-                f"use supported chains: {list(rpc_urls.keys())}"
-            )
-            return None
-
-    try:
-        provider = Web3.HTTPProvider(rpc_url)
-        w3 = Web3(provider)
-        _web3_cache[chain_id] = w3
-        logger.info(f"Created and cached Web3 instance for chain_id: {chain_id}")
-        return w3
-    except Exception as e:
-        logger.error(f"Unable to connect to RPC for chain_id {chain_id}: {e}")
-        return None
 
 
 def get_block_number_at_timestamp(w3: Web3, timestamp: int, chain_id: int) -> int | None:

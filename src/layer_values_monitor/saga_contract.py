@@ -1,7 +1,8 @@
 """Saga contract interactions for pausing contracts when circuit breaker is triggered."""
 
 import logging
-import os
+
+from layer_values_monitor.evm_connections import get_saga_web3_connection
 
 from web3 import Web3
 
@@ -9,17 +10,17 @@ from web3 import Web3
 class SagaContractManager:
     """Manages interactions with Saga EVM contracts for pausing functionality."""
 
-    def __init__(self, rpc_url: str, private_key: str, logger: logging.Logger) -> None:
+    def __init__(self, w3: Web3, private_key: str, logger: logging.Logger) -> None:
         """Initialize the Saga contract manager.
 
         Args:
-            rpc_url: The Saga EVM RPC endpoint
+            w3: Web3 instance connected to Saga EVM
             private_key: Private key for signing transactions (without 0x prefix)
             logger: Logger instance
 
         """
         self.logger = logger
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+        self.w3 = w3
 
         # Setup account for signing
         if private_key.startswith("0x"):
@@ -253,6 +254,9 @@ class SagaContractManager:
 def create_saga_contract_manager(logger: logging.Logger) -> SagaContractManager | None:
     """Create SagaContractManager from environment variables.
 
+    Uses SAGA_EVM_RPC_URL for special Saga guardian handling (requires transaction signing).
+    The connection is still cached in the global cache for potential reuse.
+
     Args:
         logger: Logger instance
 
@@ -260,23 +264,26 @@ def create_saga_contract_manager(logger: logging.Logger) -> SagaContractManager 
         SagaContractManager instance if environment variables are set, None otherwise
 
     """
-    saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
-    saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
-
-    if not saga_rpc_url:
-        logger.warning("SAGA_EVM_RPC_URL not set in environment - contract pausing disabled")
+    import os
+    
+    # Get Web3 connection using unified manager (reads SAGA_EVM_RPC_URL)
+    w3, chain_id = get_saga_web3_connection(logger)
+    
+    if not w3:
         return None
 
+    saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
     if not saga_private_key:
         logger.warning("SAGA_PRIVATE_KEY not set in environment - contract pausing disabled")
         return None
 
     try:
-        manager = SagaContractManager(saga_rpc_url, saga_private_key, logger)
+        manager = SagaContractManager(w3, saga_private_key, logger)
         if manager.is_connected():
+            logger.info(f"✅ Saga contract manager initialized for chain {chain_id}")
             return manager
         else:
-            logger.error("Failed to connect to Saga EVM - contract pausing disabled")
+            logger.error("Failed to verify Saga EVM connection - contract pausing disabled")
             return None
     except Exception as e:
         logger.error(f"Failed to initialize Saga contract manager: {e}")
