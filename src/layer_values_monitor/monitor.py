@@ -593,8 +593,7 @@ async def inspect_spotprice_path(
     # Scenario 4: IN config but NOT in telliot → NEW ALERT (SKIP - can't get trusted value)
     elif has_specific_config and not in_telliot:
         logger.warning("🆕 Query in config but NOT in telliot catalog")
-        alert_msg = "🆕 **Query found in our config, but not in telliot catalog**\n"
-        alert_msg += f"**QueryId:** {query_id}\n"
+        alert_msg = f"**QueryId:** {query_id}\n"
         alert_msg += f"**QueryType:** {query_type}\n"
         if asset_pair != "Unknown":
             alert_msg += f"**Asset pair:** {asset_pair}\n"
@@ -604,32 +603,23 @@ async def inspect_spotprice_path(
         alert_msg += "**Status:** Cannot inspect - telliot unavailable for trusted value"
 
         logger.info(f"Config-but-not-telliot alert:\n{alert_msg}")
-        generic_alert(alert_msg)
+        generic_alert(alert_msg, description="🆕 **QUERY IN CONFIG, BUT NOT TELLIOT**")
         return None  # Can't get trusted value from telliot
 
     # Scenario 2: NOT in config but IN telliot → Unconfigured query (PROCEED with global defaults)
     elif not has_specific_config and in_telliot:
-        logger.warning("⚠️ Unconfigured query - in telliot but NOT in config")
+        logger.warning("⚠️ UNCONFIGURED QUERY - IN TELLIOT BUT NOT IN CONFIG")
 
         # Check if this query type typically has per-query configs
         has_specific_configs = any(k != "defaults" for k in query_type_configs.keys())
 
         if has_specific_configs:
-            # Send alert
-            alert_msg = "⚠️ **Query found in telliot, but not in our config file**\n"
-            alert_msg += f"**QueryId:** {query_id}\n"
-            alert_msg += f"**QueryType:** {query_type}\n"
-            if asset_pair != "Unknown":
-                alert_msg += f"**Asset pair:** {asset_pair}\n"
-            alert_msg += f"**Value:** {decoded_value}\n"
-            alert_msg += f"**Reporter:** {reports[0].reporter}\n"
-            alert_msg += f"**Tx Hash:** {reports[0].tx_hash}\n"
-            alert_msg += (
-                f"**Status:** Using global defaults (alert={metrics.alert_threshold}, warning={metrics.warning_threshold})"
+            # Log info message (don't send Discord alert - we'll alert on value discrepancy if needed)
+            logger.info(
+                f"⚠️ Query found in telliot but not in config file - "
+                f"QueryId: {query_id}, Asset: {asset_pair}, "
+                f"Using global defaults (alert={metrics.alert_threshold}, warning={metrics.warning_threshold})"
             )
-
-            logger.info(f"Unconfigured query alert:\n{alert_msg}")
-            generic_alert(alert_msg)
         # Fall through to proceed with inspection using global defaults
 
     # Scenario 1: IN config AND IN telliot → Normal path (PROCEED)
@@ -1292,8 +1282,7 @@ async def send_foreign_query_alert(
             reported_value = report.value
 
         # Build the alert message
-        alert_msg = "⚠️ **Query not found in telliot or configs**\n"
-        alert_msg += f"**QueryId:** {query_id}\n"
+        alert_msg = f"**QueryId:** {query_id}\n"
         alert_msg += f"**QueryType:** {query_type}\n"
         if asset_pair != "Unknown":
             alert_msg += f"**Asset pair:** {asset_pair}\n"
@@ -1302,7 +1291,7 @@ async def send_foreign_query_alert(
         alert_msg += f"**Tx Hash:** {report.tx_hash}"
 
         logger.info(f"Foreign query alert:\n{alert_msg}")
-        generic_alert(alert_msg)
+        generic_alert(alert_msg, description="⚠️ **Query not found in telliot or configs**")
 
     except Exception as e:
         logger.error(f"Failed to send foreign query alert: {e}")
@@ -1314,16 +1303,10 @@ async def send_unknown_query_type_alert(
     """Send Discord alert for unknown query types."""
     try:
         monitor_name = os.getenv("MONITOR_NAME", "LVM")
-        reported_value = "Unknown"
-        try:
-            query_obj = get_query(report.query_data)
-            if query_obj:
-                reported_value = query_obj.value_type.decode(bytes.fromhex(report.value))
-        except Exception:
-            reported_value = report.value
+        # Show the raw hex value instead of trying to decode
+        reported_value = report.value
 
-        alert_msg = f"**{monitor_name}** does not support query type: {query_type}\n"
-        alert_msg += f"**QueryId:** {query_id}\n"
+        alert_msg = f"**QueryId:** {query_id}\n"
         if asset_pair != "Unknown":
             alert_msg += f"**Asset pair:** {asset_pair}\n"
         alert_msg += f"**Value:** {reported_value}\n"
@@ -1331,7 +1314,7 @@ async def send_unknown_query_type_alert(
         alert_msg += f"**Tx Hash:** {report.tx_hash}"
 
         logger.info(f"Unknown query type alert:\n{alert_msg}")
-        generic_alert(alert_msg)
+        generic_alert(alert_msg, description=f"⚠️ **Does not support query type: {query_type}**")
     except Exception as e:
         logger.error(f"Failed to send unknown query type alert: {e}")
 
@@ -1357,7 +1340,9 @@ async def inspect_trbbridge_reports(
     # Get TRBBridge configuration from environment variables, default to mainnet if not set
     contract_address = os.getenv("TRBBRIDGE_CONTRACT_ADDRESS")
     chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
-    rpc_url = os.getenv("BRIDGE_CHAIN_RPC_URL")
+    # Note: rpc_url is optional - get_trb_bridge_trusted_value will use unified connection manager
+    # BRIDGE_CHAIN_RPC_URL is deprecated in favor of EVMCALL_RPC_URL_{chain_id}
+    rpc_url = None  # Let trb_bridge.py handle RPC URL lookup via unified manager
 
     if not contract_address:
         logger.error("TRBBRIDGE_CONTRACT_ADDRESS environment variable is not set")
@@ -1607,19 +1592,14 @@ async def inspect(
             first_time_str = datetime.fromtimestamp(first_trusted_time).strftime("%Y-%m-%d %H:%M:%S")
             second_time_str = datetime.fromtimestamp(second_trusted_time).strftime("%Y-%m-%d %H:%M:%S")
 
+            # Determine description based on dispute status
             if should_dispute:
-                alert_header = (
-                    "🚨 **Second inspection triggered: sending dispute, "
-                    "reported value outside both trusted values**\n\n"
-                )
+                description = "🚨 **ATTEMPTING TO SEND DISPUTE**"
             else:
-                alert_header = (
-                    "⚠️ **Second inspection triggered: reported value was past "
-                    "the first trusted value, but not the second**\n\n"
-                )
+                description = "⚠️ **SECOND INSPECTION TRIGGERED, BUT NO DISPUTE SENT**"
 
-            # Build custom message
-            msg = alert_header
+            # Build custom message (without description - it's passed separately)
+            msg = f"**QueryId:** {report.query_id}\n"
             msg += f"**Asset:** {query_info}\n"
             if report.query_type:
                 msg += f"**QueryType:** {report.query_type}\n"
@@ -1651,12 +1631,12 @@ async def inspect(
                     else:
                         msg += f"**Disputer:** {key_name} improperly configured, no dispute sent\n"
 
-            logger.info(f"Double-check alert:\n{msg}")
-            generic_alert(msg)
+            logger.info(f"Double-check alert:\n{description}\n{msg}")
+            generic_alert(msg, description=description)
 
         else:
             # Standard single-check alert (no fetcher or not disputable)
-            value_display = format_values(reported_value, trusted_value)
+            value_display = format_values(reported_value, trusted_value, query_type=report.query_type)
 
             # Get disputer information based on dispute level and keyring config
             disputer_info = None
@@ -1689,7 +1669,7 @@ async def inspect(
             )
 
             logger.info(f"Alertable value detected:\n{msg}")
-            generic_alert(msg)
+            generic_alert(msg)  # Uses default "❗Found Something❗" description
 
     display["DISPUTABLE"] = disputable
 
