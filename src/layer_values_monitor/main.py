@@ -92,7 +92,6 @@ async def start() -> None:
         default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"),
         help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)",
     )
-    parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
     parser.add_argument(
         "--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing"
     )

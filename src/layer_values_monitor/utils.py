@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 from layer_values_monitor.constants import CSV_FILE_PATTERN, CURRENT_CSV_FILE, LOGS_DIR, TABLE
 from layer_values_monitor.custom_types import GlobalMetric, Metrics
-from layer_values_monitor.threshold_config import ThresholdConfig
 
 import pandas as pd
 from pandas import DataFrame
@@ -73,47 +72,6 @@ def create_new_csv_file() -> str:
     _current_row_count = 0
 
     return new_filepath
-
-
-def get_metric(
-    query_type: str,
-    logger: logging,
-    threshold_config: ThresholdConfig,
-) -> Metrics | None:
-    """Return Metrics/Thresholds given a query type."""
-    try:
-        metric = GlobalMetric[query_type.upper()].value
-    except KeyError:
-        logger.error(f"query type {query_type} not found in global metrics")
-        print(f"ERROR: query type {query_type} not found in global metrics")
-        return None
-    if metric == "percentage":
-        return Metrics(
-            metric=metric,
-            alert_threshold=threshold_config.percentage_alert,
-            warning_threshold=threshold_config.percentage_warning,
-            minor_threshold=threshold_config.percentage_minor,
-            major_threshold=threshold_config.percentage_major,
-            pause_threshold=threshold_config.pause_threshold,  # Default pause threshold for percentage metric
-        )
-    elif metric == "range":
-        return Metrics(
-            metric=metric,
-            alert_threshold=threshold_config.range_alert,
-            warning_threshold=threshold_config.range_warning,
-            minor_threshold=threshold_config.range_minor,
-            major_threshold=threshold_config.range_major,
-            pause_threshold=0.0,  # Pause threshold not applicable for range metrics
-        )
-    elif metric == "equality":
-        return Metrics(
-            metric=metric,
-            alert_threshold=threshold_config.equality_alert,
-            warning_threshold=threshold_config.equality_warning,
-            minor_threshold=threshold_config.equality_minor,
-            major_threshold=threshold_config.equality_major,
-            pause_threshold=0.0,  # Pause threshold not applicable for equality metrics
-        )
 
 
 def remove_0x_prefix(s: str) -> str:
