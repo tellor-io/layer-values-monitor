@@ -1,10 +1,13 @@
 """Send messages using Discord."""
 
+import logging
 import os
 from typing import Any
 
 import click
 from discordwebhook import Discord
+
+from layer_values_monitor.logger import console_logger
 
 
 def generic_alert(msg: str, description: str = None) -> None:
@@ -44,6 +47,9 @@ def send_discord_msg(msg: str, description: str = None) -> None:
         msg: The message content to send
         description: Optional description/alert type line. If None, uses "❗Found Something❗"
     """
+    # Get logger for file logging (not console)
+    file_logger = logging.getLogger(__name__)
+    
     MONITOR_NAME = os.getenv("MONITOR_NAME", "LVM")
     
     # First line: Monitor name only (bold)
@@ -52,9 +58,11 @@ def send_discord_msg(msg: str, description: str = None) -> None:
     # Second line: Description/alert type, then message content
     if description:
         second_line = f"{description}\n{msg}"
+        display_description = description
     else:
         # Default description for regular alerts
-        second_line = f"❗Found Something❗\n{msg}"
+        second_line = f"❗**FOUND SOMETHING**❗\n{msg}"
+        display_description = "❗**FOUND SOMETHING**❗"
     
     # Add separator line at the end of message for better readability
     separator = "\n" + "─" * 50 + "\n"
@@ -64,14 +72,18 @@ def send_discord_msg(msg: str, description: str = None) -> None:
     try:
         get_alert_bot_2().post(content=full_message)
     except Exception as e:
-        click.echo(f"alert bot 2 not used? {e}")
+        # Log to file only, not terminal
+        file_logger.debug(f"Alert bot 2 not used: {e}")
         pass
     try:
         get_alert_bot_3().post(content=full_message)
     except Exception as e:
-        click.echo(f"alert bot 3 not used? {e}")
+        # Log to file only, not terminal
+        file_logger.debug(f"Alert bot 3 not used: {e}")
         pass
-    click.echo("Alerts sent!")
+    
+    # Clean console output - just show alert sent + description
+    console_logger.info(f"Discord alert sent! {display_description}")
     return
 
 

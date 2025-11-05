@@ -11,6 +11,7 @@ from typing import Any
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
+from layer_values_monitor.logger import console_logger
 from layer_values_monitor.custom_types import (
     AggregateReport,
     Metrics,
@@ -265,7 +266,6 @@ async def raw_data_queue_handler(
     New reports are collected by height and sent to new_reports_q.
     Aggregate reports are sent directly to agg_reports_q.
     """
-    logger.debug("Processing raw WebSocket data...")
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
     # Smart batching configuration
@@ -276,54 +276,32 @@ async def raw_data_queue_handler(
     last_batch_time = time.time()
     while iterations < max_iterations:
         iterations += 1
-        logger.debug(f"DEBUG: Starting iteration {iterations}, waiting for raw_data...")
         raw_data: dict[str, Any] = await raw_data_q.get()
         raw_data_q.task_done()
-        logger.debug(f"DEBUG: Got raw_data for iteration {iterations}")
-        logger.debug(f"DEBUG: Raw data keys: {list(raw_data.keys())}")
 
-        # Log everything that comes through the queue
         result: dict[str, Any] = raw_data.get("result")
-        result_type = (
-            "missing" if result is None else ("empty" if result == {} else f"present with keys: {list(result.keys())}")
-        )
-        logger.info(f"📥 Queue data - keys: {list(raw_data.keys())}, id: {raw_data.get('id')}, result: {result_type}")
 
         if result is None:
-            logger.debug("DEBUG: No result in raw_data, skipping")
             continue
 
         # Skip subscription acknowledgments (empty result)
         if result == {}:
-            logger.debug("DEBUG: Subscription acknowledgment, skipping")
             continue
-
-        logger.debug(f"DEBUG: Result keys: {list(result.keys()) if result else 'None'}")
 
         # Filter out duplicate events: Tendermint sends the same aggregate reports in both
         # 'NewBlock' and 'NewBlockEvents'. We only process 'NewBlockEvents' to avoid duplicates.
         data = result.get("data", {})
         event_type = data.get("type")
-        logger.debug(f"DEBUG: Event type from data: {event_type}")
         if event_type == "tendermint/event/NewBlock":
-            logger.debug("DEBUG: Skipping NewBlock event")
             continue
 
         events = result.get("events")
-        logger.debug(
-            f"DEBUG: Events in result: {events is not None}, event keys: {list(events.keys()) if events else 'None'}"
-        )
         if events is None:
-            logger.debug("DEBUG: No events in result, skipping")
             continue
 
         # Determine event type by presence of keys
         is_new_report = "new_report.query_id" in events
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
-
-        logger.debug(f"DEBUG: Event type check - is_new_report: {is_new_report}, is_agg_report: {is_agg_report}")
-        if events:
-            logger.debug(f"DEBUG: Sample event keys: {list(events.keys())[:10]}")  # Show first 10 keys
 
         if is_new_report:
             logger.info(
@@ -354,11 +332,6 @@ async def raw_data_queue_handler(
                 else:
                     reports_collections[report.query_id].append(report)
 
-                logger.info(
-                    f"DEBUG: Added report - Height: {height}, Current Height: {current_height}, "
-                    f"Collection Size: {len(reports_collections)}"
-                )
-
                 # Smart batching logic: process reports based on multiple conditions
                 should_process = False
                 process_reason = ""
@@ -367,27 +340,21 @@ async def raw_data_queue_handler(
                 if current_height is not None and height > current_height:
                     should_process = True
                     process_reason = f"height increment ({current_height} -> {height})"
-                    logger.info(f"DEBUG: Height increment detected - {current_height} -> {height}")
 
                 # Batch size threshold reached
                 elif len(reports_collections) >= MAX_BATCH_SIZE:
                     should_process = True
                     process_reason = f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})"
-                    logger.info(f"DEBUG: Batch size limit reached - {len(reports_collections)} >= {MAX_BATCH_SIZE}")
 
                 # Timeout reached
                 elif time.time() - last_batch_time > BATCH_TIMEOUT:
                     should_process = True
                     process_reason = f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)"
-                    logger.info(f"DEBUG: Timeout reached - {time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s")
 
                 # First report (current_height is None) - process immediately
                 elif current_height is None:
                     should_process = True
                     process_reason = "first report"
-                    logger.info("DEBUG: First report detected - current_height is None")
-
-                logger.info(f"DEBUG: Processing decision - should_process: {should_process}, reason: {process_reason}")
 
                 if should_process and len(reports_collections) > 0:
                     total_reports = sum(len(reports) for reports in reports_collections.values())
@@ -399,17 +366,13 @@ async def raw_data_queue_handler(
                         f"({process_reason}), qIds: [{', '.join(query_counts)}]"
                     )
 
-                    logger.info(f"DEBUG: About to send {len(reports_collections)} query collections to queue")
                     await new_reports_q.put(dict(reports_collections))
                     reports_collections.clear()
                     last_batch_time = time.time()
-                    logger.info("DEBUG: Cleared reports_collections and updated last_batch_time")
 
                 # Update current height (either first time or after processing)
                 if current_height is None or height > current_height:
-                    old_height = current_height
                     current_height = height
-                    logger.info(f"DEBUG: Updated current_height from {old_height} to {current_height}")
                     # Track height for missed block detection
                     height_tracker.update(height)
 
@@ -484,12 +447,8 @@ async def inspect_reports(
     query_id = reports[0].query_id
     query_type = reports[0].query_type
 
-    logger.info(f"CONFIG DEBUG: inspect_reports called for query_id: {query_id[:16]}..., query_type: {query_type}")
-
     # Check if query type is supported
-    logger.info(f"CONFIG DEBUG: Checking if query type '{query_type}' is supported...")
     if not config_watcher.is_supported_query_type(query_type):
-        logger.warning(f"CONFIG DEBUG: Query type '{query_type}' is NOT supported")
         # Extract asset pair if possible for better logging
         asset_pair = "Unknown"
         try:
@@ -500,19 +459,22 @@ async def inspect_reports(
             pass
 
         # Send Discord alert for unknown query type
-        await send_unknown_query_type_alert(query_type, query_id, asset_pair, reports[0], logger)
+        await send_unsupported_query_alert(
+            query_id, 
+            query_type, 
+            asset_pair, 
+            reports[0], 
+            logger,
+            description=f"⚠️ **QUERY TYPE NOT SUPPORTED: {query_type.upper()}**",
+            try_decode=False
+        )
         return None
-    else:
-        logger.info(f"CONFIG DEBUG: Query type '{query_type}' IS supported")
 
     # Get metrics configuration using new method
-    logger.info(f"CONFIG DEBUG: Getting metrics for query_id: {query_id[:16]}..., query_type: {query_type}")
     metrics = config_watcher.get_metrics_for_query(query_id, query_type)
     if metrics is None:
-        logger.error(f"CONFIG DEBUG: Unable to get metrics for query {query_id[:16]}... of type {query_type}")
+        logger.error(f"Unable to get metrics for query {query_id[:16]}... of type {query_type}")
         return None
-    else:
-        logger.info(f"CONFIG DEBUG: Successfully got metrics: {metrics}")
 
     # Branch based on query type - each type has its own inspection path
     logger.info(f"🔀 Routing to {query_type} inspection path...")
@@ -552,19 +514,19 @@ async def inspect_spotprice_path(
     3. NOT in telliot and NOT in config → alert + skip (foreign query)
     4. In config but NOT in telliot → NEW alert + skip (can't get trusted value).
     """
-    logger.info(f"📊 SpotPrice inspection - QueryID: {query_id[:16]}...")
-
+    logger.debug(f"🔍 SpotPrice inspection starting - QueryID: {query_id[:16]}..., {len(reports)} report(s)")
+    
     # Step 1: Check if query is in our config
     query_type_configs = config_watcher.query_configs.get(query_type.lower(), {})
     has_specific_config = query_id.lower() in query_type_configs
-    logger.info(f"📝 Config check: has_specific_config = {has_specific_config}")
+    logger.debug(f" Query in config? {has_specific_config}")
 
     # Step 2: Check if query is in telliot catalog
     from telliot_feeds.queries.query_catalog import query_catalog
 
     catalog_entry = query_catalog.find(query_id=query_id)
     in_telliot = len(catalog_entry) > 0
-    logger.info(f"📚 Telliot check: in_telliot = {in_telliot}")
+    logger.debug(f"Query in telliot? {in_telliot}")
 
     # Step 3: Extract asset pair and decode value (for alerts)
     asset_pair = "Unknown"
@@ -574,25 +536,34 @@ async def inspect_spotprice_path(
         if query_obj:
             if hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
                 asset_pair = f"{query_obj.asset}/{query_obj.currency}"
+                logger.debug(f"Extracted asset pair: {asset_pair}")
             try:
                 decoded_value = query_obj.value_type.decode(bytes.fromhex(reports[0].value))
-            except Exception:
-                pass
-    except Exception:
-        pass
+                logger.debug(f"Decoded value: {decoded_value}")
+            except Exception as e:
+                logger.debug(f"Failed to decode value: {e}")
+    except Exception as e:
+        logger.debug(f"Failed to get query object: {e}")
 
     # Step 4: Handle the 4 scenarios
-    logger.info(f"🔀 Scenario: has_config={has_specific_config}, in_telliot={in_telliot}")
 
     # Scenario 3: NOT in config AND NOT in telliot → Foreign query (SKIP)
     if not has_specific_config and not in_telliot:
-        logger.warning("❌ Foreign query - not in config OR telliot")
-        await send_foreign_query_alert(query_id, query_type, asset_pair, reports[0], logger)
+        logger.info(f"Foreign query - NOT in config AND NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
+        await send_unsupported_query_alert(
+            query_id, 
+            query_type, 
+            asset_pair, 
+            reports[0], 
+            logger,
+            description="⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS**",
+            try_decode=True
+        )
         return None  # Skip inspection - no trusted value available
 
     # Scenario 4: IN config but NOT in telliot → NEW ALERT (SKIP - can't get trusted value)
     elif has_specific_config and not in_telliot:
-        logger.warning("🆕 Query in config but NOT in telliot catalog")
+        logger.info(f"Query in config but NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
         alert_msg = f"**QueryId:** {query_id}\n"
         alert_msg += f"**QueryType:** {query_type}\n"
         if asset_pair != "Unknown":
@@ -608,8 +579,7 @@ async def inspect_spotprice_path(
 
     # Scenario 2: NOT in config but IN telliot → Unconfigured query (PROCEED with global defaults)
     elif not has_specific_config and in_telliot:
-        logger.warning("⚠️ UNCONFIGURED QUERY - IN TELLIOT BUT NOT IN CONFIG")
-
+        logger.info(f"Query in telliot but NOT in config - proceeding with global defaults (query: {query_id[:16]}..., asset: {asset_pair})")
         # Check if this query type typically has per-query configs
         has_specific_configs = any(k != "defaults" for k in query_type_configs.keys())
 
@@ -621,43 +591,38 @@ async def inspect_spotprice_path(
                 f"Using global defaults (alert={metrics.alert_threshold}, warning={metrics.warning_threshold})"
             )
         # Fall through to proceed with inspection using global defaults
-
-    # Scenario 1: IN config AND IN telliot → Normal path (PROCEED)
-    else:  # has_specific_config and in_telliot
-        logger.info("✅ Normal path - query in both config and telliot")
-        # Fall through to proceed with inspection
+    else:
+        # Scenario 1: IN config AND IN telliot → Normal path (PROCEED)
+        logger.info(f"Normal path - query in config AND telliot (query: {query_id[:16]}..., asset: {asset_pair})")
 
     # Step 5: Proceed with telliot inspection (for scenarios 1 and 2)
-    logger.info("🔍 Starting telliot inspection...")
-
+    logger.debug(f"Getting query object and feed for {query_id[:16]}...")
     query = get_query(query_data)
     if query is None:
-        logger.error("❌ Unable to get query object")
+        logger.error("Unable to get query object")
         return None
-    logger.info(f"✅ Query object retrieved: {query.__class__.__name__}")
 
     feed = await get_feed(query_id, query, logger)
     if feed is None:
-        logger.error("❌ Unable to get feed")
+        logger.error("Unable to get feed")
         return None
-    logger.info("✅ Feed retrieved successfully")
 
-    logger.info("📡 Fetching trusted value from telliot...")
+    logger.debug(f"Fetching trusted value from feed...")
     trusted_value, _ = await fetch_value(feed)
     if trusted_value is None:
-        logger.error("❌ Unable to fetch trusted value")
+        logger.error("Unable to fetch trusted value")
         return None
-    logger.info(f"✅ Trusted value fetched: {trusted_value}")
+    
+    logger.debug(f"Trusted value fetched: {trusted_value}")
 
     # Create fetcher lambda for double-check logic
     async def fetch_trusted_value() -> tuple[Any, Any]:
         return await fetch_value(feed)
 
-    logger.info(f"🔎 Inspecting {len(reports)} report(s)...")
-    for i, r in enumerate(reports, 1):
-        logger.info(f"📊 Report {i}/{len(reports)} - Reporter: {r.reporter}")
+    logger.debug(f"Inspecting {len(reports)} report(s)...")
+    for r in reports:
         reported_value = query.value_type.decode(bytes.fromhex(r.value))
-        logger.info(f"✅ Decoded value: {reported_value}")
+        logger.debug(f"Report - reporter: {r.reporter}, reported_value: {reported_value}, power: {r.power}")
         await inspect(
             r,
             reported_value,
@@ -669,7 +634,7 @@ async def inspect_spotprice_path(
             trusted_value_fetcher=fetch_trusted_value,
         )
 
-    logger.info("✅ SpotPrice inspection completed")
+    logger.debug(f"✅ SpotPrice inspection complete for {query_id[:16]}...")
     return None
 
 
@@ -687,19 +652,16 @@ async def inspect_evmcall_path(
     # Get query object
     query = get_query(query_data)
     if query is None:
-        logger.error("❌ Unable to get query object for EVMCall")
+        logger.error("Unable to get query object for EVMCall")
         return None
-    logger.info(f"✅ Query object retrieved: {query.__class__.__name__}")
 
     # Get feed
     feed = await get_feed(query_id, query, logger)
     if feed is None:
-        logger.error("❌ Unable to get feed for EVMCall")
+        logger.error("Unable to get feed for EVMCall")
         return None
-    logger.info("✅ Feed retrieved successfully")
 
     # Call existing implementation
-    logger.info(f"🔎 Inspecting {len(reports)} EVMCall report(s)...")
     return await inspect_evm_call_reports(reports, feed, disputes_q, query_id, metrics, logger)
 
 
@@ -1262,23 +1224,38 @@ async def inspect_evm_call_reports(
     return None
 
 
-async def send_foreign_query_alert(
-    query_id: str, query_type: str, asset_pair: str, report: NewReport, logger: logging.Logger
+async def send_unsupported_query_alert(
+    query_id: str, 
+    query_type: str, 
+    asset_pair: str, 
+    report: NewReport, 
+    logger: logging.Logger,
+    description: str,
+    try_decode: bool = False
 ) -> None:
-    """Send Discord alert for foreign queries not in our configs."""
+    """Send Discord alert for unsupported queries (foreign or unknown type).
+    
+    Args:
+        query_id: The query ID
+        query_type: The query type string
+        asset_pair: Asset pair string (e.g. "eth/usd" or "Unknown")
+        report: The NewReport object
+        logger: Logger instance
+        description: Alert description (e.g. "⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS**")
+        try_decode: If True, attempt to decode value; if False, use raw hex
+    """
     try:
-        # Get monitor name from environment
-        os.getenv("MONITOR_NAME", "LVM")
-
         # Extract reported value for display
-        reported_value = "Unknown"
-        try:
-            # Try to decode the reported value
-            query_obj = get_query(report.query_data)
-            if query_obj:
-                reported_value = query_obj.value_type.decode(bytes.fromhex(report.value))
-        except Exception:
-            # If we can't decode, just show the raw hex value
+        if try_decode:
+            try:
+                query_obj = get_query(report.query_data)
+                if query_obj:
+                    reported_value = query_obj.value_type.decode(bytes.fromhex(report.value))
+                else:
+                    reported_value = report.value
+            except Exception:
+                reported_value = report.value
+        else:
             reported_value = report.value
 
         # Build the alert message
@@ -1290,33 +1267,11 @@ async def send_foreign_query_alert(
         alert_msg += f"**Reporter:** {report.reporter}\n"
         alert_msg += f"**Tx Hash:** {report.tx_hash}"
 
-        logger.info(f"Foreign query alert:\n{alert_msg}")
-        generic_alert(alert_msg, description="⚠️ **Query not found in telliot or configs**")
+        logger.info(f"Unsupported query alert:\n{alert_msg}")
+        generic_alert(alert_msg, description=description)
 
     except Exception as e:
-        logger.error(f"Failed to send foreign query alert: {e}")
-
-
-async def send_unknown_query_type_alert(
-    query_type: str, query_id: str, asset_pair: str, report: NewReport, logger: logging.Logger
-) -> None:
-    """Send Discord alert for unknown query types."""
-    try:
-        monitor_name = os.getenv("MONITOR_NAME", "LVM")
-        # Show the raw hex value instead of trying to decode
-        reported_value = report.value
-
-        alert_msg = f"**QueryId:** {query_id}\n"
-        if asset_pair != "Unknown":
-            alert_msg += f"**Asset pair:** {asset_pair}\n"
-        alert_msg += f"**Value:** {reported_value}\n"
-        alert_msg += f"**Reporter:** {report.reporter}\n"
-        alert_msg += f"**Tx Hash:** {report.tx_hash}"
-
-        logger.info(f"Unknown query type alert:\n{alert_msg}")
-        generic_alert(alert_msg, description=f"⚠️ **Does not support query type: {query_type}**")
-    except Exception as e:
-        logger.error(f"Failed to send unknown query type alert: {e}")
+        logger.error(f"Failed to send unsupported query alert: {e}")
 
 
 async def inspect_trbbridge_reports(
@@ -1421,6 +1376,26 @@ async def inspect(
         trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
 
     """
+    # Console output - concise 1-line summary
+    query_type = report.query_type
+    asset_info = ""
+    if query_type == "SpotPrice" and query:
+        if hasattr(query, "asset") and hasattr(query, "currency"):
+            asset_info = f" {query.asset}/{query.currency}"
+    
+    # Format values for display
+    if isinstance(reported_value, dict):
+        reported_str = f"Dict[{len(reported_value)} fields]"
+        trusted_str = f"Dict[{len(trusted_value)} fields]"
+    elif isinstance(reported_value, bytes):
+        reported_str = f"0x{reported_value.hex()[:16]}..."
+        trusted_str = f"0x{trusted_value.hex()[:16]}..."
+    else:
+        reported_str = f"{reported_value}"
+        trusted_str = f"{trusted_value}"
+    
+    console_logger.info(f"{query_type}{asset_info} | Reported: {reported_str} | Trusted: {trusted_str}")
+    
     display = {
         "REPORTER": report.reporter,
         "QUERY_TYPE": report.query_type,
@@ -1668,8 +1643,14 @@ async def inspect(
                 level=dispute_level,
             )
 
+            # Determine description based on whether it's disputable
+            if alertable and not is_disputable_flag:
+                description = "⚠️ **ALERT THRESHOLD TRIGGERED, BUT NOT AT DISPUTE LEVEL**"
+            else:
+                description = "❗**FOUND SOMETHING**❗"
+
             logger.info(f"Alertable value detected:\n{msg}")
-            generic_alert(msg)  # Uses default "❗Found Something❗" description
+            generic_alert(msg, description=description)
 
     display["DISPUTABLE"] = disputable
 
