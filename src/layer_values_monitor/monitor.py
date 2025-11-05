@@ -1511,8 +1511,8 @@ async def inspect(
         reported_str = f"Dict[{len(reported_value)} fields]"
         trusted_str = f"Dict[{len(trusted_value)} fields]"
     elif isinstance(reported_value, bytes):
-        reported_str = f"0x{reported_value.hex()[:16]}..."
-        trusted_str = f"0x{trusted_value.hex()[:16]}..."
+        reported_str = f"0x{reported_value.hex()}"
+        trusted_str = f"0x{trusted_value.hex()}"
     else:
         reported_str = f"{reported_value}"
         trusted_str = f"{trusted_value}"

@@ -26,13 +26,14 @@ full_file_handler.setLevel(logging.INFO)
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.CRITICAL)
 
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-debug_file_handler.setFormatter(formatter)
-full_file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
+debug_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+terminal_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+debug_file_handler.setFormatter(debug_formatter)
+full_file_handler.setFormatter(terminal_formatter)
+console_handler.setFormatter(debug_formatter)
 
 logger.addHandler(debug_file_handler)
-logger.addHandler(full_file_handler)
 logger.addHandler(console_handler)
 
 # Create a separate console-only logger for clean terminal output
@@ -46,3 +47,6 @@ console_only_handler.setLevel(logging.INFO)
 console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 console_only_handler.setFormatter(console_formatter)
 console_logger.addHandler(console_only_handler)
+
+# Also add terminal_log.log to console_logger so it matches terminal output exactly
+console_logger.addHandler(full_file_handler)
