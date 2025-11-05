@@ -21,7 +21,6 @@ from layer_values_monitor.monitor import (
     raw_data_queue_handler,
 )
 from layer_values_monitor.saga_contract import create_saga_contract_manager
-from layer_values_monitor.threshold_config import ThresholdConfig
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
@@ -109,22 +108,6 @@ async def start() -> None:
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
 
-    # Validate that at least one RPC config exists (INFURA_API_KEY or chain-specific URLs)
-    infura_key = os.getenv("INFURA_API_KEY")
-    has_rpc_config = bool(infura_key)
-    
-    # Check for any chain-specific configs
-    if not has_rpc_config:
-        for chain_id in [1, 11155111]:  # Common chains
-            if os.getenv(f"EVM_RPC_URLS_{chain_id}"):
-                has_rpc_config = True
-                break
-    
-    if not has_rpc_config:
-        logger.warning(
-            "No RPC configuration found. Set INFURA_API_KEY (for chains 1, 11155111) "
-            "or EVM_RPC_URLS_{chain_id} for other chains."
-        )
 
     # Validate Saga environment variables if Saga guard is enabled
     power_thresholds = None
@@ -163,14 +146,10 @@ async def start() -> None:
         if saga_contract_manager:
             logger.info("💡 Saga contract manager initialized successfully")
 
-    # Create ThresholdConfig for backward compatibility (will be empty if using new config format)
-    threshold_config = ThresholdConfig.from_args(args)
-    logger.info(f"CONFIG DEBUG: ThresholdConfig created from args: {threshold_config}")
-
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     logger.info(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
-    config_watcher = ConfigWatcher(config_path, threshold_config)
+    config_watcher = ConfigWatcher(config_path)
     logger.info("💡 Config watcher initialized")
 
     # Log config summary
