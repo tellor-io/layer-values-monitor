@@ -87,12 +87,6 @@ async def start() -> None:
         help="Keyring directory (can be set via LAYER_KEYRING_DIR env var)",
     )
     parser.add_argument(
-        "--payfrom-bond",
-        action="store_true",
-        default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"),
-        help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)",
-    )
-    parser.add_argument(
         "--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing"
     )
     args = parser.parse_args()
@@ -219,7 +213,7 @@ async def start() -> None:
                 kdir=args.keyring_dir,
                 rpc=f"http://{uri}",
                 chain_id=chain_id,
-                payfrom_bond=args.payfrom_bond,
+                payfrom_bond=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"),
                 logger=logger,
             ),
             watch_config(config_watcher),
