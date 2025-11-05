@@ -9,15 +9,15 @@ from layer_values_monitor.custom_types import GlobalMetric, Metrics
 from layer_values_monitor.threshold_config import ThresholdConfig
 
 import pandas as pd
-from dotenv import load_dotenv
 from pandas import DataFrame
-
-# Load environment variables
-load_dotenv()
-MAX_TABLE_ROWS = int(os.getenv("MAX_TABLE_ROWS", "100000"))
 
 # Global counter to track current row count without reading file
 _current_row_count = 0
+
+
+def _get_max_table_rows() -> int:
+    """Get MAX_TABLE_ROWS from environment, with default of 100000."""
+    return int(os.getenv("MAX_TABLE_ROWS", "100000"))
 
 
 def get_current_csv_path() -> str:
@@ -52,7 +52,7 @@ def should_create_new_file() -> bool:
     try:
         # Read the CSV file and count rows (excluding header)
         df = pd.read_csv(current_file)
-        return len(df) >= MAX_TABLE_ROWS
+        return len(df) >= _get_max_table_rows()
     except Exception as e:
         logging.error(f"Error checking file size: {e}")
         return False
@@ -149,7 +149,7 @@ def add_to_table(entry: dict[str, str]) -> None:
 
     # Only check file size every 1000 entries or when approaching limit
     # This eliminates the expensive file reading on every single report
-    if _current_row_count % 1000 == 0 or _current_row_count >= MAX_TABLE_ROWS:
+    if _current_row_count % 1000 == 0 or _current_row_count >= _get_max_table_rows():
         if should_create_new_file():
             csv_file = create_new_csv_file()
             # Create new file with header
