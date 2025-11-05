@@ -5,7 +5,6 @@ import os
 from datetime import UTC, datetime
 
 from layer_values_monitor.constants import CSV_FILE_PATTERN, CURRENT_CSV_FILE, LOGS_DIR, TABLE
-from layer_values_monitor.custom_types import Metrics
 
 import pandas as pd
 from pandas import DataFrame

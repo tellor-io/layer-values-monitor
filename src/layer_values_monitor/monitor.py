@@ -11,7 +11,6 @@ from typing import Any
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
-from layer_values_monitor.logger import console_logger
 from layer_values_monitor.custom_types import (
     AggregateReport,
     Metrics,
@@ -29,6 +28,7 @@ from layer_values_monitor.dispute import (
     is_disputable,
 )
 from layer_values_monitor.evm_call import get_evm_call_trusted_value, get_web3_connection
+from layer_values_monitor.logger import console_logger
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
@@ -460,13 +460,13 @@ async def inspect_reports(
 
         # Send Discord alert for unknown query type
         await send_unsupported_query_alert(
-            query_id, 
-            query_type, 
-            asset_pair, 
-            reports[0], 
+            query_id,
+            query_type,
+            asset_pair,
+            reports[0],
             logger,
             description=f"⚠️ **QUERY TYPE NOT SUPPORTED ({query_type.upper()})**",
-            try_decode=False
+            try_decode=False,
         )
         return None
 
@@ -515,7 +515,7 @@ async def inspect_spotprice_path(
     4. In config but NOT in telliot → NEW alert + skip (can't get trusted value).
     """
     logger.debug(f"🔍 SpotPrice inspection starting - QueryID: {query_id[:16]}..., {len(reports)} report(s)")
-    
+
     # Step 1: Check if query is in our config
     query_type_configs = config_watcher.query_configs.get(query_type.lower(), {})
     has_specific_config = query_id.lower() in query_type_configs
@@ -552,13 +552,7 @@ async def inspect_spotprice_path(
         logger.info(f"Foreign query - NOT in config AND NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
         description = f"⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS{f' ({asset_pair})' if asset_pair != 'Unknown' else ''}**"
         await send_unsupported_query_alert(
-            query_id, 
-            query_type, 
-            asset_pair, 
-            reports[0], 
-            logger,
-            description=description,
-            try_decode=True
+            query_id, query_type, asset_pair, reports[0], logger, description=description, try_decode=True
         )
         return None  # Skip inspection - no trusted value available
 
@@ -580,7 +574,10 @@ async def inspect_spotprice_path(
 
     # Scenario 2: NOT in config but IN telliot → Unconfigured query (PROCEED with global defaults)
     elif not has_specific_config and in_telliot:
-        logger.info(f"Query in telliot but NOT in config - proceeding with global defaults (query: {query_id[:16]}..., asset: {asset_pair})")
+        logger.info(
+            f"Query in telliot but NOT in config - proceeding with global defaults "
+            f"(query: {query_id[:16]}..., asset: {asset_pair})"
+        )
         # Check if this query type typically has per-query configs
         has_specific_configs = any(k != "defaults" for k in query_type_configs.keys())
 
@@ -608,12 +605,12 @@ async def inspect_spotprice_path(
         logger.error("Unable to get feed")
         return None
 
-    logger.debug(f"Fetching trusted value from feed...")
+    logger.debug("Fetching trusted value from feed...")
     trusted_value, _ = await fetch_value(feed)
     if trusted_value is None:
         logger.error("Unable to fetch trusted value")
         return None
-    
+
     logger.debug(f"Trusted value fetched: {trusted_value}")
 
     # Create fetcher lambda for double-check logic
@@ -1226,16 +1223,16 @@ async def inspect_evm_call_reports(
 
 
 async def send_unsupported_query_alert(
-    query_id: str, 
-    query_type: str, 
-    asset_pair: str, 
-    report: NewReport, 
+    query_id: str,
+    query_type: str,
+    asset_pair: str,
+    report: NewReport,
     logger: logging.Logger,
     description: str,
-    try_decode: bool = False
+    try_decode: bool = False,
 ) -> None:
     """Send Discord alert for unsupported queries (foreign or unknown type).
-    
+
     Args:
         query_id: The query ID
         query_type: The query type string
@@ -1244,6 +1241,7 @@ async def send_unsupported_query_alert(
         logger: Logger instance
         description: Alert description (e.g. "⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS**")
         try_decode: If True, attempt to decode value; if False, use raw hex
+
     """
     try:
         # Extract reported value for display
@@ -1363,13 +1361,14 @@ async def perform_dispute_verification(
     trusted_value_fetcher: Any = None,
 ) -> dict[str, Any]:
     """Perform verification logic to determine if a dispute should be submitted.
-    
+
     Handles both double-check logic (for SpotPrice with fetcher) and single-check logic
     (for EVMCall/TRBBridge without fetcher).
-    
+
     Returns:
-        Dict with keys: should_dispute, dispute_category, second_trusted_value, 
+        Dict with keys: should_dispute, dispute_category, second_trusted_value,
         second_trusted_time, second_check_disputable, second_diff
+
     """
     result = {
         "should_dispute": False,
@@ -1379,7 +1378,7 @@ async def perform_dispute_verification(
         "second_check_disputable": None,
         "second_diff": None,
     }
-    
+
     if disputable and trusted_value_fetcher is not None:
         # Double-check logic for SpotPrice queries
         logger.info(f"⏳ First trusted value check crossed threshold (diff: {diff}). Waiting 10 seconds for second check...")
@@ -1485,7 +1484,7 @@ async def inspect(
     logger: logging,
     query: Any = None,
     trusted_value_fetcher: Any = None,
-)  -> None:
+) -> None:
     """Inspect a new report and check if it is disputable.
 
     Args:
@@ -1505,7 +1504,7 @@ async def inspect(
     if query_type == "SpotPrice" and query:
         if hasattr(query, "asset") and hasattr(query, "currency"):
             asset_info = f" {query.asset}/{query.currency}"
-    
+
     # Format values for display
     if isinstance(reported_value, dict):
         reported_str = f"Dict[{len(reported_value)} fields]"
@@ -1516,9 +1515,9 @@ async def inspect(
     else:
         reported_str = f"{reported_value}"
         trusted_str = f"{trusted_value}"
-    
+
     console_logger.info(f"{query_type}{asset_info} | Reported: {reported_str} | Trusted: {trusted_str}")
-    
+
     display = {
         "REPORTER": report.reporter,
         "QUERY_TYPE": report.query_type,
@@ -1578,7 +1577,7 @@ async def inspect(
     verification_result = await perform_dispute_verification(
         disputable, diff, reported_value, metrics, logger, trusted_value_fetcher
     )
-    
+
     should_dispute = verification_result["should_dispute"]
     dispute_category = verification_result["dispute_category"]
     second_trusted_value = verification_result["second_trusted_value"]

@@ -3,7 +3,6 @@
 import math
 from typing import Any
 
-from layer_values_monitor.evm_connections import get_web3_connection
 from layer_values_monitor.logger import logger
 
 from hexbytes import HexBytes
@@ -62,8 +61,6 @@ async def get_evm_call_trusted_value(reported_val: Any, feed: DataFeed, w3: Web3
     except Exception as e:
         logger.error(f"Failed to fetch trusted value via eth_call on chain_id {chain_id}: {e}")
         return None
-
-
 
 
 def get_block_number_at_timestamp(w3: Web3, timestamp: int, chain_id: int) -> int | None:

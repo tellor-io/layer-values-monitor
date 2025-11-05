@@ -4,18 +4,18 @@ import logging
 import os
 from typing import Any
 
-import click
-from discordwebhook import Discord
-
 from layer_values_monitor.logger import console_logger
+
+from discordwebhook import Discord
 
 
 def generic_alert(msg: str, description: str = None) -> None:
     """Send a Discord message via webhook.
-    
+
     Args:
         msg: The message content to send
         description: Optional description/alert type (e.g., "Found Something", "DISPUTE SKIPPED")
+
     """
     send_discord_msg(msg, description=description)
     return
@@ -42,19 +42,20 @@ def get_alert_bot_3() -> Discord:
 
 def send_discord_msg(msg: str, description: str = None) -> None:
     """Send Discord alert.
-    
+
     Args:
         msg: The message content to send
         description: Optional description/alert type line. If None, uses "❗Found Something❗"
+
     """
     # Get logger for file logging (not console)
     file_logger = logging.getLogger(__name__)
-    
+
     MONITOR_NAME = os.getenv("MONITOR_NAME", "LVM")
-    
+
     # First line: Monitor name only (bold)
     first_line = f"LVM: **{MONITOR_NAME}**\n"
-    
+
     # Second line: Description/alert type, then message content
     if description:
         second_line = f"{description}\n{msg}"
@@ -63,11 +64,11 @@ def send_discord_msg(msg: str, description: str = None) -> None:
         # Default description for regular alerts
         second_line = f"❗**FOUND SOMETHING**❗\n{msg}"
         display_description = "❗**FOUND SOMETHING**❗"
-    
+
     # Add separator line at the end of message for better readability
     separator = "\n" + "─" * 50 + "\n"
     full_message = first_line + second_line + separator
-    
+
     get_alert_bot_1().post(content=full_message)
     try:
         get_alert_bot_2().post(content=full_message)
@@ -81,7 +82,7 @@ def send_discord_msg(msg: str, description: str = None) -> None:
         # Log to file only, not terminal
         file_logger.debug(f"Alert bot 3 not used: {e}")
         pass
-    
+
     # Clean console output - just show alert sent + description
     console_logger.info(f"Discord alert sent! {display_description}")
     return
@@ -98,17 +99,18 @@ def format_difference(diff: float, metric: str) -> str:
 
 def format_values(reported: Any, trusted: Any, query_type: str = None) -> str:
     """Format reported and trusted values for display.
-    
+
     Args:
         reported: The reported value
         trusted: The trusted value
         query_type: Optional query type (e.g., "EVMCall") for special formatting
+
     """
     if isinstance(reported, dict):
         reported_display = "\n".join([f"  {k}: {v}" for k, v in reported.items()])
         trusted_display = "\n".join([f"  {k}: {v}" for k, v in trusted.items()])
         return f"**Reported:**\n{reported_display}\n**Trusted:**\n{trusted_display}"
-    
+
     # Format EVMCall bytes values as hex strings for better readability
     if query_type == "EVMCall" and isinstance(reported, bytes) and isinstance(trusted, bytes):
         reported_hex = "0x" + reported.hex()
@@ -119,6 +121,7 @@ def format_values(reported: Any, trusted: Any, query_type: str = None) -> str:
         if len(reported) == 32:
             try:
                 from eth_abi import decode
+
                 (reported_int,) = decode(["uint256"], reported)
                 reported_decoded = f" ({reported_int})"
             except Exception:
@@ -126,12 +129,13 @@ def format_values(reported: Any, trusted: Any, query_type: str = None) -> str:
         if len(trusted) == 32:
             try:
                 from eth_abi import decode
+
                 (trusted_int,) = decode(["uint256"], trusted)
                 trusted_decoded = f" ({trusted_int})"
             except Exception:
                 pass
         return f"**Reported:** {reported_hex}{reported_decoded}\n**Trusted:** {trusted_hex}{trusted_decoded}"
-    
+
     return f"**Reported:** {reported}\n**Trusted:** {trusted}"
 
 

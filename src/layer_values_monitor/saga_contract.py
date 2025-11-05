@@ -265,10 +265,10 @@ def create_saga_contract_manager(logger: logging.Logger) -> SagaContractManager 
 
     """
     import os
-    
+
     # Get Web3 connection using unified manager (reads SAGA_EVM_RPC_URL)
     w3, chain_id = get_saga_web3_connection(logger)
-    
+
     if not w3:
         return None
 

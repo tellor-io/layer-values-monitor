@@ -1,7 +1,6 @@
 """Trusted value for TRBBridge query type."""
 
 import logging
-import os
 
 from layer_values_monitor.evm_connections import get_web3_connection
 
@@ -133,8 +132,7 @@ async def get_trb_bridge_trusted_value(
         # Set up Web3 connection using unified connection manager
         # Priority: custom rpc_url param > EVM_RPC_URLS_{chain_id} > BRIDGE_CHAIN_RPC_URL (deprecated) > TelliotConfig
         w3 = get_web3_connection(chain_id, custom_rpc_url=rpc_url, required=False)
-        
-        
+
         if not w3:
             # Final fallback to TelliotConfig
             logger.info(f"Falling back to TelliotConfig for chain {chain_id}")

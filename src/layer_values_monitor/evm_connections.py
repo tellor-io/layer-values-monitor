@@ -6,7 +6,6 @@ with connection caching to avoid redundant RPC connections.
 
 import logging
 import os
-from typing import Optional
 
 from web3 import Web3
 
@@ -18,7 +17,7 @@ _web3_cache: dict[int, Web3] = {}
 
 def get_web3_connection(
     chain_id: int,
-    custom_rpc_url: Optional[str] = None,
+    custom_rpc_url: str | None = None,
     required: bool = True,
 ) -> Web3 | None:
     """Get cached Web3 connection for any EVM chain with automatic failover.
@@ -46,6 +45,7 @@ def get_web3_connection(
         >>> w3 = get_web3_connection(11155111)
         >>> if w3:
         >>>     block = w3.eth.block_number
+
     """
     # Use custom URL if provided (bypass cache for one-time connections)
     if custom_rpc_url:
@@ -67,19 +67,19 @@ def get_web3_connection(
 
     # Build list of RPC URLs to try
     rpc_urls_to_try = []
-    
+
     # Check for explicit chain-specific config first (takes precedence)
     urls_key = f"EVM_RPC_URLS_{chain_id}"
     urls_value = os.getenv(urls_key)
-    
+
     if urls_value:
         # Parse comma-separated URLs
-        urls = [url.strip() for url in urls_value.split(',') if url.strip()]
+        urls = [url.strip() for url in urls_value.split(",") if url.strip()]
         for idx, url in enumerate(urls):
             label = "primary" if idx == 0 else f"backup{idx}"
             rpc_urls_to_try.append((url, label))
         logger.debug(f"Using explicit chain config for {chain_id}: {urls_key}")
-    
+
     # If no explicit config, try Infura API key (simple default for common chains)
     if not rpc_urls_to_try:
         infura_key = os.getenv("INFURA_API_KEY")
@@ -130,7 +130,7 @@ def get_web3_connection(
 
             # Cache the connection
             _web3_cache[chain_id] = w3
-            
+
             # Log success with indication if using backup
             if idx == 0:
                 logger.info(f"✅ Connected to chain {chain_id} via primary RPC (block: {block_number})")
@@ -138,7 +138,7 @@ def get_web3_connection(
                 logger.warning(
                     f"⚠️ Connected to chain {chain_id} via {url_label} RPC (primary failed, block: {block_number})"
                 )
-            
+
             return w3
 
         except Exception as e:
@@ -153,7 +153,7 @@ def get_web3_connection(
             f"❌ Failed to connect to chain {chain_id} - all RPC endpoints failed. "
             f"Tried {len(rpc_urls_to_try)} URL(s). Last error: {last_error}"
         )
-    
+
     return None
 
 
@@ -179,26 +179,27 @@ def get_saga_web3_connection(logger_instance: logging.Logger) -> tuple[Web3 | No
         >>> if w3:
         >>>     # Use for Saga guardian contract interactions
         >>>     manager = SagaContractManager(w3, private_key, logger)
+
     """
     # Get comma-separated list of Saga RPC URLs
     urls_value = os.getenv("SAGA_RPC_URLS")
     if not urls_value:
         logger_instance.warning("SAGA_RPC_URLS not set in environment - Saga guard disabled")
         return None, None
-    
+
     # Parse comma-separated URLs
-    urls = [url.strip() for url in urls_value.split(',') if url.strip()]
+    urls = [url.strip() for url in urls_value.split(",") if url.strip()]
     if not urls:
         logger_instance.warning("SAGA_RPC_URLS is empty - Saga guard disabled")
         return None, None
-    
+
     # Try each URL in order until one works
     last_error = None
     for idx, rpc_url in enumerate(urls):
         url_label = "primary" if idx == 0 else f"backup{idx}"
         try:
             w3 = Web3(Web3.HTTPProvider(rpc_url))
-            
+
             # Verify connection and get chain ID
             block_number = w3.eth.block_number
             chain_id = w3.eth.chain_id
@@ -206,16 +207,13 @@ def get_saga_web3_connection(logger_instance: logging.Logger) -> tuple[Web3 | No
             # Cache this connection under its chain ID for potential reuse
             if chain_id not in _web3_cache:
                 _web3_cache[chain_id] = w3
-            
+
             # Log success with indication if using backup
             if idx == 0:
-                logger_instance.info(
-                    f"✅ Connected to Saga EVM (chain {chain_id}) via primary RPC (block: {block_number})"
-                )
+                logger_instance.info(f"✅ Connected to Saga EVM (chain {chain_id}) via primary RPC (block: {block_number})")
             else:
                 logger_instance.warning(
-                    f"⚠️ Connected to Saga EVM (chain {chain_id}) via {url_label} RPC "
-                    f"(primary failed, block: {block_number})"
+                    f"⚠️ Connected to Saga EVM (chain {chain_id}) via {url_label} RPC (primary failed, block: {block_number})"
                 )
 
             return w3, chain_id
@@ -225,11 +223,10 @@ def get_saga_web3_connection(logger_instance: logging.Logger) -> tuple[Web3 | No
             logger_instance.warning(f"Failed to connect to Saga EVM via {url_label} RPC: {e}")
             # Continue to next URL
             continue
-    
+
     # All Saga RPC URLs failed
     logger_instance.error(
-        f"❌ Failed to connect to Saga EVM - all RPC endpoints failed. "
-        f"Tried {len(urls)} URL(s). Last error: {last_error}"
+        f"❌ Failed to connect to Saga EVM - all RPC endpoints failed. Tried {len(urls)} URL(s). Last error: {last_error}"
     )
     return None, None
 
@@ -261,6 +258,7 @@ def validate_rpc_connection(
         ... )
         >>> if not is_valid:
         >>>     raise ValueError(error)
+
     """
     try:
         w3 = Web3(Web3.HTTPProvider(rpc_url))
@@ -273,9 +271,7 @@ def validate_rpc_connection(
         if chain_id <= 0:
             return False, f"Invalid chain ID {chain_id} for {network_name} network", None
 
-        logger_instance.info(
-            f"✅ {network_name} RPC validation successful - Chain ID: {chain_id}, Block: {block_number}"
-        )
+        logger_instance.info(f"✅ {network_name} RPC validation successful - Chain ID: {chain_id}, Block: {block_number}")
         return True, "", chain_id
 
     except Exception as e:
@@ -303,6 +299,6 @@ def get_cached_chain_ids() -> list[int]:
         >>> cached = get_cached_chain_ids()
         >>> print(f"Active connections: {cached}")
         Active connections: [1, 11155111]
+
     """
     return list(_web3_cache.keys())
-

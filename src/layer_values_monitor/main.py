@@ -30,8 +30,6 @@ for logger_name in logging.root.manager.loggerDict:
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 
 
-
-
 def async_run(f: Any) -> Any:
     """Wrap an async function to be called synchronously and handle keyboard interrupts."""
 
@@ -101,7 +99,6 @@ async def start() -> None:
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
 
-
     # Validate Saga environment variables if Saga guard is enabled
     power_thresholds = None
     saga_contract_manager = None
@@ -130,7 +127,7 @@ async def start() -> None:
 
         # Validate Saga RPC URL connectivity (test primary URL)
         logger.info("💡 Validating Saga EVM RPC connection...")
-        primary_saga_url = saga_rpc_urls.split(',')[0].strip()
+        primary_saga_url = saga_rpc_urls.split(",")[0].strip()
         is_valid, error_msg, saga_chain_id = validate_rpc_connection(primary_saga_url, "Saga", logger)
         if not is_valid:
             logger.warning(f"Primary Saga RPC validation failed: {error_msg}. Will try backups if configured.")
