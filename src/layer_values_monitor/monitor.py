@@ -465,7 +465,7 @@ async def inspect_reports(
             asset_pair, 
             reports[0], 
             logger,
-            description=f"⚠️ **QUERY TYPE NOT SUPPORTED: {query_type.upper()}**",
+            description=f"⚠️ **QUERY TYPE NOT SUPPORTED ({query_type.upper()})**",
             try_decode=False
         )
         return None
@@ -550,13 +550,14 @@ async def inspect_spotprice_path(
     # Scenario 3: NOT in config AND NOT in telliot → Foreign query (SKIP)
     if not has_specific_config and not in_telliot:
         logger.info(f"Foreign query - NOT in config AND NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
+        description = f"⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS{f' ({asset_pair})' if asset_pair != 'Unknown' else ''}**"
         await send_unsupported_query_alert(
             query_id, 
             query_type, 
             asset_pair, 
             reports[0], 
             logger,
-            description="⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS**",
+            description=description,
             try_decode=True
         )
         return None  # Skip inspection - no trusted value available
@@ -1353,6 +1354,128 @@ async def inspect_trbbridge_reports(
     return None
 
 
+async def perform_dispute_verification(
+    disputable: bool,
+    diff: float,
+    reported_value: Any,
+    metrics: Metrics,
+    logger: logging.Logger,
+    trusted_value_fetcher: Any = None,
+) -> dict[str, Any]:
+    """Perform verification logic to determine if a dispute should be submitted.
+    
+    Handles both double-check logic (for SpotPrice with fetcher) and single-check logic
+    (for EVMCall/TRBBridge without fetcher).
+    
+    Returns:
+        Dict with keys: should_dispute, dispute_category, second_trusted_value, 
+        second_trusted_time, second_check_disputable, second_diff
+    """
+    result = {
+        "should_dispute": False,
+        "dispute_category": None,
+        "second_trusted_value": None,
+        "second_trusted_time": None,
+        "second_check_disputable": None,
+        "second_diff": None,
+    }
+    
+    if disputable and trusted_value_fetcher is not None:
+        # Double-check logic for SpotPrice queries
+        logger.info(f"⏳ First trusted value check crossed threshold (diff: {diff}). Waiting 10 seconds for second check...")
+        await asyncio.sleep(10)
+
+        logger.info("📡 Fetching second trusted value for verification...")
+        try:
+            second_trusted_result = await trusted_value_fetcher()
+            if second_trusted_result is not None:
+                # fetch_value returns (value, timestamp) tuple
+                result["second_trusted_value"] = (
+                    second_trusted_result[0] if isinstance(second_trusted_result, tuple) else second_trusted_result
+                )
+                result["second_trusted_time"] = time.time()
+                logger.info(f"✅ Second trusted value fetched: {result['second_trusted_value']}")
+
+                # Compare reported value against second trusted value
+                _, second_check_disputable, second_diff = is_disputable(
+                    metrics.metric,
+                    metrics.alert_threshold,
+                    metrics.warning_threshold,
+                    reported_value,
+                    result["second_trusted_value"],
+                    logger=logger,
+                )
+                result["second_check_disputable"] = second_check_disputable
+                result["second_diff"] = second_diff
+
+                # Only dispute if BOTH checks cross threshold
+                if second_check_disputable:
+                    logger.info(f"✅ Second check also crossed threshold (diff: {second_diff}). Proceeding with dispute.")
+                    result["should_dispute"] = True
+
+                    # Determine dispute category
+                    if metrics.metric.lower() == "equality":
+                        if metrics.warning_threshold == 1.0:
+                            result["dispute_category"] = "warning"
+                        elif metrics.minor_threshold == 1.0:
+                            result["dispute_category"] = "minor"
+                        elif metrics.major_threshold == 1.0:
+                            result["dispute_category"] = "major"
+                    else:
+                        category = determine_dispute_category(
+                            diff=second_diff,
+                            category_thresholds={
+                                "major": metrics.major_threshold,
+                                "minor": metrics.minor_threshold,
+                                "warning": metrics.warning_threshold,
+                            },
+                        )
+                        if category is not None:
+                            result["dispute_category"] = category
+                else:
+                    logger.info(f"⚠️ Second check did NOT cross threshold (diff: {second_diff}). Dispute cancelled.")
+            else:
+                logger.error("❌ Failed to fetch second trusted value. Cancelling dispute.")
+        except Exception as e:
+            logger.error(f"❌ Error fetching second trusted value: {e}. Cancelling dispute.")
+
+    elif disputable and trusted_value_fetcher is None:
+        # Single-check logic for EVMCall/TRBBridge queries
+        logger.info(f"disputable: true, diff: {diff} (single-check mode)")
+
+        # For equality metrics, determine dispute level based on which threshold is set to 1.0
+        if metrics.metric.lower() == "equality":
+            if metrics.warning_threshold == 1.0:
+                result["dispute_category"] = "warning"
+                result["should_dispute"] = True
+                logger.info("Auto-disputing equality mismatch at warning level")
+            elif metrics.minor_threshold == 1.0:
+                result["dispute_category"] = "minor"
+                result["should_dispute"] = True
+                logger.info("Auto-disputing equality mismatch at minor level")
+            elif metrics.major_threshold == 1.0:
+                result["dispute_category"] = "major"
+                result["should_dispute"] = True
+                logger.info("Auto-disputing equality mismatch at major level")
+            else:
+                logger.debug("No dispute level configured for equality metric (no threshold set to 1.0)")
+        else:
+            # For other metrics, use traditional threshold-based logic
+            category = determine_dispute_category(
+                diff=diff,
+                category_thresholds={
+                    "major": metrics.major_threshold,
+                    "minor": metrics.minor_threshold,
+                    "warning": metrics.warning_threshold,
+                },
+            )
+            if category is not None:
+                result["dispute_category"] = category
+                result["should_dispute"] = True
+
+    return result
+
+
 async def inspect(
     report: NewReport,
     reported_value: Any,
@@ -1451,103 +1574,17 @@ async def inspect(
             if category:
                 dispute_level = category
 
-    # Double-check logic for SpotPrice queries with trusted_value_fetcher
-    second_trusted_value = None
-    second_trusted_time = None
-    second_check_disputable = None
-    should_dispute = False
-    dispute_category = None
-
-    if disputable and trusted_value_fetcher is not None:
-        # First check crossed threshold - initiate double-check
-        logger.info(f"⏳ First trusted value check crossed threshold (diff: {diff}). Waiting 10 seconds for second check...")
-        await asyncio.sleep(10)
-
-        logger.info("📡 Fetching second trusted value for verification...")
-        try:
-            second_trusted_result = await trusted_value_fetcher()
-            if second_trusted_result is not None:
-                # fetch_value returns (value, timestamp) tuple
-                second_trusted_value = (
-                    second_trusted_result[0] if isinstance(second_trusted_result, tuple) else second_trusted_result
-                )
-                second_trusted_time = time.time()
-                logger.info(f"✅ Second trusted value fetched: {second_trusted_value}")
-
-                # Compare reported value against second trusted value
-                _, second_check_disputable, second_diff = is_disputable(
-                    metrics.metric,
-                    metrics.alert_threshold,
-                    metrics.warning_threshold,
-                    reported_value,
-                    second_trusted_value,
-                    logger=logger,
-                )
-
-                # Only dispute if BOTH checks cross threshold
-                if second_check_disputable:
-                    logger.info(f"✅ Second check also crossed threshold (diff: {second_diff}). Proceeding with dispute.")
-                    should_dispute = True
-
-                    # Determine dispute category
-                    if metrics.metric.lower() == "equality":
-                        if metrics.warning_threshold == 1.0:
-                            dispute_category = "warning"
-                        elif metrics.minor_threshold == 1.0:
-                            dispute_category = "minor"
-                        elif metrics.major_threshold == 1.0:
-                            dispute_category = "major"
-                    else:
-                        category = determine_dispute_category(
-                            diff=second_diff,
-                            category_thresholds={
-                                "major": metrics.major_threshold,
-                                "minor": metrics.minor_threshold,
-                                "warning": metrics.warning_threshold,
-                            },
-                        )
-                        if category is not None:
-                            dispute_category = category
-                else:
-                    logger.info(f"⚠️ Second check did NOT cross threshold (diff: {second_diff}). Dispute cancelled.")
-            else:
-                logger.error("❌ Failed to fetch second trusted value. Cancelling dispute.")
-        except Exception as e:
-            logger.error(f"❌ Error fetching second trusted value: {e}. Cancelling dispute.")
-
-    elif disputable and trusted_value_fetcher is None:
-        # No fetcher provided - use original single-check logic (EVMCall, TRBBridge)
-        logger.info(f"disputable: true, diff: {diff} (single-check mode)")
-
-        # For equality metrics, determine dispute level based on which threshold is set to 1.0
-        if metrics.metric.lower() == "equality":
-            if metrics.warning_threshold == 1.0:
-                dispute_category = "warning"
-                should_dispute = True
-                logger.info("Auto-disputing equality mismatch at warning level")
-            elif metrics.minor_threshold == 1.0:
-                dispute_category = "minor"
-                should_dispute = True
-                logger.info("Auto-disputing equality mismatch at minor level")
-            elif metrics.major_threshold == 1.0:
-                dispute_category = "major"
-                should_dispute = True
-                logger.info("Auto-disputing equality mismatch at major level")
-            else:
-                logger.debug("No dispute level configured for equality metric (no threshold set to 1.0)")
-        else:
-            # For other metrics, use traditional threshold-based logic
-            category = determine_dispute_category(
-                diff=diff,
-                category_thresholds={
-                    "major": metrics.major_threshold,
-                    "minor": metrics.minor_threshold,
-                    "warning": metrics.warning_threshold,
-                },
-            )
-            if category is not None:
-                dispute_category = category
-                should_dispute = True
+    # Perform dispute verification (double-check for SpotPrice, single-check for others)
+    verification_result = await perform_dispute_verification(
+        disputable, diff, reported_value, metrics, logger, trusted_value_fetcher
+    )
+    
+    should_dispute = verification_result["should_dispute"]
+    dispute_category = verification_result["dispute_category"]
+    second_trusted_value = verification_result["second_trusted_value"]
+    second_trusted_time = verification_result["second_trusted_time"]
+    second_check_disputable = verification_result["second_check_disputable"]
+    second_diff = verification_result["second_diff"]
 
     # Send Discord alert AFTER double-check completes (or immediately if no double-check)
     if alertable or (disputable and trusted_value_fetcher is not None):
