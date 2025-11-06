@@ -95,7 +95,15 @@ def propose_msg(
     kdir: str,
     payfrom_bond: str,
 ) -> str | None:
-    """Execute propose-dispute message using layer's binary."""
+    """Execute propose-dispute message using layer's binary as an unordered transaction.
+
+    Follows Cosmos SDK 0.53+ unordered transaction pattern:
+    https://docs.cosmos.network/v0.53/build/architecture/adr-070-unordered-account
+    """
+    # Calculate unique timeout timestamp for unordered tx (nanoseconds)
+    # 30 seconds from now + nanosecond uniqueness
+    int((time.time() + 30) * 1e9) + time.time_ns() % 1000
+
     cmd = [
         binary_path,
         "tx",
@@ -123,12 +131,16 @@ def propose_msg(
         "auto",
         "--gas-adjustment",
         "1.3",
+        "--unordered",
+        "--timeout-duration",
+        "30s",
         "-y",
         "--output",
         "json",
     ]
 
-    time.sleep(5)
+    logger.debug(f"Executing dispute transaction command: {' '.join(cmd)}")
+    time.sleep(3)
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=30)
         if result.returncode != 0:
