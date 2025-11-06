@@ -27,8 +27,8 @@ from layer_values_monitor.dispute import (
     determine_dispute_fee,
     is_disputable,
 )
-from layer_values_monitor.evm_call import get_evm_call_trusted_value, get_web3_connection
-from layer_values_monitor.logger import console_logger
+from layer_values_monitor.evm_call import get_evm_call_trusted_value
+from layer_values_monitor.evm_connections import get_web3_connection
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
@@ -37,6 +37,46 @@ from layer_values_monitor.utils import add_to_table, decode_hex_value
 import aiohttp
 import websockets
 from telliot_feeds.datafeed import DataFeed
+
+
+def format_dict_value(d: dict) -> str:
+    """Format dict values for compact terminal display.
+
+    Used for TRBBridge and other dict-based report values.
+    Truncates long addresses to first 6 + last 4 characters.
+
+    Args:
+        d: Dictionary to format
+
+    Returns:
+        Formatted string like "{key1=value1, key2=value2, ...}"
+
+    Example:
+        >>> format_dict_value({"eth_address": "0xe4746dd0b7d785766405fcf909953ce4f50fb534", "amount": "10000"})
+        "{eth_address=0xe474...b534, amount=10000}"
+
+    """
+    if not d:
+        return "{}"
+
+    # Format each field compactly
+    items = []
+    for key, value in d.items():
+        # Truncate long addresses for readability
+        if isinstance(value, str) and (
+            key.lower().endswith("address") or key.lower().endswith("addr") or value.startswith("0x")
+        ):
+            # Show first 6 and last 4 chars of addresses
+            if len(value) > 12:
+                formatted_value = f"{value[:6]}...{value[-4:]}"
+            else:
+                formatted_value = value
+        else:
+            formatted_value = str(value)
+
+        items.append(f"{key}={formatted_value}")
+
+    return "{" + ", ".join(items) + "}"
 
 
 async def query_reporters(uri: str, logger: logging.Logger) -> ReporterQueryResponse | None:
@@ -334,37 +374,50 @@ async def raw_data_queue_handler(
 
                 # Smart batching logic: process reports based on multiple conditions
                 should_process = False
-                process_reason = ""
 
                 # Height has incremented (process previous height's reports)
                 if current_height is not None and height > current_height:
                     should_process = True
-                    process_reason = f"height increment ({current_height} -> {height})"
 
                 # Batch size threshold reached
                 elif len(reports_collections) >= MAX_BATCH_SIZE:
                     should_process = True
-                    process_reason = f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})"
+                    f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})"
 
                 # Timeout reached
                 elif time.time() - last_batch_time > BATCH_TIMEOUT:
                     should_process = True
-                    process_reason = f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)"
+                    f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)"
 
                 # First report (current_height is None) - process immediately
                 elif current_height is None:
                     should_process = True
-                    process_reason = "first report"
 
                 if should_process and len(reports_collections) > 0:
-                    total_reports = sum(len(reports) for reports in reports_collections.values())
-                    query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
+                    sum(len(reports) for reports in reports_collections.values())
+
+                    # Build query type summary with asset pairs for spot prices
+                    query_type_summaries = []
+                    for _query_id, reports in reports_collections.items():
+                        query_type = reports[0].query_type
+                        count = len(reports)
+
+                        # For SpotPrice, try to extract asset pair
+                        if query_type.lower() == "spotprice":
+                            try:
+                                query_obj = get_query(reports[0].query_data)
+                                if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
+                                    asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
+                                    query_type_summaries.append(f"{count} {asset_pair}")
+                                else:
+                                    query_type_summaries.append(f"{count} {query_type}")
+                            except Exception:
+                                query_type_summaries.append(f"{count} {query_type}")
+                        else:
+                            query_type_summaries.append(f"{count} {query_type}")
 
                     collected_height = current_height if current_height is not None else height
-                    logger.info(
-                        f"Processing {total_reports} reports collected at height {collected_height} "
-                        f"({process_reason}), qIds: [{', '.join(query_counts)}]"
-                    )
+                    console_logger.info(f"Processing reports from height {collected_height}: {', '.join(query_type_summaries)}")
 
                     await new_reports_q.put(dict(reports_collections))
                     reports_collections.clear()
@@ -383,12 +436,27 @@ async def raw_data_queue_handler(
         elif is_agg_report and agg_reports_q is not None:
             # This ensures new reports are processed for disputes even when aggregate arrives at same height
             if len(reports_collections) > 0:
-                total_reports = sum(len(reports) for reports in reports_collections.values())
-                query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
+                # Build query type summary with asset pairs for spot prices
+                query_type_summaries = []
+                for _query_id, reports in reports_collections.items():
+                    query_type = reports[0].query_type
+                    count = len(reports)
 
-                logger.info(
-                    f"Processing {total_reports} reports collected at height {height}, qIds: [{', '.join(query_counts)}]"
-                )
+                    # For SpotPrice, try to extract asset pair
+                    if query_type.lower() == "spotprice":
+                        try:
+                            query_obj = get_query(reports[0].query_data)
+                            if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
+                                asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
+                                query_type_summaries.append(f"{count} {asset_pair}")
+                            else:
+                                query_type_summaries.append(f"{count} {query_type}")
+                        except Exception:
+                            query_type_summaries.append(f"{count} {query_type}")
+                    else:
+                        query_type_summaries.append(f"{count} {query_type}")
+
+                console_logger.info(f"Processing reports from height {current_height}: {', '.join(query_type_summaries)}")
 
             try:
                 height = current_height
@@ -416,13 +484,29 @@ async def raw_data_queue_handler(
 
     # Cleanup: Process any remaining reports before function exits
     if len(reports_collections) > 0:
-        total_reports = sum(len(reports) for reports in reports_collections.values())
-        query_counts = [f"{query_id[:12]}:{len(reports)}" for query_id, reports in reports_collections.items()]
+        # Build query type summary with asset pairs for spot prices
+        query_type_summaries = []
+        for _query_id, reports in reports_collections.items():
+            query_type = reports[0].query_type
+            count = len(reports)
+
+            # For SpotPrice, try to extract asset pair
+            if query_type.lower() == "spotprice":
+                try:
+                    query_obj = get_query(reports[0].query_data)
+                    if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
+                        asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
+                        query_type_summaries.append(f"{count} {asset_pair}")
+                    else:
+                        query_type_summaries.append(f"{count} {query_type}")
+                except Exception:
+                    query_type_summaries.append(f"{count} {query_type}")
+            else:
+                query_type_summaries.append(f"{count} {query_type}")
 
         collected_height = current_height if current_height is not None else "unknown"
         logger.info(
-            f"Processing {total_reports} remaining reports collected at height {collected_height} "
-            f"(cleanup), qIds: [{', '.join(query_counts)}]"
+            f"Processing remaining reports from height {collected_height} (cleanup): {', '.join(query_type_summaries)}"
         )
 
         await new_reports_q.put(dict(reports_collections))
@@ -1498,25 +1582,7 @@ async def inspect(
         trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
 
     """
-    # Console output - concise 1-line summary
-    query_type = report.query_type
-    asset_info = ""
-    if query_type == "SpotPrice" and query:
-        if hasattr(query, "asset") and hasattr(query, "currency"):
-            asset_info = f" {query.asset}/{query.currency}"
-
-    # Format values for display
-    if isinstance(reported_value, dict):
-        reported_str = f"Dict[{len(reported_value)} fields]"
-        trusted_str = f"Dict[{len(trusted_value)} fields]"
-    elif isinstance(reported_value, bytes):
-        reported_str = f"0x{reported_value.hex()}"
-        trusted_str = f"0x{trusted_value.hex()}"
-    else:
-        reported_str = f"{reported_value}"
-        trusted_str = f"{trusted_value}"
-
-    console_logger.info(f"{query_type}{asset_info} | Reported: {reported_str} | Trusted: {trusted_str}")
+    # Per-report logging removed - now using batch summaries at height changes
 
     display = {
         "REPORTER": report.reporter,
