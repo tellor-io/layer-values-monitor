@@ -11,6 +11,7 @@ from typing import Any
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
+from layer_values_monitor.logger import console_logger
 from layer_values_monitor.custom_types import (
     AggregateReport,
     Metrics,
@@ -505,7 +506,7 @@ async def raw_data_queue_handler(
                 query_type_summaries.append(f"{count} {query_type}")
 
         collected_height = current_height if current_height is not None else "unknown"
-        logger.info(
+        console_logger.info(
             f"Processing remaining reports from height {collected_height} (cleanup): {', '.join(query_type_summaries)}"
         )
 
@@ -601,8 +602,7 @@ async def inspect_spotprice_path(
     logger.debug(f"🔍 SpotPrice inspection starting - QueryID: {query_id[:16]}..., {len(reports)} report(s)")
 
     # Step 1: Check if query is in our config
-    query_type_configs = config_watcher.query_configs.get(query_type.lower(), {})
-    has_specific_config = query_id.lower() in query_type_configs
+    has_specific_config = config_watcher.has_query_config(query_id, query_type)
     logger.debug(f" Query in config? {has_specific_config}")
 
     # Step 2: Check if query is in telliot catalog
@@ -1070,8 +1070,7 @@ async def execute_contract_pause(
     """
     if saga_contract_manager is not None:
         # Get contract address from config
-        config = config_watcher.get_config()
-        query_config = config.get(agg_report.query_id.lower())
+        query_config = config_watcher.find_query_config(agg_report.query_id)
 
         if query_config and query_config.get("datafeed_ca"):
             contract_address = query_config.get("datafeed_ca")
@@ -1204,8 +1203,7 @@ async def agg_reports_queue_handler(
                 logger.critical(f"🕐 DELAYED PAUSE SCHEDULED: {reason}")
 
                 # Get contract address for delayed pause
-                config = config_watcher.get_config()
-                query_config = config.get(agg_report.query_id.lower())
+                query_config = config_watcher.find_query_config(agg_report.query_id)
 
                 if query_config and query_config.get("datafeed_ca"):
                     contract_address = query_config.get("datafeed_ca")
