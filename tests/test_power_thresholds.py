@@ -184,16 +184,6 @@ class TestPowerThresholds:
         from layer_values_monitor.custom_types import Metrics
 
         mock_config_watcher = MagicMock(spec=ConfigWatcher)
-        mock_config_watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": 0.05,
-                "warning_threshold": 0.1,
-                "minor_threshold": 0.15,
-                "major_threshold": 0.2,
-                "pause_threshold": 0.25,
-            }
-        }
         mock_config_watcher.is_supported_query_type.return_value = True
         mock_config_watcher.get_metrics_for_query.return_value = Metrics(
             metric="percentage",
@@ -257,16 +247,6 @@ class TestPowerThresholds:
         from layer_values_monitor.custom_types import Metrics
 
         mock_config_watcher = MagicMock(spec=ConfigWatcher)
-        mock_config_watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": 0.05,
-                "warning_threshold": 0.1,
-                "minor_threshold": 0.15,
-                "major_threshold": 0.2,
-                "pause_threshold": 0.25,  # This would normally trigger pause
-            }
-        }
         mock_config_watcher.is_supported_query_type.return_value = True
         mock_config_watcher.get_metrics_for_query.return_value = Metrics(
             metric="percentage",
@@ -274,7 +254,7 @@ class TestPowerThresholds:
             warning_threshold=0.1,
             minor_threshold=0.15,
             major_threshold=0.2,
-            pause_threshold=0.25,
+            pause_threshold=0.25,  # This would normally trigger pause
         )
 
         with (

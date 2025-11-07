@@ -8,7 +8,6 @@ from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.custom_types import AggregateReport
 from layer_values_monitor.monitor import agg_reports_queue_handler, inspect_aggregate_report
 from layer_values_monitor.saga_contract import SagaContractManager
-from layer_values_monitor.threshold_config import ThresholdConfig
 
 import pytest
 
@@ -25,23 +24,18 @@ class TestAggReportsQueueHandler:
     def mock_config_watcher(self):
         """Create a mock config watcher."""
         watcher = MagicMock(spec=ConfigWatcher)
-        watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": 0.05,
-                "warning_threshold": 0.1,
-                "minor_threshold": 0.15,
-                "major_threshold": 0.2,
-                "pause_threshold": 0.25,
-                "datafeed_ca": "0x9fe237b245466A5f088AfE808b27c1305E3027BC",
-            }
+        # Mock find_query_config instead of get_config
+        watcher.find_query_config.return_value = {
+            "metric": "percentage",
+            "alert_threshold": 0.05,
+            "warning_threshold": 0.1,
+            "minor_threshold": 0.15,
+            "major_threshold": 0.2,
+            "pause_threshold": 0.25,
+            "datafeed_ca": "0x9fe237b245466A5f088AfE808b27c1305E3027BC",
         }
         return watcher
 
-    @pytest.fixture
-    def mock_threshold_config(self):
-        """Create a mock threshold config."""
-        return MagicMock(spec=ThresholdConfig)
 
     @pytest.fixture
     def mock_saga_manager(self):
@@ -64,7 +58,7 @@ class TestAggReportsQueueHandler:
 
     @pytest.mark.asyncio
     async def test_handler_with_pause_trigger(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, mock_saga_manager, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, mock_saga_manager, sample_aggregate_report
     ):
         """Test queue handler when pause threshold is exceeded."""
         queue = asyncio.Queue()
@@ -97,7 +91,7 @@ class TestAggReportsQueueHandler:
 
     @pytest.mark.asyncio
     async def test_handler_with_pause_failure(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, mock_saga_manager, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, mock_saga_manager, sample_aggregate_report
     ):
         """Test queue handler when pause contract call fails."""
         queue = asyncio.Queue()
@@ -129,12 +123,12 @@ class TestAggReportsQueueHandler:
 
     @pytest.mark.asyncio
     async def test_handler_with_placeholder_address(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, mock_saga_manager, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, mock_saga_manager, sample_aggregate_report
     ):
         """Test queue handler with placeholder contract address."""
         # Configure placeholder address
-        mock_config_watcher.get_config.return_value = {
-            "test_query_id": {"datafeed_ca": "0x0000000000000000000000000000000000000000"}
+        mock_config_watcher.find_query_config.return_value = {
+            "datafeed_ca": "0x0000000000000000000000000000000000000000"
         }
 
         queue = asyncio.Queue()
@@ -166,7 +160,7 @@ class TestAggReportsQueueHandler:
 
     @pytest.mark.asyncio
     async def test_handler_without_saga_manager(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, sample_aggregate_report
     ):
         """Test queue handler without Saga contract manager."""
         queue = asyncio.Queue()
@@ -202,7 +196,7 @@ class TestAggReportsQueueHandler:
 
     @pytest.mark.asyncio
     async def test_handler_no_pause_needed(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, mock_saga_manager, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, mock_saga_manager, sample_aggregate_report
     ):
         """Test queue handler when no pause is needed."""
         queue = asyncio.Queue()
@@ -233,7 +227,7 @@ class TestAggReportsQueueHandler:
 
     @pytest.mark.asyncio
     async def test_handler_inspection_failure(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, mock_saga_manager, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, mock_saga_manager, sample_aggregate_report
     ):
         """Test queue handler when inspection fails."""
         queue = asyncio.Queue()
@@ -275,16 +269,6 @@ class TestInspectAggregateReport:
         from layer_values_monitor.custom_types import Metrics
 
         watcher = MagicMock(spec=ConfigWatcher)
-        watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": 0.05,
-                "warning_threshold": 0.1,
-                "minor_threshold": 0.15,
-                "major_threshold": 0.2,
-                "pause_threshold": 0.25,
-            }
-        }
         watcher.is_supported_query_type.return_value = True
         watcher.get_metrics_for_query.return_value = Metrics(
             metric="percentage",
@@ -296,10 +280,6 @@ class TestInspectAggregateReport:
         )
         return watcher
 
-    @pytest.fixture
-    def mock_threshold_config(self):
-        """Create a mock threshold config."""
-        return MagicMock(spec=ThresholdConfig)
 
     @pytest.fixture
     def sample_aggregate_report(self):
@@ -315,7 +295,7 @@ class TestInspectAggregateReport:
 
     @pytest.mark.asyncio
     async def test_inspect_should_pause(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, sample_aggregate_report
     ):
         """Test inspection that should trigger pause."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
@@ -342,7 +322,7 @@ class TestInspectAggregateReport:
 
     @pytest.mark.asyncio
     async def test_inspect_should_not_pause(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, sample_aggregate_report
     ):
         """Test inspection that should not trigger pause."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
@@ -369,7 +349,7 @@ class TestInspectAggregateReport:
 
     @pytest.mark.asyncio
     async def test_inspect_no_trusted_value(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, sample_aggregate_report
     ):
         """Test inspection when trusted value cannot be fetched."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
@@ -381,14 +361,13 @@ class TestInspectAggregateReport:
                     mock_fetch_value.return_value = (None, None)  # No trusted value
 
                     result = await inspect_aggregate_report(
-                        sample_aggregate_report, mock_config_watcher, mock_logger, mock_threshold_config
-                    )
+                        sample_aggregate_report, mock_config_watcher, mock_logger                    )
 
                     assert result is None
                     mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
-    async def test_inspect_no_config(self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report):
+    async def test_inspect_no_config(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test inspection with no configuration available."""
         # Mock config watcher to return no metrics
         mock_config_watcher.is_supported_query_type.return_value = False
@@ -404,18 +383,9 @@ class TestInspectAggregateReport:
 
     @pytest.mark.asyncio
     async def test_inspect_invalid_config(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, sample_aggregate_report
     ):
         """Test inspection with invalid configuration."""
-        # Return config with missing fields
-        mock_config_watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": None,  # Invalid
-                "warning_threshold": 0.1,
-            }
-        }
-
         # Mock config watcher to return None metrics (invalid config)
         mock_config_watcher.get_metrics_for_query.return_value = None
         mock_config_watcher.is_supported_query_type.return_value = True
@@ -431,7 +401,7 @@ class TestInspectAggregateReport:
 
     @pytest.mark.asyncio
     async def test_inspect_disputable_major_threshold(
-        self, mock_logger, mock_config_watcher, mock_threshold_config, sample_aggregate_report
+        self, mock_logger, mock_config_watcher, sample_aggregate_report
     ):
         """Test inspection with disputable value exceeding major threshold."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:

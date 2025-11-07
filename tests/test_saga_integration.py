@@ -17,7 +17,6 @@ class TestSagaIntegration:
     async def test_end_to_end_pause_flow(self, mock_saga_contract_manager, saga_config_watcher):
         """Test the complete flow from aggregate report to contract pause."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create aggregate report that will trigger pause
         agg_report = AggregateReport(
@@ -33,7 +32,7 @@ class TestSagaIntegration:
         await queue.put(agg_report)
 
         mock_logger = MagicMock()
-        MagicMock(spec=ThresholdConfig)
+        MagicMock()
 
         # Mock the inspection to return should_pause=True
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
@@ -95,7 +94,6 @@ class TestSagaIntegration:
     async def test_multiple_aggregate_reports(self, mock_saga_contract_manager, saga_config_watcher):
         """Test handling multiple aggregate reports with different outcomes."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create multiple reports
         report1 = AggregateReport(
@@ -121,7 +119,7 @@ class TestSagaIntegration:
         await queue.put(report2)
 
         mock_logger = MagicMock()
-        MagicMock(spec=ThresholdConfig)
+        MagicMock()
 
         # Mock different inspection results
         def side_effect(agg_report, *args):
@@ -156,7 +154,6 @@ class TestSagaIntegration:
     async def test_contract_pause_with_guardian_failure(self, saga_config_watcher):
         """Test contract pause when guardian check fails."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create mock saga manager that fails guardian check
         mock_saga_manager = MagicMock()
@@ -175,7 +172,7 @@ class TestSagaIntegration:
         await queue.put(report)
 
         mock_logger = MagicMock()
-        MagicMock(spec=ThresholdConfig)
+        MagicMock()
 
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
             mock_inspect.return_value = (True, "Should pause")
@@ -199,17 +196,17 @@ class TestSagaIntegration:
     async def test_config_reload_during_monitoring(self, saga_config_watcher):
         """Test that config changes are picked up during monitoring."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
-        # Initial config
-        initial_config = saga_config_watcher.get_config()
+        # Initial datafeed_ca
+        initial_config = saga_config_watcher.find_query_config("test_query_id")
+        initial_datafeed = initial_config.get("datafeed_ca")
 
-        # Modify config (simulate file change)
+        # Prepare new config for mocking
         new_config = dict(initial_config)
-        new_config["test_query_id"]["datafeed_ca"] = "0xNEWADDRESS123456789"
+        new_config["datafeed_ca"] = "0xNEWADDRESS123456789"
 
         # Mock config watcher to return new config
-        with patch.object(saga_config_watcher, "get_config", return_value=new_config):
+        with patch.object(saga_config_watcher, "find_query_config", return_value=new_config):
             report = AggregateReport(
                 query_id="test_query_id",
                 query_data="0x123abc",
@@ -223,7 +220,7 @@ class TestSagaIntegration:
             await queue.put(report)
 
             mock_logger = MagicMock()
-            MagicMock(spec=ThresholdConfig)
+            MagicMock()
             mock_saga_manager = MagicMock()
             mock_saga_manager.pause_contract = AsyncMock(return_value=("0xtest_hash", "success"))
 
