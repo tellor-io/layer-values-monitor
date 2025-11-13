@@ -11,7 +11,7 @@ from typing import Any
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
-from layer_values_monitor.logger import console_logger
+from layer_values_monitor.logger import console_logger, logger
 from layer_values_monitor.custom_types import (
     AggregateReport,
     Metrics,
@@ -211,7 +211,7 @@ async def listen_to_websocket_events(
     logger: logger instance
     height_tracker: height tracker to detect missed blocks
     """
-    logger.info(f"💡 Starting WebSocket connection for {len(queries)} subscriptions...")
+    console_logger.info(f"🔌 Connecting to WebSocket at ws://{uri}/websocket...")
 
     # Prepare subscription messages
     subscription_messages = []
@@ -227,16 +227,17 @@ async def listen_to_websocket_events(
 
     while True:
         try:
-            logger.info(f"💡 Connecting to WebSocket at {ws_uri}... (Attempt {retry_count + 1})")
+            if retry_count > 0:
+                logger.info(f"WebSocket reconnection attempt {retry_count + 1}...")
             async with websockets.connect(ws_uri) as websocket:
                 # Send all subscription messages
                 for i, msg in enumerate(subscription_messages):
                     await websocket.send(msg)
-                    logger.info(f"✅ Sent subscription {i + 1}: {queries[i]}")
+                    logger.debug(f"Sent subscription {i + 1}: {queries[i]}")
 
                 # Reset retry count on successful connection
                 retry_count = 0
-                logger.info("✅ WebSocket connection established successfully")
+                console_logger.info("✅ Monitoring active")
                 while True:
                     response = await websocket.recv()
                     parsed_response = json.loads(response)
@@ -663,9 +664,7 @@ async def inspect_spotprice_path(
             f"(query: {query_id[:16]}..., asset: {asset_pair})"
         )
         # Check if this query type typically has per-query configs
-        has_specific_configs = any(k != "defaults" for k in query_type_configs.keys())
-
-        if has_specific_configs:
+        if config_watcher.has_specific_query_configs(query_type):
             # Log info message (don't send Discord alert - we'll alert on value discrepancy if needed)
             logger.info(
                 f"⚠️ Query found in telliot but not in config file - "
@@ -690,10 +689,11 @@ async def inspect_spotprice_path(
         return None
 
     logger.debug("Fetching trusted value from feed...")
-    trusted_value, _ = await fetch_value(feed)
-    if trusted_value is None:
+    result = await fetch_value(feed)
+    if result is None:
         logger.error("Unable to fetch trusted value")
         return None
+    trusted_value, _ = result
 
     logger.debug(f"Trusted value fetched: {trusted_value}")
 
@@ -842,10 +842,11 @@ async def inspect_aggregate_report(
         logger.error(f"Unable to get feed for aggregate report query id: {query_id}")
         return None
 
-    trusted_value, _ = await fetch_value(feed)
-    if trusted_value is None:
+    result = await fetch_value(feed)
+    if result is None:
         logger.error(f"Unable to fetch trusted value for aggregate report query id: {query_id}")
         return None
+    trusted_value, _ = result
 
     # Decode the aggregate hex value
     try:

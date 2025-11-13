@@ -72,6 +72,15 @@ class ConfigWatcher:
         query_type_configs = self.query_configs.get(query_type.lower(), {})
         return query_id.lower() in query_type_configs
 
+    def has_specific_query_configs(self, query_type: str) -> bool:
+        """Check if query type has any specific query configurations beyond defaults.
+        
+        Returns True if there are query-specific configs, False if only defaults exist.
+        Useful for determining if an unconfigured query should trigger a warning.
+        """
+        query_type_configs = self.query_configs.get(query_type.lower(), {})
+        return any(k != "defaults" for k in query_type_configs.keys())
+
     def get_query_config(self, query_id: str, query_type: str) -> dict:
         """Get query-specific config (e.g., datafeed_ca, custom thresholds)."""
         query_type_configs = self.query_configs.get(query_type.lower(), {})
