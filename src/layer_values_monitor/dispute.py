@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from layer_values_monitor.custom_types import DisputeCategory, Msg
-from layer_values_monitor.logger import logger
+from layer_values_monitor.logger import console_logger, logger
 from layer_values_monitor.utils import remove_0x_prefix
 
 
@@ -70,7 +70,7 @@ def validate_keyring_config(binary_path: str, key_name: str, kb: str, kdir: str)
             logger.error(f"Key '{key_name}' not found in keyring. Available keys: {key_names}")
             return False
 
-        logger.info(f"✅ Key '{key_name}' found in keyring")
+        console_logger.info(f"✅ Key '{key_name}' found in keyring")
         return True
 
     except subprocess.TimeoutExpired:
@@ -275,10 +275,11 @@ async def process_disputes(
     logger: logging,
 ) -> None:
     """Process dispute messages from queue and submit them to the blockchain."""
-    logger.info(f"💡 Dispute processor started with key: {key_name}, keyring: {kb}, dir: {kdir}")
+    logger.info(f"Dispute processor: key={key_name}, keyring={kb}, dir={kdir}")
 
     # Validate keyring configuration before starting
     if not validate_keyring_config(binary_path, key_name, kb, kdir):
+        console_logger.error("❌ Keyring validation failed - disputes disabled")
         logger.error("❌ Keyring validation failed. Auto-disputing will not work.")
         # Keep the processor running but just log when disputes come in
         while True:
@@ -306,7 +307,7 @@ async def process_disputes(
                 logger.error(f"❌ Error in disabled dispute processor: {e}", exc_info=True)
         return
 
-    logger.info("✅ Dispute processing enabled - disputes will be submitted to blockchain")
+    console_logger.info("✅ Auto disputer ready")
 
     while True:
         try:

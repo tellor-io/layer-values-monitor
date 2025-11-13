@@ -103,10 +103,14 @@ async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
         # Add timeout to prevent hanging on rate-limited APIs
         return await asyncio.wait_for(feed.source.fetch_new_datapoint(), timeout=15.0)
     except TimeoutError:
-        logger.warning("Timeout fetching trusted value from telliot-feeds (15s)")
+        error_msg = "Timeout fetching trusted value from telliot-feeds (15s)"
+        logger.warning(error_msg)
+        print(f"Error fetching trusted value from telliot-feeds: {error_msg}")  # print to terminal_log
         return None
     except Exception as e:
-        logger.warning(f"Error fetching trusted value from telliot-feeds: {e}")
+        error_msg = f"Error fetching trusted value from telliot-feeds: {e}"
+        logger.warning(error_msg)
+        print(error_msg)  # print to terminal_log
         return None
 
 

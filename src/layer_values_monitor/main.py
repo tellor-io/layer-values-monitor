@@ -13,7 +13,7 @@ from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
 from layer_values_monitor.dispute import process_disputes
 from layer_values_monitor.evm_connections import validate_rpc_connection
-from layer_values_monitor.logger import logger
+from layer_values_monitor.logger import console_logger, logger
 from layer_values_monitor.monitor import (
     agg_reports_queue_handler,
     listen_to_websocket_events,
@@ -22,7 +22,6 @@ from layer_values_monitor.monitor import (
 )
 from layer_values_monitor.saga_contract import create_saga_contract_manager
 
-from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
 
 for logger_name in logging.root.manager.loggerDict:
@@ -46,15 +45,19 @@ def async_run(f: Any) -> Any:
 @async_run
 async def start() -> None:
     """Start layer values monitor."""
+    console_logger.info("🚀 Layer Values Monitor - Initializing...")
+    
     loaded = load_dotenv(override=True)
     if not loaded:
         raise ValueError("Failed to load environment variables")
+    
     uri = os.getenv("URI")
     if uri is None:
         raise ValueError("URI not found in environment variables")
     chain_id = os.getenv("CHAIN_ID")
     if chain_id is None:
         raise ValueError("CHAIN_ID not found in environment variables")
+    console_logger.info(f"✅ Chain ID: {chain_id}")
     parser = argparse.ArgumentParser(description="Start values monitor")
     parser.add_argument(
         "binary_path",
@@ -98,22 +101,43 @@ async def start() -> None:
         raise ValueError("keyring_backend is required (set LAYER_KEYRING_BACKEND env var or provide as argument)")
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
+    
+    # Validate binary path exists and is executable
+    binary_path = Path(args.binary_path).expanduser().resolve()
+    if not binary_path.exists():
+        raise ValueError(f"Layer binary not found at: {binary_path}")
+    if not os.access(binary_path, os.X_OK):
+        raise ValueError(f"Layer binary not executable: {binary_path}")
+    console_logger.info(f"✅ Layer binary executable: {binary_path}")
+    
+    # Validate keyring directory exists
+    keyring_dir = Path(args.keyring_dir).expanduser().resolve()
+    if not keyring_dir.exists():
+        raise ValueError(f"Keyring directory not found: {keyring_dir}")
+    console_logger.info(f"✅ Keyring dir exists: {keyring_dir}")
+    
+    # Test RPC connectivity
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://{uri}/health", timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status == 200:
+                    console_logger.info(f"✅ RPC endpoint healthy: http://{uri}")
+    except Exception as e:
+        console_logger.warning(f"⚠️ RPC check failed: {e}")
 
     # Validate Saga environment variables if Saga guard is enabled
     power_thresholds = None
     saga_contract_manager = None
     if args.enable_saga_guard:
+        console_logger.info("🛡️ Saga Guard mode enabled")
+        
         # Set aggregate report power thresholds
         immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
         delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
 
         power_thresholds = PowerThresholds(
             immediate_pause_threshold=immediate_threshold, delayed_pause_threshold=delayed_threshold
-        )
-
-        logger.info(
-            f"💡 Power thresholds configured: immediate={immediate_threshold * 100}%, "
-            f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
         )
 
         # Validate Saga RPC URLs and private key
@@ -126,29 +150,30 @@ async def start() -> None:
             raise ValueError("SAGA_PRIVATE_KEY environment variable is required when using --enable-saga-guard")
 
         # Validate Saga RPC URL connectivity (test primary URL)
-        logger.info("💡 Validating Saga EVM RPC connection...")
         primary_saga_url = saga_rpc_urls.split(",")[0].strip()
         is_valid, error_msg, saga_chain_id = validate_rpc_connection(primary_saga_url, "Saga", logger)
         if not is_valid:
-            logger.warning(f"Primary Saga RPC validation failed: {error_msg}. Will try backups if configured.")
+            console_logger.warning(f"⚠️ Saga RPC failed: {error_msg}")
+        else:
+            console_logger.info(f"✅ Saga RPC connected: chain_id={saga_chain_id}")
 
         saga_contract_manager = create_saga_contract_manager(logger)
-        if saga_contract_manager:
-            logger.info("💡 Saga contract manager initialized successfully")
+        if not saga_contract_manager:
+            console_logger.warning("⚠️ Saga contract manager failed to initialize")
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
     logger.info(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
     config_watcher = ConfigWatcher(config_path)
-    logger.info("💡 Config watcher initialized")
+    logger.info("CONFIG DEBUG: Config watcher initialized")
 
-    # Log config summary
+    # Log config summary (debug only)
     logger.info("CONFIG DEBUG: Config summary:")
     logger.info(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
     logger.info(f"CONFIG DEBUG: - Query types: {list(config_watcher.query_types.keys())}")
     logger.info(f"CONFIG DEBUG: - Query configs: {list(config_watcher.query_configs.keys())}")
 
-    # Test config methods
+    # Test config methods (debug only)
     logger.info("CONFIG DEBUG: Testing config methods...")
     test_query_types = ["SpotPrice", "TrbBridge", "EvmCall", "UnknownType"]
     for query_type in test_query_types:
@@ -158,24 +183,30 @@ async def start() -> None:
             query_type_info = config_watcher.get_query_type_info(query_type)
             logger.info(f"CONFIG DEBUG:   - get_query_type_info('{query_type}'): {query_type_info}")
 
+    # Terminal summary of config
+    supported_types = list(config_watcher.query_types.keys())
+    console_logger.info(f"✅ Monitoring {len(supported_types)} query types: {', '.join(supported_types)}")
+
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events
     agg_reports_queue = asyncio.Queue(maxsize=500)  # Aggregate reports for Saga Guard
     new_reports_queue = asyncio.Queue(maxsize=200)  # Batched new reports
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
-    logger.info("💡 Message queues initialized")
+    logger.info("Message queues initialized")
 
     # TelliotConfig is used for non-EVMCall query types (SpotPrice, etc.)
+    # The endpoints were already patched at module import time (see top of file)
     # EVMCall uses direct Web3 connections via get_web3_connection()
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
-    logger.info("💡 TelliotConfig initialized for standard query types")
+    cfg.main
+    console_logger.info("✅ TelliotConfig initialized")
 
     # Height tracker for missed block detection
     max_catchup_blocks = int(os.getenv("MAX_CATCHUP_BLOCKS", "15"))
     height_tracker = HeightTracker(max_catchup_blocks=max_catchup_blocks)
 
-    logger.info(f"💡 Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
+    console_logger.info(f"✅ Catch-up: max {max_catchup_blocks} blocks")
 
     # Initialize row counter for CSV file management
     from layer_values_monitor.utils import initialize_row_counter
@@ -190,6 +221,8 @@ async def start() -> None:
         # Add aggregate report query if Saga guard is enabled
         if args.enable_saga_guard:
             queries.append("aggregate_report.aggregate_power > 0")
+        
+        console_logger.info(f"📡 WebSocket subscriptions: {len(queries)} ({', '.join(queries)})")
 
         # Build list of tasks to run concurrently
         tasks = [
@@ -224,7 +257,6 @@ async def start() -> None:
                 )
             )
 
-        logger.info("💡 Starting Layer Values Monitor...")
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         print("shutting down running tasks")
