@@ -8,6 +8,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
