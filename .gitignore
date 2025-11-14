@@ -14,5 +14,7 @@ wheels/
 
 .env
 
+config.toml
+
 *.csv
 *.log
