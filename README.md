@@ -1,5 +1,5 @@
-![Unit Tests](https://github.com/tellor-io/layer-values-monitor/actions/workflows/test.yml/badge.svg)
-![Ruff](https://github.com/tellor-io/layer-values-monitor/actions/workflows/ruff.yml/badge.svg)
+[![Unit Tests](https://github.com/tellor-io/layer-values-monitor/actions/workflows/test.yml/badge.svg)](https://github.com/tellor-io/layer-values-monitor/actions/workflows/test.yml)
+[![Ruff](https://github.com/tellor-io/layer-values-monitor/actions/workflows/ruff.yml/badge.svg)](https://github.com/tellor-io/layer-values-monitor/actions/workflows/ruff.yml)
 
 # Layer Values Monitor
 
