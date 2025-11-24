@@ -7,7 +7,7 @@
 [global_defaults]
 
     [global_defaults.percentage]
-    alert_threshold = 0.1       # Alert if deviation > 10%
+    alert_threshold = 0.15       # Alert if deviation > 15%
     warning_threshold = 0.0     # No warning disputes
     minor_threshold = 0.0       # No minor disputes
     major_threshold = 0.0       # No major disputes
@@ -45,99 +45,95 @@
 [queries.spotprice]
 
     # ETH/USD 
-    [queries.spotprice.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992]
-    alert_threshold = 0.15                   # 10% alert threshold
-    minor_threshold = 0.99                   
+    [queries.spotprice.83a7f3d48786ac2667503a61e8c415438ed2922eb86a2906e4ee66d9a2ce4992]               
     datafeed_ca = "0x069ee88bA5D95df65fC22Aa5281D6E67727ba050"
 
     # BTC/USD 
     [queries.spotprice.a6f013ee236804827b77696d350e9f0ac3e879328f2a3021d473a0b778ad78ac]
-    alert_threshold = 0.15                   # 5% alert threshold 
     datafeed_ca = "0xcEbb4f8cDDf5274F9a9253493D22efFc7De2d5a3"
 
     # TRB/USD 
     [queries.spotprice.5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0]
-    alert_threshold = 0.15                   # 10% alert threshold
-    datafeed_ca = ""                         
+    datafeed_ca = ""                
 
     # ATOM/USD
-    [queries.spotprice.placeholder_atom_usd]
+    [queries.spotprice.1808ab696a0b68ef13d854e21e188c794a3544a1746ac5d802d1a7d7a765cb51]
     datafeed_ca = "0xFE507c1727A2c2f5578C9da9803261cC298cfAe0"
 
     # fBTC/USD
-    [queries.spotprice.placeholder_fbtc_usd]
+    [queries.spotprice.c444759b83c7bb0f6694306e1f719e65679d48ad754a31d3a366856becf1e71e]
     datafeed_ca = "0x808A2d00981d96BaE5624f1d16100B346141EE0b"
 
     # KING/USD
-    [queries.spotprice.placeholder_king_usd]
+    [queries.spotprice.d62f132d9d04dde6e223d4366c48b47cd9f90228acdc6fa755dab93266db5176]
     datafeed_ca = "0x01196d6E2A543818Dcf4a4ce91Eb23e148c5df9a"
 
     # rETH/USD
-    [queries.spotprice.placeholder_reth_usd]
+    [queries.spotprice.0bc2d41117ae8779da7623ee76a109c88b84b9bf4d9b404524df04f7d0ca4ca7]
     datafeed_ca = "0x43F8c6bdD15BEfb0eD7b89580C29aE9A10Ec5B65"
 
     # SAGA/USD
-    [queries.spotprice.placeholder_saga_usd]
+    [queries.spotprice.74c9cfdfd2e4a00a9437bf93bf6051e18e604a976f3fa37faafe0bb5a039431d]
     datafeed_ca = "0x96e6662856D9B6cdaAd4876f39989CC538Faa0B1"
 
     # stATOM/USD
-    [queries.spotprice.placeholder_statom_usd]
+    [queries.spotprice.611fd0e88850bf0cc036d96d04d47605c90b993485c2971e022b5751bbb04f23]
     datafeed_ca = "0x8730443901DF14D353B9dcc5C77dD2A8Db13A055"
 
     # sUSDe/USD
-    [queries.spotprice.placeholder_susde_usd]
+    [queries.spotprice.03731257e35c49e44b267640126358e5decebdd8f18b5e8f229542ec86e318cf]
     datafeed_ca = "0xCbdc76d3939AFe8B1dB984c50813dAc8359e3452"
 
     # sUSDS/USD
-    [queries.spotprice.placeholder_susds_usd]
+    [queries.spotprice.59ae85cec665c779f18255dd4f3d97821e6a122691ee070b9a26888bc2a0e45a]
     datafeed_ca = "0xAb1D4058e942b2625d0a2024CAA0114Be4e458bA"
 
     # tBTC/USD
-    [queries.spotprice.placeholder_tbtc_usd]
+    [queries.spotprice.76b504e33305a63a3b80686c0b7bb99e7697466927ba78e224728e80bfaaa0be]
     datafeed_ca = "0x52A127e3e394AC2185781b366C6843Cc9ea5d5bD"
 
     # USDC/USD
-    [queries.spotprice.placeholder_usdc_usd]
+    [queries.spotprice.8ee44cd434ed5b0e007eee581fbe0855336f3f84484e8d9989a620a4a49aa0f7]
     datafeed_ca = "0x4bAF1D89679A31DE142D4855BE01cb9c9D1158A4"
 
     # USDN/USD
-    [queries.spotprice.placeholder_usdn_usd]
+    [queries.spotprice.e010d752f28dcd2804004d0b57ab1bdc4eca092895d49160204120af11d15f3e]
     datafeed_ca = "0xF1518c56916EAFc80FDe8CB142eA785B7850e580"
 
     # USDT/USD
-    [queries.spotprice.placeholder_usdt_usd]
+    [queries.spotprice.68a37787e65e85768d4aa6e385fb15760d46df0f67a18ec032d8fd5848aca264]
     datafeed_ca = "0x5bca2d1C43328568169258D608e66D2A9bF0BB1D"
 
     # wstETH/USD
-    [queries.spotprice.placeholder_wsteth_usd]
+    [queries.spotprice.1962cde2f19178fe2bb2229e78a6d386e6406979edc7b9a1966d89d83b3ebf2e]
     datafeed_ca = "0xeD38679026E8ae5f34aD18e43FCC2de49102260f"
 
     # yUSD/USD
-    [queries.spotprice.placeholder_yusd_usd]
+    [queries.spotprice.35155b44678db9e9e021c2cf49dd20c31b49e03415325c2beffb5221cf63882d]
     datafeed_ca = "0xc6a0F156f1c6905661d69F437e1ba753C4145528"
 
     # vyUSD/USD
-    [queries.spotprice.placeholder_vyusd_usd]
+    [queries.spotprice.91513b15db3cef441d52058b24412957f9cc8645c53aecf39446ac9b0d2dcca4]
     datafeed_ca = "0x6926a216A7C284c87f56423E776CF8ea51625811"
 
     # sUSN/USD
-    [queries.spotprice.placeholder_susn_usd]
+    [queries.spotprice.187f74d310dc494e6efd928107713d4229cd319c2cf300224de02776090809f1]
     datafeed_ca = "0x7ED6320BBe1DA1fdaCeb247a5760eCf3C8379181"
 
     # sfrxUSD/USD
-    [queries.spotprice.placeholder_sfrxusd_usd]
+    [queries.spotprice.b3ae22e5db51779af129f4b4ef471f58b1b90dcf8e2b5f5e9e4e2874496dfab5]
     datafeed_ca = "0x40EA5EE6f4acB6DccDC940E2835a50C8E57574e2"
 
     # sMUST/USD
-    [queries.spotprice.placeholder_smust_usd]
+    [queries.spotprice.b7eae4b5c373663313d2bb6c300c6d467297f30ca01679a8d7436e5a3d0f0f0f]
     datafeed_ca = "0xfff29D823C3837A9A4E7094Dd42740cE1a5F4615"
 
     # MUST/USD
-    [queries.spotprice.placeholder_must_usd]
+    [queries.spotprice.ec9d7555dd91349ebdd00d011f6a91b4495475d555c8218d43d36a8c11a9e099]
     datafeed_ca = "0xeBd515A9910077dE2561297cB3cE09503aDf9251"
 
     # yETH/USD
-    [queries.spotprice.placeholder_yeth_usd]
+    [queries.spotprice.9874c1c7b7e76b78afdfdda6dcecef56edf6bf3d49d6d6ef2a98404ea2e04a59]
     datafeed_ca = "0x26d141cbC1C6bc850AE2cf0038D6394aDE437f7e"
 
 [queries.trbbridge]
