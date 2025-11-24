@@ -79,9 +79,14 @@ async def test_double_check_both_cross_threshold(sample_report, metrics):
     # Verify Discord alert was sent with both values
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
-    assert "Second inspection triggered: sending dispute" in alert_msg
+    # Message format: **First Trusted Value:** X (retrieved at TIME)\n**Second Trusted Value:** Y (retrieved at TIME)
+    assert "First Trusted Value" in alert_msg
+    assert "Second Trusted Value" in alert_msg
     assert str(first_trusted_value) in alert_msg
     assert str(second_trusted_value) in alert_msg
+    # Verify it's the dispute version
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert "ATTEMPTING TO SEND DISPUTE" in alert_desc
 
 
 @pytest.mark.asyncio
@@ -121,9 +126,14 @@ async def test_double_check_second_does_not_cross(sample_report, metrics):
     # Verify Discord alert was sent with both values
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
-    assert "was past the first trusted value, but not the second" in alert_msg
+    # Message format: **First Trusted Value:** X (retrieved at TIME)\n**Second Trusted Value:** Y (retrieved at TIME)
+    assert "First Trusted Value" in alert_msg
+    assert "Second Trusted Value" in alert_msg
     assert str(first_trusted_value) in alert_msg
     assert str(second_trusted_value) in alert_msg
+    # Verify it's the NO dispute version
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert "NO DISPUTE SENT" in alert_desc
 
 
 @pytest.mark.asyncio

@@ -445,6 +445,6 @@ async def test_new_report_followed_by_aggregate_same_height(mock_logger):
     assert agg_report.query_id == "83a7f3d48786ac26", "Should be the same query ID"
     assert agg_report.micro_report_height == "116", "Should have correct micro report height"
 
-    # Verify processing was logged (log format uses "Processing X reports...")
-    processing_calls = [str(call) for call in mock_logger.info.call_args_list if "Processing" in str(call)]
-    assert len(processing_calls) > 0, "Should have logged processing messages"
+    # Verify event detection was logged
+    detection_calls = [str(call) for call in mock_logger.info.call_args_list if "Detected new_report event" in str(call)]
+    assert len(detection_calls) > 0, f"Should have logged event detection. Actual calls: {mock_logger.info.call_args_list}"

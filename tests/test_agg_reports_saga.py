@@ -356,15 +356,20 @@ class TestInspectAggregateReport:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
                 with patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value:
                     # Setup mocks
-                    mock_get_query.return_value = MagicMock()
+                    mock_query = MagicMock()
+                    mock_query.__class__.__name__ = "SpotPrice"
+                    mock_get_query.return_value = mock_query
                     mock_get_feed.return_value = MagicMock()
-                    mock_fetch_value.return_value = (None, None)  # No trusted value
+                    mock_fetch_value.return_value = None  # No trusted value (function returns None on error)
 
                     result = await inspect_aggregate_report(
-                        sample_aggregate_report, mock_config_watcher, mock_logger                    )
+                        sample_aggregate_report, mock_config_watcher, mock_logger
+                    )
 
                     assert result is None
-                    mock_logger.error.assert_called()
+                    # Should log error about unable to fetch trusted value
+                    error_calls = [str(call) for call in mock_logger.error.call_args_list if "Unable to fetch trusted value" in str(call)]
+                    assert len(error_calls) > 0
 
     @pytest.mark.asyncio
     async def test_inspect_no_config(self, mock_logger, mock_config_watcher, sample_aggregate_report):

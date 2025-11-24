@@ -64,20 +64,20 @@ class TestSagaIntegration:
         """Test SagaContractManager creation from environment variables."""
         mock_logger = MagicMock()
 
-        with patch.dict(
-            os.environ, {"SAGA_EVM_RPC_URL": "https://chainlet-2742.saga.xyz/", "SAGA_PRIVATE_KEY": "test_private_key"}
-        ):
-            with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
-                mock_manager = MagicMock()
-                mock_manager.is_connected.return_value = True
-                mock_manager_class.return_value = mock_manager
+        with patch.dict(os.environ, {"SAGA_PRIVATE_KEY": "test_private_key"}):
+            with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
+                mock_w3 = MagicMock()
+                mock_get_conn.return_value = (mock_w3, 123456)
+                
+                with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
+                    mock_manager = MagicMock()
+                    mock_manager.is_connected.return_value = True
+                    mock_manager_class.return_value = mock_manager
 
-                result = create_saga_contract_manager(mock_logger)
+                    result = create_saga_contract_manager(mock_logger)
 
-                assert result is not None
-                mock_manager_class.assert_called_once_with(
-                    "https://chainlet-2742.saga.xyz/", "test_private_key", mock_logger
-                )
+                    assert result is not None
+                    mock_manager_class.assert_called_once_with(mock_w3, "test_private_key", mock_logger)
 
     def test_saga_manager_creation_missing_env_vars(self):
         """Test SagaContractManager creation with missing environment variables."""
@@ -247,29 +247,24 @@ class TestSagaIntegration:
         from layer_values_monitor.saga_contract import SagaContractManager
 
         mock_logger = MagicMock()
+        mock_web3 = MagicMock()
+        mock_web3.eth.account.from_key.return_value = MagicMock()
 
-        with patch("layer_values_monitor.saga_contract.Web3") as mock_web3_class:
-            mock_web3 = MagicMock()
-            mock_web3_class.return_value = mock_web3
+        manager = SagaContractManager(mock_web3, "test_key", mock_logger)
 
-            with patch("layer_values_monitor.saga_contract.Web3.eth.account.from_key") as mock_from_key:
-                mock_from_key.return_value = MagicMock()
+        # Verify ABI contains expected functions
+        abi_functions = [func["name"] for func in manager.guarded_pausable_abi if func["type"] == "function"]
 
-                manager = SagaContractManager("https://test-rpc.saga.xyz/", "test_key", mock_logger)
+        assert "pause" in abi_functions
+        assert "unpause" in abi_functions
+        assert "paused" in abi_functions
+        assert "guardians" in abi_functions
 
-                # Verify ABI contains expected functions
-                abi_functions = [func["name"] for func in manager.guarded_pausable_abi if func["type"] == "function"]
+        # Verify function signatures match expected format
+        pause_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "pause")
+        assert pause_func["inputs"] == []
+        assert pause_func["stateMutability"] == "nonpayable"
 
-                assert "pause" in abi_functions
-                assert "unpause" in abi_functions
-                assert "paused" in abi_functions
-                assert "guardians" in abi_functions
-
-                # Verify function signatures match expected format
-                pause_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "pause")
-                assert pause_func["inputs"] == []
-                assert pause_func["stateMutability"] == "nonpayable"
-
-                guardians_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "guardians")
-                assert len(guardians_func["inputs"]) == 1
-                assert guardians_func["inputs"][0]["type"] == "address"
+        guardians_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "guardians")
+        assert len(guardians_func["inputs"]) == 1
+        assert guardians_func["inputs"][0]["type"] == "address"
