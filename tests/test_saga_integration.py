@@ -68,7 +68,7 @@ class TestSagaIntegration:
             with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
                 mock_w3 = MagicMock()
                 mock_get_conn.return_value = (mock_w3, 123456)
-                
+
                 with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
                     mock_manager = MagicMock()
                     mock_manager.is_connected.return_value = True
@@ -199,7 +199,6 @@ class TestSagaIntegration:
 
         # Initial datafeed_ca
         initial_config = saga_config_watcher.find_query_config("test_query_id")
-        initial_datafeed = initial_config.get("datafeed_ca")
 
         # Prepare new config for mocking
         new_config = dict(initial_config)

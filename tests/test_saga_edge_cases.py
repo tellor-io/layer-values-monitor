@@ -29,7 +29,7 @@ class TestSagaEdgeCases:
         mock_web3.to_checksum_address.side_effect = lambda x: x.upper()
         mock_web3.eth.get_code.return_value = b"contract_code"
         mock_web3.eth.get_transaction_count.return_value = 5
-        
+
         mock_account = MagicMock()
         mock_account.address = "0x742d35Cc6634C0532925a3b8D404d8E3c3dd542B"
         mock_account.key = b"test_private_key"

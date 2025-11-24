@@ -34,15 +34,11 @@ class ConfigWatcher:
 
         # Normalize all keys to lowercase once
         self.global_defaults = {
-            metric_type.lower(): thresholds 
-            for metric_type, thresholds in data.get("global_defaults", {}).items()
+            metric_type.lower(): thresholds for metric_type, thresholds in data.get("global_defaults", {}).items()
         }
-        
-        self.query_types = {
-            qtype.lower(): info 
-            for qtype, info in data.get("query_types", {}).items()
-        }
-        
+
+        self.query_types = {qtype.lower(): info for qtype, info in data.get("query_types", {}).items()}
+
         # Normalize query configs: queries[query_type][query_id] = config
         self.query_configs = {
             qtype.lower(): {qid.lower(): cfg for qid, cfg in queries.items()}
@@ -74,7 +70,7 @@ class ConfigWatcher:
 
     def has_specific_query_configs(self, query_type: str) -> bool:
         """Check if query type has any specific query configurations beyond defaults.
-        
+
         Returns True if there are query-specific configs, False if only defaults exist.
         Useful for determining if an unconfigured query should trigger a warning.
         """
@@ -88,7 +84,7 @@ class ConfigWatcher:
 
     def find_query_config(self, query_id: str) -> dict:
         """Find query config by searching all query types (when query_type unknown).
-        
+
         Use this when you only have query_id and need to find its config.
         Returns empty dict if query not found in any type.
         """
@@ -100,7 +96,7 @@ class ConfigWatcher:
 
     def get_metrics_for_query(self, query_id: str, query_type: str) -> Metrics | None:
         """Get complete metrics configuration with inheritance.
-        
+
         Inheritance order: global_defaults[metric_type] <- query_specific_config
         """
         query_type_info = self.query_types.get(query_type.lower())

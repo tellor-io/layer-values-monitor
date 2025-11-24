@@ -419,7 +419,7 @@ class TestCreateSagaContractManager:
             with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
                 mock_w3 = MagicMock()
                 mock_get_conn.return_value = (mock_w3, 123456)
-                
+
                 with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
                     mock_manager = MagicMock()
                     mock_manager.is_connected.return_value = True
@@ -435,7 +435,7 @@ class TestCreateSagaContractManager:
         with patch.dict(os.environ, {"SAGA_PRIVATE_KEY": "test_private_key"}, clear=True):
             with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
                 mock_get_conn.return_value = (None, None)
-                
+
                 result = create_saga_contract_manager(mock_logger)
 
                 assert result is None
@@ -447,7 +447,7 @@ class TestCreateSagaContractManager:
             with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
                 mock_w3 = MagicMock()
                 mock_get_conn.return_value = (mock_w3, 123456)
-                
+
                 result = create_saga_contract_manager(mock_logger)
 
                 assert result is None
@@ -459,7 +459,7 @@ class TestCreateSagaContractManager:
             with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
                 mock_w3 = MagicMock()
                 mock_get_conn.return_value = (mock_w3, 123456)
-                
+
                 with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
                     mock_manager = MagicMock()
                     mock_manager.is_connected.return_value = False
@@ -476,7 +476,7 @@ class TestCreateSagaContractManager:
             with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
                 mock_w3 = MagicMock()
                 mock_get_conn.return_value = (mock_w3, 123456)
-                
+
                 with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
                     mock_manager_class.side_effect = Exception("Initialization failed")
 

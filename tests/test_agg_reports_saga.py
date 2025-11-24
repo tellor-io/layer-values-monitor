@@ -36,7 +36,6 @@ class TestAggReportsQueueHandler:
         }
         return watcher
 
-
     @pytest.fixture
     def mock_saga_manager(self):
         """Create a mock Saga contract manager."""
@@ -127,9 +126,7 @@ class TestAggReportsQueueHandler:
     ):
         """Test queue handler with placeholder contract address."""
         # Configure placeholder address
-        mock_config_watcher.find_query_config.return_value = {
-            "datafeed_ca": "0x0000000000000000000000000000000000000000"
-        }
+        mock_config_watcher.find_query_config.return_value = {"datafeed_ca": "0x0000000000000000000000000000000000000000"}
 
         queue = asyncio.Queue()
         await queue.put(sample_aggregate_report)
@@ -159,9 +156,7 @@ class TestAggReportsQueueHandler:
             )
 
     @pytest.mark.asyncio
-    async def test_handler_without_saga_manager(
-        self, mock_logger, mock_config_watcher, sample_aggregate_report
-    ):
+    async def test_handler_without_saga_manager(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test queue handler without Saga contract manager."""
         queue = asyncio.Queue()
         await queue.put(sample_aggregate_report)
@@ -280,7 +275,6 @@ class TestInspectAggregateReport:
         )
         return watcher
 
-
     @pytest.fixture
     def sample_aggregate_report(self):
         """Create a sample aggregate report."""
@@ -294,9 +288,7 @@ class TestInspectAggregateReport:
         )
 
     @pytest.mark.asyncio
-    async def test_inspect_should_pause(
-        self, mock_logger, mock_config_watcher, sample_aggregate_report
-    ):
+    async def test_inspect_should_pause(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test inspection that should trigger pause."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
@@ -321,9 +313,7 @@ class TestInspectAggregateReport:
                             assert "exceeds pause threshold" in reason
 
     @pytest.mark.asyncio
-    async def test_inspect_should_not_pause(
-        self, mock_logger, mock_config_watcher, sample_aggregate_report
-    ):
+    async def test_inspect_should_not_pause(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test inspection that should not trigger pause."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
@@ -348,9 +338,7 @@ class TestInspectAggregateReport:
                             assert "acceptable deviation:" in reason
 
     @pytest.mark.asyncio
-    async def test_inspect_no_trusted_value(
-        self, mock_logger, mock_config_watcher, sample_aggregate_report
-    ):
+    async def test_inspect_no_trusted_value(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test inspection when trusted value cannot be fetched."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
@@ -362,13 +350,15 @@ class TestInspectAggregateReport:
                     mock_get_feed.return_value = MagicMock()
                     mock_fetch_value.return_value = None  # No trusted value (function returns None on error)
 
-                    result = await inspect_aggregate_report(
-                        sample_aggregate_report, mock_config_watcher, mock_logger
-                    )
+                    result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
 
                     assert result is None
                     # Should log error about unable to fetch trusted value
-                    error_calls = [str(call) for call in mock_logger.error.call_args_list if "Unable to fetch trusted value" in str(call)]
+                    error_calls = [
+                        str(call)
+                        for call in mock_logger.error.call_args_list
+                        if "Unable to fetch trusted value" in str(call)
+                    ]
                     assert len(error_calls) > 0
 
     @pytest.mark.asyncio
@@ -387,9 +377,7 @@ class TestInspectAggregateReport:
             mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_inspect_invalid_config(
-        self, mock_logger, mock_config_watcher, sample_aggregate_report
-    ):
+    async def test_inspect_invalid_config(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test inspection with invalid configuration."""
         # Mock config watcher to return None metrics (invalid config)
         mock_config_watcher.get_metrics_for_query.return_value = None
@@ -405,9 +393,7 @@ class TestInspectAggregateReport:
             mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_inspect_disputable_major_threshold(
-        self, mock_logger, mock_config_watcher, sample_aggregate_report
-    ):
+    async def test_inspect_disputable_major_threshold(self, mock_logger, mock_config_watcher, sample_aggregate_report):
         """Test inspection with disputable value exceeding major threshold."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:

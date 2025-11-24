@@ -8,8 +8,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
@@ -24,6 +22,7 @@ from layer_values_monitor.monitor import (
 )
 from layer_values_monitor.saga_contract import create_saga_contract_manager
 
+from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
 
 for logger_name in logging.root.manager.loggerDict:
@@ -48,11 +47,11 @@ def async_run(f: Any) -> Any:
 async def start() -> None:
     """Start layer values monitor."""
     console_logger.info("🚀 Layer Values Monitor - Initializing...")
-    
+
     loaded = load_dotenv(override=True)
     if not loaded:
         raise ValueError("Failed to load environment variables")
-    
+
     uri = os.getenv("URI")
     if uri is None:
         raise ValueError("URI not found in environment variables")
@@ -103,7 +102,7 @@ async def start() -> None:
         raise ValueError("keyring_backend is required (set LAYER_KEYRING_BACKEND env var or provide as argument)")
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
-    
+
     # Validate binary path exists and is executable
     binary_path = Path(args.binary_path).expanduser().resolve()
     if not binary_path.exists():
@@ -111,15 +110,16 @@ async def start() -> None:
     if not os.access(binary_path, os.X_OK):
         raise ValueError(f"Layer binary not executable: {binary_path}")
     console_logger.info(f"✅ Layer binary executable: {binary_path}")
-    
+
     # Validate keyring directory exists
     keyring_dir = Path(args.keyring_dir).expanduser().resolve()
     if not keyring_dir.exists():
         raise ValueError(f"Keyring directory not found: {keyring_dir}")
     console_logger.info(f"✅ Keyring dir exists: {keyring_dir}")
-    
+
     # Test RPC connectivity
     import aiohttp
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://{uri}/health", timeout=aiohttp.ClientTimeout(total=5)) as response:
@@ -133,7 +133,7 @@ async def start() -> None:
     saga_contract_manager = None
     if args.enable_saga_guard:
         console_logger.info("🛡️ Saga Guard mode enabled")
-        
+
         # Set aggregate report power thresholds
         immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
         delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
@@ -199,7 +199,6 @@ async def start() -> None:
     # TelliotConfig is used for fetching trusted values from telliot-feeds
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
-    cfg.main
     console_logger.info("✅ TelliotConfig initialized")
 
     # Height tracker for missed block detection
@@ -221,7 +220,7 @@ async def start() -> None:
         # Add aggregate report query if Saga guard is enabled
         if args.enable_saga_guard:
             queries.append("aggregate_report.aggregate_power > 0")
-        
+
         console_logger.info(f"📡 WebSocket subscriptions: {len(queries)} ({', '.join(queries)})")
 
         # Build list of tasks to run concurrently

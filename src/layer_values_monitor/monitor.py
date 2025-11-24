@@ -11,7 +11,6 @@ from typing import Any
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
-from layer_values_monitor.logger import console_logger, logger
 from layer_values_monitor.custom_types import (
     AggregateReport,
     Metrics,
@@ -28,6 +27,7 @@ from layer_values_monitor.dispute import (
     determine_dispute_fee,
     is_disputable,
 )
+from layer_values_monitor.logger import console_logger
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
@@ -35,7 +35,6 @@ from layer_values_monitor.utils import add_to_table, decode_hex_value
 
 import aiohttp
 import websockets
-from telliot_feeds.datafeed import DataFeed
 
 
 def format_dict_value(d: dict) -> str:
@@ -417,7 +416,9 @@ async def raw_data_queue_handler(
                             query_type_summaries.append(f"{count} {query_type}")
 
                     collected_height = current_height if current_height is not None else height
-                    console_logger.info(f"Processing reports from height {collected_height}: {', '.join(query_type_summaries)}")
+                    console_logger.info(
+                        f"Processing reports from height {collected_height}: {', '.join(query_type_summaries)}"
+                    )
 
                     await new_reports_q.put(dict(reports_collections))
                     reports_collections.clear()
@@ -775,11 +776,13 @@ async def inspect_evmcall_path(
 
             reported_value_bytes = reported_value_tuple[0]
 
+            reported_hex = reported_value_bytes.hex() if isinstance(reported_value_bytes, bytes) else reported_value_bytes
+            trusted_hex = trusted_value_bytes.hex() if isinstance(trusted_value_bytes, bytes) else trusted_value_bytes
             logger.debug(
                 f"EVMCall Report - reporter: {r.reporter}, "
-                f"reported_value: {reported_value_bytes.hex() if isinstance(reported_value_bytes, bytes) else reported_value_bytes}, "
+                f"reported_value: {reported_hex}, "
                 f"reported_timestamp: {reported_value_tuple[1]}, "
-                f"trusted_value: {trusted_value_bytes.hex() if isinstance(trusted_value_bytes, bytes) else trusted_value_bytes}, "
+                f"trusted_value: {trusted_hex}, "
                 f"trusted_timestamp: {trusted_value_tuple[1]}, "
                 f"power: {r.power}"
             )

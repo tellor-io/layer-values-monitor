@@ -18,13 +18,13 @@ def test_config_structure(config_watcher):
     assert "percentage" in config_watcher.global_defaults
     assert "spotprice" in config_watcher.query_types
     assert "spotprice" in config_watcher.query_configs
-    
+
     # Test query type info
     query_type_info = config_watcher.get_query_type_info("spotprice")
     assert query_type_info is not None
     assert query_type_info["metric"] == "percentage"
     assert query_type_info["handler"] == "telliot_feeds"
-    
+
     # Test query config
     query_config = config_watcher.get_query_config("test_query_id", "spotprice")
     assert query_config.get("alert_threshold") == 0.05
@@ -136,7 +136,7 @@ def test_find_query_config(config_watcher):
     # Should find the config
     config = config_watcher.find_query_config("test_query_id")
     assert config.get("alert_threshold") == 0.05
-    
+
     # Should return empty dict for nonexistent query
     config = config_watcher.find_query_config("nonexistent")
     assert config == {}
