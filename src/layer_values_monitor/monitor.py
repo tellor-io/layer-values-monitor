@@ -28,8 +28,6 @@ from layer_values_monitor.dispute import (
     determine_dispute_fee,
     is_disputable,
 )
-from layer_values_monitor.evm_call import get_evm_call_trusted_value
-from layer_values_monitor.evm_connections import get_web3_connection
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
@@ -728,7 +726,7 @@ async def inspect_evmcall_path(
     metrics: Metrics,
     logger: logging,
 ) -> None:
-    """EVMCall inspection path."""
+    """EVMCall inspection path using telliot trusted lookup."""
     logger.info(f"⚙️ EVMCall inspection - QueryID: {query_id[:16]}...")
 
     # Get query object
@@ -743,8 +741,65 @@ async def inspect_evmcall_path(
         logger.error("Unable to get feed for EVMCall")
         return None
 
-    # Call existing implementation
-    return await inspect_evm_call_reports(reports, feed, disputes_q, query_id, metrics, logger)
+    logger.debug("Fetching trusted value from telliot feed...")
+    result = await fetch_value(feed)
+    if result is None:
+        logger.error("Unable to fetch trusted value from telliot")
+        return None
+    trusted_value_tuple, _ = result
+
+    logger.debug(f"Trusted value fetched: {trusted_value_tuple}")
+
+    # EVMCall returns (bytes_value, timestamp) tuple from telliot
+    # We only need to compare the bytes value, not the timestamp
+    if not isinstance(trusted_value_tuple, tuple) or len(trusted_value_tuple) != 2:
+        logger.error(f"Expected tuple (value, timestamp) from EVMCall feed, got: {type(trusted_value_tuple)}")
+        return None
+
+    trusted_value_bytes = trusted_value_tuple[0]
+
+    # Create fetcher lambda for double-check logic (if needed)
+    async def fetch_trusted_value() -> tuple[Any, Any]:
+        return await fetch_value(feed)
+
+    logger.debug(f"Inspecting {len(reports)} EVMCall report(s)...")
+    for r in reports:
+        try:
+            reported_value_tuple = query.value_type.decode(bytes.fromhex(r.value))
+
+            # EVMCall format: (bytes_value, timestamp)
+            # Extract just the bytes value for comparison
+            if not isinstance(reported_value_tuple, tuple) or len(reported_value_tuple) != 2:
+                logger.error(f"Expected tuple (value, timestamp) from EVMCall report, got: {type(reported_value_tuple)}")
+                continue
+
+            reported_value_bytes = reported_value_tuple[0]
+
+            logger.debug(
+                f"EVMCall Report - reporter: {r.reporter}, "
+                f"reported_value: {reported_value_bytes.hex() if isinstance(reported_value_bytes, bytes) else reported_value_bytes}, "
+                f"reported_timestamp: {reported_value_tuple[1]}, "
+                f"trusted_value: {trusted_value_bytes.hex() if isinstance(trusted_value_bytes, bytes) else trusted_value_bytes}, "
+                f"trusted_timestamp: {trusted_value_tuple[1]}, "
+                f"power: {r.power}"
+            )
+
+            await inspect(
+                r,
+                reported_value_bytes,
+                trusted_value_bytes,
+                disputes_q,
+                metrics,
+                logger,
+                query=query,
+                trusted_value_fetcher=fetch_trusted_value,
+            )
+        except Exception as e:
+            logger.error(f"Failed to decode or inspect EVMCall report: {e}")
+            continue
+
+    logger.debug(f"✅ EVMCall inspection complete for {query_id[:16]}...")
+    return None
 
 
 async def inspect_trbbridge_path(
@@ -1245,66 +1300,6 @@ async def agg_reports_queue_handler(
         agg_reports_q.task_done()
 
 
-async def inspect_evm_call_reports(
-    reports: list[NewReport],
-    feed: DataFeed,
-    disputes_q: asyncio.Queue,
-    query_id: str,
-    metrics: Metrics,
-    logger: logging,
-) -> None:
-    """Inspect reports for evm call query type and check if they are disputable.
-
-    Reason they are different is because we need to specifically fetch values for each report
-    because each value needs to be decoded and is dependant on the block timestamp in the value
-    to fetch the trusted value from the relevant chain.
-
-    reports: list of new_reports for a query id
-    disputes_q: the queue to add disputes to for dispute processing
-    query_id: the hash of the query data used to fetch the value.
-    metrics: the metrics object for the query id
-    logger: the logger object
-    """
-    # Get Web3 connection for the target chain
-    chain_id = feed.query.chainId
-    logger.info(f"EVMCall handler - inspecting {len(reports)} report(s) for chain_id: {chain_id}, query_id: {query_id}")
-
-    w3 = get_web3_connection(chain_id)
-    if w3 is None:
-        logger.error(f"Failed to get Web3 connection for chain_id {chain_id}")
-        return None
-
-    logger.info(f"EVMCall handler - successfully connected to chain_id: {chain_id}")
-
-    for r in reports:
-        # Decode the reported value from hex to get (result_bytes, timestamp) tuple
-        try:
-            logger.info(
-                f"EVMCall report decoded - chain_id: {chain_id}, contract: {feed.query.contractAddress}, value: {r.value}"
-            )
-            reported_value = feed.query.value_type.decode(bytes.fromhex(r.value))
-        except Exception as e:
-            logger.error(f"Failed to decode EVMCall reported value for chain_id {chain_id}: {e}")
-            continue
-
-        trusted_value = await get_evm_call_trusted_value(reported_value, feed, w3, chain_id)
-
-        if trusted_value is None:
-            logger.error(f"unable to fetch trusted value for query id: {query_id}")
-            continue
-
-        # EVMCall format: reporters submit abi.encode(abi.encode(value), timestamp)
-        # reported_value[0] is abi.encode(value) which is already the raw bytes representation
-        # trusted_value from eth_call is also raw bytes
-        # Both are 32-byte representations of the contract return value, compare directly
-        decoded_reported = reported_value[0]
-
-        logger.info(f"Comparing reported: {decoded_reported.hex()} vs trusted: {trusted_value.hex()}")
-
-        await inspect(r, decoded_reported, trusted_value, disputes_q, metrics, logger)
-    return None
-
-
 async def send_unsupported_query_alert(
     query_id: str,
     query_type: str,
@@ -1445,8 +1440,8 @@ async def perform_dispute_verification(
 ) -> dict[str, Any]:
     """Perform verification logic to determine if a dispute should be submitted.
 
-    Handles both double-check logic (for SpotPrice with fetcher) and single-check logic
-    (for EVMCall/TRBBridge without fetcher).
+    Handles both double-check logic (for SpotPrice/EVMCall with fetcher) and single-check logic
+    (for TRBBridge without fetcher).
 
     Returns:
         Dict with keys: should_dispute, dispute_category, second_trusted_value,
@@ -1522,7 +1517,7 @@ async def perform_dispute_verification(
             logger.error(f"❌ Error fetching second trusted value: {e}. Cancelling dispute.")
 
     elif disputable and trusted_value_fetcher is None:
-        # Single-check logic for EVMCall/TRBBridge queries
+        # Single-check logic for TRBBridge queries
         logger.info(f"disputable: true, diff: {diff} (single-check mode)")
 
         # For equality metrics, determine dispute level based on which threshold is set to 1.0
