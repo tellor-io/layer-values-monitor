@@ -196,9 +196,7 @@ async def start() -> None:
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
     logger.info("Message queues initialized")
 
-    # TelliotConfig is used for non-EVMCall query types (SpotPrice, etc.)
-    # The endpoints were already patched at module import time (see top of file)
-    # EVMCall uses direct Web3 connections via get_web3_connection()
+    # TelliotConfig is used for fetching trusted values from telliot-feeds
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
     cfg.main
