@@ -87,6 +87,7 @@ async def query_block_events(
                 return result
 
     # Fallback to curl command (async)
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "curl",
