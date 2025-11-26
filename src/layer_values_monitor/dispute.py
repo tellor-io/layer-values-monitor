@@ -100,10 +100,6 @@ def propose_msg(
     Follows Cosmos SDK 0.53+ unordered transaction pattern:
     https://docs.cosmos.network/v0.53/build/architecture/adr-070-unordered-account
     """
-    # Calculate unique timeout timestamp for unordered tx (nanoseconds)
-    # 30 seconds from now + nanosecond uniqueness
-    int((time.time() + 30) * 1e9) + time.time_ns() % 1000
-
     cmd = [
         binary_path,
         "tx",
