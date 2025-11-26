@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import subprocess
 from typing import Any
 
 import aiohttp
@@ -71,22 +70,27 @@ async def query_block_events(uri: str, height: int, logger: logging.Logger) -> d
     # Fallback to curl command (async)
     try:
         proc = await asyncio.create_subprocess_exec(
-            "curl", "-s", "-X", "POST", 
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps(payload),
+            "curl",
+            "-s",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            json.dumps(payload),
             rpc_url,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
-        
+
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-        
+
         if proc.returncode == 0:
             data = json.loads(stdout.decode())
             return data.get("result")
         else:
             logger.warning(f"curl failed for height {height}: {stderr.decode()}")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"curl timeout for height {height}")
         if proc:
             proc.kill()
