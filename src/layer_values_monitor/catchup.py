@@ -68,16 +68,29 @@ async def query_block_events(uri: str, height: int, logger: logging.Logger) -> d
     except Exception as e:
         logger.warning(f"aiohttp failed for height {height}: {e}, trying curl fallback")
 
-    # Fallback to curl command
+    # Fallback to curl command (async)
     try:
-        curl_cmd = ["curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", json.dumps(payload), rpc_url]
-
-        result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=15)
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
+        proc = await asyncio.create_subprocess_exec(
+            "curl", "-s", "-X", "POST", 
+            "-H", "Content-Type: application/json",
+            "-d", json.dumps(payload),
+            rpc_url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        
+        if proc.returncode == 0:
+            data = json.loads(stdout.decode())
             return data.get("result")
         else:
-            logger.warning(f"curl failed for height {height}: {result.stderr}")
+            logger.warning(f"curl failed for height {height}: {stderr.decode()}")
+    except asyncio.TimeoutError:
+        logger.warning(f"curl timeout for height {height}")
+        if proc:
+            proc.kill()
+            await proc.wait()
     except Exception as e:
         logger.warning(f"curl fallback failed for height {height}: {e}")
 

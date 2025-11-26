@@ -112,13 +112,6 @@ uv run layer-values-monitor
     # Uses global equality defaults
 ```
 
-### Threshold Levels
-- **alert_threshold** - Send Discord alert only
-- **warning_threshold** - Minor severity dispute
-- **minor_threshold** - Medium severity dispute
-- **major_threshold** - High severity dispute
-- **pause_threshold** - Pause Saga contract (requires `--enable-saga-guard`)
-
 ### Metric Types
 - **percentage** - For price feeds (e.g., 0.1 = 10% deviation)
 - **equality** - For exact matches (1.0 = any difference triggers)
