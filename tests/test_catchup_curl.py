@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # Add src to path (go up from tests/ to layer-values-monitor/, then into src/)
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -17,6 +19,7 @@ from layer_values_monitor.catchup import (
 )
 
 
+@pytest.mark.asyncio
 async def test_curl_fallback():
     """Test that curl fallback works when aiohttp fails."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -58,6 +61,7 @@ async def test_curl_fallback():
             return False
 
 
+@pytest.mark.asyncio
 async def test_catchup_with_curl():
     """Test full catchup process with aiohttp failures."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -115,6 +119,7 @@ async def test_catchup_with_curl():
             return True
 
 
+@pytest.mark.asyncio
 async def test_concurrent_queries():
     """Test that async subprocess allows concurrent queries."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -163,6 +168,7 @@ async def test_concurrent_queries():
             return False
 
 
+@pytest.mark.asyncio
 async def test_height_tracker():
     """Test HeightTracker logic."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
