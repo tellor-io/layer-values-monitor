@@ -50,7 +50,7 @@ def should_create_new_file() -> bool:
     try:
         # Read the CSV file and count rows (excluding header)
         df = pd.read_csv(current_file)
-        return len(df) >= _get_max_table_rows()
+        return len(df) >= _get_max_table_rows() - 1
     except Exception as e:
         logging.error(f"Error checking file size: {e}")
         return False
