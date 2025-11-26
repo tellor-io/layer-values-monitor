@@ -311,7 +311,7 @@ async def process_disputes(
             disputes_q.task_done()
             if dispute is None:
                 continue
-            time.sleep(2)
+            await asyncio.sleep(2)
             logger.info(
                 f"sending a dispute msg to layer:\n \
                         Reporter: {dispute.reporter}\n \
