@@ -192,7 +192,12 @@ async def process_missed_blocks(
 
             # process each event in the batch
             for event_data in batch:
-                ws_format = {"result": {"events": event_data["attributes"], "data": {"type": "tendermint/event/NewBlockEvents"}}}
+                ws_format = {
+                    "result": {
+                        "events": event_data["attributes"],
+                        "data": {"type": "tendermint/event/NewBlockEvents"},
+                    }
+                }
                 await raw_data_q.put(ws_format)
 
             # small delay between batches
