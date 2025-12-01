@@ -1,5 +1,8 @@
+import asyncio
 import json
 from unittest import mock
+
+import pytest
 
 from layer_values_monitor.dispute import (
     determine_dispute_category,
@@ -54,15 +57,18 @@ def test_returns_zero_when_reporter_power_is_zero():
     assert determine_dispute_fee("major", 0) == 0
 
 
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_successful_execution(mock_subprocess_run):
+@pytest.mark.asyncio
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_successful_execution(mock_create_subprocess):
     # Mock successful execution
-    mock_process = mock.MagicMock()
+    mock_process = mock.AsyncMock()
     mock_process.returncode = 0
-    mock_process.stdout = json.dumps({"code": 0, "txhash": "ABC123"}).encode()
-    mock_subprocess_run.return_value = mock_process
+    mock_process.communicate = mock.AsyncMock(
+        return_value=(json.dumps({"code": 0, "txhash": "ABC123"}).encode(), b"")
+    )
+    mock_create_subprocess.return_value = mock_process
 
-    result = propose_msg(
+    result = await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -80,32 +86,32 @@ def test_successful_execution(mock_subprocess_run):
     # Assert the result is the txhash
     assert result == "ABC123"
 
-    # Assert subprocess.run was called with the correct arguments
-    mock_subprocess_run.assert_called_once()
-    args, _ = mock_subprocess_run.call_args
-    cmd = args[0]
+    # Assert create_subprocess_exec was called
+    mock_create_subprocess.assert_called_once()
+    args, _ = mock_create_subprocess.call_args
 
-    assert cmd[0] == "layerd"
-    assert "tx" in cmd
-    assert "dispute" in cmd
-    assert "propose-dispute" in cmd
-    assert "reporter_address" in cmd
-    assert "meta_id" in cmd
-    assert "query_id" in cmd
-    assert "warning" in cmd
-    assert "1000000loya" in cmd
-    assert "True" in cmd
+    assert args[0] == "layerd"
+    assert "tx" in args
+    assert "dispute" in args
+    assert "propose-dispute" in args
+    assert "reporter_address" in args
+    assert "meta_id" in args
+    assert "query_id" in args
+    assert "warning" in args
+    assert "1000000loya" in args
+    assert "True" in args
 
 
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_cli_error(mock_subprocess_run):
+@pytest.mark.asyncio
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_cli_error(mock_create_subprocess):
     # Mock execution with non-zero return code
-    mock_process = mock.MagicMock()
+    mock_process = mock.AsyncMock()
     mock_process.returncode = 1
-    mock_process.stderr = b"Error message"
-    mock_subprocess_run.return_value = mock_process
+    mock_process.communicate = mock.AsyncMock(return_value=(b"", b"Error message"))
+    mock_create_subprocess.return_value = mock_process
 
-    result = propose_msg(
+    result = await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -123,15 +129,18 @@ def test_cli_error(mock_subprocess_run):
     assert result is None
 
 
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_transaction_code_error(mock_subprocess_run):
+@pytest.mark.asyncio
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_transaction_code_error(mock_create_subprocess):
     # Mock execution with zero return code but non-zero tx code
-    mock_process = mock.MagicMock()
+    mock_process = mock.AsyncMock()
     mock_process.returncode = 0
-    mock_process.stdout = json.dumps({"code": 1, "raw_log": "Error in transaction"}).encode()
-    mock_subprocess_run.return_value = mock_process
+    mock_process.communicate = mock.AsyncMock(
+        return_value=(json.dumps({"code": 1, "raw_log": "Error in transaction"}).encode(), b"")
+    )
+    mock_create_subprocess.return_value = mock_process
 
-    result = propose_msg(
+    result = await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -149,12 +158,13 @@ def test_transaction_code_error(mock_subprocess_run):
     assert result is None
 
 
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_exception_handling(mock_subprocess_run):
+@pytest.mark.asyncio
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_exception_handling(mock_create_subprocess):
     # Mock execution with exception
-    mock_subprocess_run.side_effect = Exception("Test exception")
+    mock_create_subprocess.side_effect = Exception("Test exception")
 
-    result = propose_msg(
+    result = await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -172,16 +182,19 @@ def test_exception_handling(mock_subprocess_run):
     assert result is None
 
 
+@pytest.mark.asyncio
 @mock.patch("layer_values_monitor.dispute.logger")
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_logs_success(mock_subprocess_run, mock_logger):
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_logs_success(mock_create_subprocess, mock_logger):
     # Test that successful execution is logged properly
-    mock_process = mock.MagicMock()
+    mock_process = mock.AsyncMock()
     mock_process.returncode = 0
-    mock_process.stdout = json.dumps({"code": 0, "txhash": "ABC123"}).encode()
-    mock_subprocess_run.return_value = mock_process
+    mock_process.communicate = mock.AsyncMock(
+        return_value=(json.dumps({"code": 0, "txhash": "ABC123"}).encode(), b"")
+    )
+    mock_create_subprocess.return_value = mock_process
 
-    propose_msg(
+    await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -199,16 +212,17 @@ def test_logs_success(mock_subprocess_run, mock_logger):
     mock_logger.info.assert_called_once_with("dispute msg executed successfully: ABC123")
 
 
+@pytest.mark.asyncio
 @mock.patch("layer_values_monitor.dispute.logger")
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_logs_cli_error(mock_subprocess_run, mock_logger):
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_logs_cli_error(mock_create_subprocess, mock_logger):
     # Test that CLI errors are logged properly
-    mock_process = mock.MagicMock()
+    mock_process = mock.AsyncMock()
     mock_process.returncode = 1
-    mock_process.stderr = b"Error message"
-    mock_subprocess_run.return_value = mock_process
+    mock_process.communicate = mock.AsyncMock(return_value=(b"", b"Error message"))
+    mock_create_subprocess.return_value = mock_process
 
-    propose_msg(
+    await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -228,16 +242,19 @@ def test_logs_cli_error(mock_subprocess_run, mock_logger):
     assert "Error message" in str(mock_logger.error.call_args)
 
 
+@pytest.mark.asyncio
 @mock.patch("layer_values_monitor.dispute.logger")
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_logs_transaction_error(mock_subprocess_run, mock_logger):
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_logs_transaction_error(mock_create_subprocess, mock_logger):
     # Test that transaction errors are logged properly
-    mock_process = mock.MagicMock()
+    mock_process = mock.AsyncMock()
     mock_process.returncode = 0
-    mock_process.stdout = json.dumps({"code": 1, "raw_log": "Error in transaction"}).encode()
-    mock_subprocess_run.return_value = mock_process
+    mock_process.communicate = mock.AsyncMock(
+        return_value=(json.dumps({"code": 1, "raw_log": "Error in transaction"}).encode(), b"")
+    )
+    mock_create_subprocess.return_value = mock_process
 
-    propose_msg(
+    await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",
@@ -255,13 +272,14 @@ def test_logs_transaction_error(mock_subprocess_run, mock_logger):
     mock_logger.error.assert_called_once_with("failed to execute dispute msg: Error in transaction")
 
 
+@pytest.mark.asyncio
 @mock.patch("layer_values_monitor.dispute.logger")
-@mock.patch("layer_values_monitor.dispute.subprocess.run")
-def test_logs_exception(mock_subprocess_run, mock_logger):
+@mock.patch("layer_values_monitor.dispute.asyncio.create_subprocess_exec")
+async def test_logs_exception(mock_create_subprocess, mock_logger):
     # Test that exceptions are logged properly
-    mock_subprocess_run.side_effect = Exception("Test exception")
+    mock_create_subprocess.side_effect = Exception("Test exception")
 
-    propose_msg(
+    await propose_msg(
         binary_path="layerd",
         reporter="reporter_address",
         query_id="query_id",

@@ -150,9 +150,6 @@ async def process_missed_blocks(
 
                         attributes["tx.height"] = [str(height)]
 
-                        if "tx.hash" not in attributes:
-                            pass
-
                         all_new_reports.append(
                             {"height": height, "tx_index": tx_index, "attributes": attributes, "event": event}
                         )

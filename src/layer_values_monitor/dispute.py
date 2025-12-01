@@ -81,7 +81,7 @@ def validate_keyring_config(binary_path: str, key_name: str, kb: str, kdir: str)
         return False
 
 
-def propose_msg(
+async def propose_msg(
     binary_path: str,
     reporter: str,
     query_id: str,
@@ -136,13 +136,20 @@ def propose_msg(
     ]
 
     logger.debug(f"Executing dispute transaction command: {' '.join(cmd)}")
-    time.sleep(3)
+    await asyncio.sleep(3)
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
-        if result.returncode != 0:
-            logger.error(f"Error calling dispute transaction in cli: {result.stderr}")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        
+        if proc.returncode != 0:
+            logger.error(f"Error calling dispute transaction in cli: {stderr.decode()}")
             return None
-        signed_tx = json.loads(result.stdout)
+        signed_tx = json.loads(stdout.decode())
         code = signed_tx["code"]
         if code != 0:
             print(signed_tx)
@@ -150,7 +157,7 @@ def propose_msg(
             return None
         logger.info(f"dispute msg executed successfully: {signed_tx['txhash']}")
         return signed_tx["txhash"]
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
         logger.error(f"Dispute transaction timed out after 30 seconds. Command: {' '.join(cmd)}")
         return None
     except Exception as e:
@@ -318,7 +325,7 @@ async def process_disputes(
                         Query ID: {dispute.query_id} \
                         "
             )
-            result = propose_msg(
+            result = await propose_msg(
                 binary_path=binary_path,
                 key_name=key_name,
                 chain_id=chain_id,
@@ -359,23 +366,3 @@ async def process_disputes(
         except Exception as e:
             logger.error(f"❌ Error processing dispute: {e}", exc_info=True)
             # Continue processing other disputes even if one fails
-
-
-if __name__ == "__main__":
-    import shutil
-
-    tx_hash = propose_msg(
-        binary_path=shutil.which("layerd"),
-        reporter="tellor1atxszkp3ar3gshqklhafd6rtumndz73zwfe0dx",
-        meta_id="1",
-        query_id="0xasdk",
-        dispute_category="warning",
-        fee="1000000loya",
-        key_name="alice",
-        chain_id="layer-1",
-        rpc="http://localhost:26657",
-        kb="test",
-        kdir="~/.layer",
-        payfrom_bond="True",
-    )
-    print(tx_hash)
