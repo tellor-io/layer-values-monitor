@@ -1,14 +1,13 @@
-import asyncio
 import json
 from unittest import mock
-
-import pytest
 
 from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
     propose_msg,
 )
+
+import pytest
 
 
 def test_returns_correct_category_based_on_thresholds():
@@ -63,9 +62,7 @@ async def test_successful_execution(mock_create_subprocess):
     # Mock successful execution
     mock_process = mock.AsyncMock()
     mock_process.returncode = 0
-    mock_process.communicate = mock.AsyncMock(
-        return_value=(json.dumps({"code": 0, "txhash": "ABC123"}).encode(), b"")
-    )
+    mock_process.communicate = mock.AsyncMock(return_value=(json.dumps({"code": 0, "txhash": "ABC123"}).encode(), b""))
     mock_create_subprocess.return_value = mock_process
 
     result = await propose_msg(
@@ -189,9 +186,7 @@ async def test_logs_success(mock_create_subprocess, mock_logger):
     # Test that successful execution is logged properly
     mock_process = mock.AsyncMock()
     mock_process.returncode = 0
-    mock_process.communicate = mock.AsyncMock(
-        return_value=(json.dumps({"code": 0, "txhash": "ABC123"}).encode(), b"")
-    )
+    mock_process.communicate = mock.AsyncMock(return_value=(json.dumps({"code": 0, "txhash": "ABC123"}).encode(), b""))
     mock_create_subprocess.return_value = mock_process
 
     await propose_msg(

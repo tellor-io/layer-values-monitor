@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import subprocess
-import time
 from typing import Any
 
 from layer_values_monitor.custom_types import DisputeCategory, Msg
@@ -143,9 +142,9 @@ async def propose_msg(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        
+
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        
+
         if proc.returncode != 0:
             logger.error(f"Error calling dispute transaction in cli: {stderr.decode()}")
             return None
@@ -157,7 +156,7 @@ async def propose_msg(
             return None
         logger.info(f"dispute msg executed successfully: {signed_tx['txhash']}")
         return signed_tx["txhash"]
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(f"Dispute transaction timed out after 30 seconds. Command: {' '.join(cmd)}")
         return None
     except Exception as e:

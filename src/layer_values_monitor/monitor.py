@@ -550,7 +550,7 @@ async def inspect_reports(
             asset_pair,
             reports[0],
             logger,
-            description=f"⚠️ **QUERY TYPE NOT SUPPORTED ({query_type.upper()})**",
+            description=f"⚠️ **QUERY TYPE NOT IN LVM CONFIGS ({query_type.upper()})**",
             try_decode=False,
         )
         return None
