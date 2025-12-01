@@ -9,12 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
-# files
+# logs
 *.log
-
-.env
-
-config.toml
-
 *.csv
-*.log
+
+# configs 
+.env
+config.toml
