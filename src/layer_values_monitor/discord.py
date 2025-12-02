@@ -1,15 +1,23 @@
 """Send messages using Discord."""
 
+import logging
 import os
 from typing import Any
 
-import click
+from layer_values_monitor.logger import console_logger
+
 from discordwebhook import Discord
 
 
-def generic_alert(msg: str) -> None:
-    """Send a Discord message via webhook."""
-    send_discord_msg(msg)
+def generic_alert(msg: str, description: str = None) -> None:
+    """Send a Discord message via webhook.
+
+    Args:
+        msg: The message content to send
+        description: Optional description/alert type (e.g., "Found Something", "DISPUTE SKIPPED")
+
+    """
+    send_discord_msg(msg, description=description)
     return
 
 
@@ -32,22 +40,51 @@ def get_alert_bot_3() -> Discord:
     return Discord(url=os.getenv("DISCORD_WEBHOOK_URL_3"))
 
 
-def send_discord_msg(msg: str) -> None:
-    """Send Discord alert."""
-    MONITOR_NAME = os.getenv("MONITOR_NAME")
-    message = f"❗{MONITOR_NAME} Found Something❗\n"
-    get_alert_bot_1().post(content=message + msg)
+def send_discord_msg(msg: str, description: str = None) -> None:
+    """Send Discord alert.
+
+    Args:
+        msg: The message content to send
+        description: Optional description/alert type line. If None, uses "❗Found Something❗"
+
+    """
+    # Get logger for file logging (not console)
+    file_logger = logging.getLogger(__name__)
+
+    MONITOR_NAME = os.getenv("MONITOR_NAME", "LVM")
+
+    # First line: Monitor name only (bold)
+    first_line = f"LVM: **{MONITOR_NAME}**\n"
+
+    # Second line: Description/alert type, then message content
+    if description:
+        second_line = f"{description}\n{msg}"
+        display_description = description
+    else:
+        # Default description for regular alerts
+        second_line = f"❗**FOUND SOMETHING**❗\n{msg}"
+        display_description = "❗**FOUND SOMETHING**❗"
+
+    # Add separator line at the end of message for better readability
+    separator = "\n" + "─" * 50 + "\n"
+    full_message = first_line + second_line + separator
+
+    get_alert_bot_1().post(content=full_message)
     try:
-        get_alert_bot_2().post(content=message + msg)
+        get_alert_bot_2().post(content=full_message)
     except Exception as e:
-        click.echo(f"alert bot 2 not used? {e}")
+        # Log to file only, not terminal
+        file_logger.debug(f"Alert bot 2 not used: {e}")
         pass
     try:
-        get_alert_bot_3().post(content=message + msg)
+        get_alert_bot_3().post(content=full_message)
     except Exception as e:
-        click.echo(f"alert bot 3 not used? {e}")
+        # Log to file only, not terminal
+        file_logger.debug(f"Alert bot 3 not used: {e}")
         pass
-    click.echo("Alerts sent!")
+
+    # Clean console output - just show alert sent + description
+    console_logger.info(f"Discord alert sent! {display_description}")
     return
 
 
@@ -60,12 +97,45 @@ def format_difference(diff: float, metric: str) -> str:
     return f"{diff}"
 
 
-def format_values(reported: Any, trusted: Any) -> str:
-    """Format reported and trusted values for display."""
+def format_values(reported: Any, trusted: Any, query_type: str = None) -> str:
+    """Format reported and trusted values for display.
+
+    Args:
+        reported: The reported value
+        trusted: The trusted value
+        query_type: Optional query type (e.g., "EVMCall") for special formatting
+
+    """
     if isinstance(reported, dict):
-        reported_display = "\n".join([f"  - {k}: {v}" for k, v in reported.items()])
-        trusted_display = "\n".join([f"  - {k}: {v}" for k, v in trusted.items()])
+        reported_display = "\n".join([f"  {k}: {v}" for k, v in reported.items()])
+        trusted_display = "\n".join([f"  {k}: {v}" for k, v in trusted.items()])
         return f"**Reported:**\n{reported_display}\n**Trusted:**\n{trusted_display}"
+
+    # Format EVMCall bytes values as hex strings for better readability
+    if query_type == "EVMCall" and isinstance(reported, bytes) and isinstance(trusted, bytes):
+        reported_hex = "0x" + reported.hex()
+        trusted_hex = "0x" + trusted.hex()
+        # Also try to decode as uint256 if it's 32 bytes (common case)
+        reported_decoded = ""
+        trusted_decoded = ""
+        if len(reported) == 32:
+            try:
+                from eth_abi import decode
+
+                (reported_int,) = decode(["uint256"], reported)
+                reported_decoded = f" ({reported_int})"
+            except Exception:
+                pass
+        if len(trusted) == 32:
+            try:
+                from eth_abi import decode
+
+                (trusted_int,) = decode(["uint256"], trusted)
+                trusted_decoded = f" ({trusted_int})"
+            except Exception:
+                pass
+        return f"**Reported:** {reported_hex}{reported_decoded}\n**Trusted:** {trusted_hex}{trusted_decoded}"
+
     return f"**Reported:** {reported}\n**Trusted:** {trusted}"
 
 
@@ -76,13 +146,42 @@ def build_alert_message(
     reporter: str,
     power: str,
     tx_hash: str,
+    query_type: str = None,
+    disputer_info: str = None,
+    level: str = None,
 ) -> str:
     """Build the formatted Discord alert message."""
-    return (
-        f"**Asset:** {query_info}\n"
-        f"{value_display}\n"
-        f"**Difference:** {diff_str}\n"
-        f"**Reporter:** {reporter}\n"
-        f"**Power:** {power}\n"
-        f"**Tx Hash:** {tx_hash}"
+    # Determine if this is a spot price query
+    is_spot_price = query_type == "SpotPrice" or "/" in query_info
+
+    # Build the message components
+    components = []
+
+    # Add Asset field only for spot price queries
+    if is_spot_price:
+        components.append(f"**Asset:** {query_info}")
+
+    # Add QueryType field
+    if query_type:
+        components.append(f"**QueryType:** {query_type}")
+
+    # Add Level field if available
+    if level:
+        components.append(f"**Level:** {level}")
+
+    # Add the rest of the fields
+    components.extend(
+        [
+            value_display,
+            f"**Difference:** {diff_str}",
+            f"**Reporter:** {reporter}",
+            f"**Power:** {power}",
+            f"**Tx Hash:** {tx_hash}",
+        ]
     )
+
+    # Add Disputer field if available
+    if disputer_info:
+        components.append(f"**Disputer:** {disputer_info}")
+
+    return "\n".join(components)

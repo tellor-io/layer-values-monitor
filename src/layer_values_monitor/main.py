@@ -12,7 +12,8 @@ from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
 from layer_values_monitor.dispute import process_disputes
-from layer_values_monitor.logger import logger
+from layer_values_monitor.evm_connections import validate_rpc_connection
+from layer_values_monitor.logger import console_logger, logger
 from layer_values_monitor.monitor import (
     agg_reports_queue_handler,
     listen_to_websocket_events,
@@ -20,53 +21,13 @@ from layer_values_monitor.monitor import (
     raw_data_queue_handler,
 )
 from layer_values_monitor.saga_contract import create_saga_contract_manager
-from layer_values_monitor.threshold_config import ThresholdConfig
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
-from web3 import Web3
 
 for logger_name in logging.root.manager.loggerDict:
     if logger_name.startswith("telliot_feeds"):
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
-
-
-def validate_rpc_url(rpc_url: str, network_name: str) -> tuple[bool, str]:
-    """Validate RPC URL in .env.
-
-    Args:
-        rpc_url: The RPC URL to validate
-        network_name: Human-readable network name for error messages
-
-    Returns:
-        Tuple of (is_valid, error_message)
-
-    """
-    try:
-        w3 = Web3(Web3.HTTPProvider(rpc_url))
-        # Test basic connectivity by getting block number
-        block_number = w3.eth.block_number
-
-        # Get chain ID to determine network
-        chain_id = w3.eth.chain_id
-
-        # Validate chain ID
-        if network_name.lower() == "saga":
-            # Saga chainlets typically use custom chain IDs
-            # Just verify we can connect and get a valid chain ID
-            if chain_id <= 0:
-                return False, f"Invalid chain ID {chain_id} for {network_name} network"
-        elif network_name.lower() == "ethereum":
-            # Ethereum mainnet = 1, Sepolia testnet = 11155111
-            if chain_id not in [1, 11155111]:
-                return False, f"Unsupported Ethereum chain ID {chain_id}. Supported: 1 (mainnet), 11155111 (sepolia)"
-
-        logger.info(f"✅ {network_name} RPC validation successful - Chain ID: {chain_id}, Block: {block_number}")
-        return True, ""
-
-    except Exception as e:
-        error_msg = f"Failed to connect to {network_name} RPC at {rpc_url}: {e}"
-        return False, error_msg
 
 
 def async_run(f: Any) -> Any:
@@ -85,15 +46,19 @@ def async_run(f: Any) -> Any:
 @async_run
 async def start() -> None:
     """Start layer values monitor."""
+    console_logger.info("🚀 Layer Values Monitor - Initializing...")
+
     loaded = load_dotenv(override=True)
     if not loaded:
         raise ValueError("Failed to load environment variables")
+
     uri = os.getenv("URI")
     if uri is None:
         raise ValueError("URI not found in environment variables")
     chain_id = os.getenv("CHAIN_ID")
     if chain_id is None:
         raise ValueError("CHAIN_ID not found in environment variables")
+    console_logger.info(f"✅ Chain ID: {chain_id}")
     parser = argparse.ArgumentParser(description="Start values monitor")
     parser.add_argument(
         "binary_path",
@@ -124,47 +89,7 @@ async def start() -> None:
         help="Keyring directory (can be set via LAYER_KEYRING_DIR env var)",
     )
     parser.add_argument(
-        "--payfrom-bond",
-        action="store_true",
-        default=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"),
-        help="Pay dispute fee from bond (can be set via PAYFROM_BOND env var)",
-    )
-    parser.add_argument("--use-custom-config", action="store_true", help="Use custom config.toml")
-    parser.add_argument(
         "--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing"
-    )
-    # percentage
-    parser.add_argument("--global-percentage-alert-threshold", type=float, help="Global percent threshold")
-    parser.add_argument(
-        "--global-percentage-warning-threshold", default=0.0, type=float, help="Global percentage for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-percentage-minor-threshold", default=0.0, type=float, help="Global percentage for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-percentage-major-threshold", default=0.0, type=float, help="Global percentage for a major dispute cat"
-    )
-    # range
-    parser.add_argument("--global-range-alert-threshold", default=0.0, type=float, help="Global range threshold")
-    parser.add_argument(
-        "--global-range-warning-threshold", default=0.0, type=float, help="Global range for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-minor-threshold", default=0.0, type=float, help="Global range for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-range-major-threshold", default=0.0, type=float, help="Global range for a major dispute cat"
-    )
-    # equality
-    parser.add_argument("--global-equality-alert-threshold", default=1.0, type=float, help="Global equality threshold")
-    parser.add_argument(
-        "--global-equality-warning-threshold", default=1.0, type=float, help="Global equality for a warning dispute cat"
-    )
-    parser.add_argument(
-        "--global-equality-minor-threshold", default=0.0, type=float, help="Global equality for a minor dispute cat"
-    )
-    parser.add_argument(
-        "--global-equality-major-threshold", default=0.0, type=float, help="Global equality for a major dispute cat"
     )
     args = parser.parse_args()
 
@@ -178,18 +103,37 @@ async def start() -> None:
     if not args.keyring_dir:
         raise ValueError("keyring_dir is required (set LAYER_KEYRING_DIR env var or provide as argument)")
 
-    # Validate Ethereum RPC URL
-    ethereum_rpc_url = os.getenv("ETHEREUM_RPC_URL")
-    if ethereum_rpc_url:
-        logger.info("Validating Ethereum RPC connection...")
-        is_valid, error_msg = validate_rpc_url(ethereum_rpc_url, "Ethereum")
-        if not is_valid:
-            raise ValueError(f"Ethereum RPC validation failed: {error_msg}")
+    # Validate binary path exists and is executable
+    binary_path = Path(args.binary_path).expanduser().resolve()
+    if not binary_path.exists():
+        raise ValueError(f"Layer binary not found at: {binary_path}")
+    if not os.access(binary_path, os.X_OK):
+        raise ValueError(f"Layer binary not executable: {binary_path}")
+    console_logger.info(f"✅ Layer binary executable: {binary_path}")
+
+    # Validate keyring directory exists
+    keyring_dir = Path(args.keyring_dir).expanduser().resolve()
+    if not keyring_dir.exists():
+        raise ValueError(f"Keyring directory not found: {keyring_dir}")
+    console_logger.info(f"✅ Keyring dir exists: {keyring_dir}")
+
+    # Test RPC connectivity
+    import aiohttp
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://{uri}/health", timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status == 200:
+                    console_logger.info(f"✅ RPC endpoint healthy: http://{uri}")
+    except Exception as e:
+        console_logger.warning(f"⚠️ RPC check failed: {e}")
 
     # Validate Saga environment variables if Saga guard is enabled
     power_thresholds = None
     saga_contract_manager = None
     if args.enable_saga_guard:
+        console_logger.info("🛡️ Saga Guard mode enabled")
+
         # Set aggregate report power thresholds
         immediate_threshold = float(os.getenv("SAGA_IMMEDIATE_PAUSE_THRESHOLD", "0.66666666666"))
         delayed_threshold = float(os.getenv("SAGA_DELAYED_PAUSE_THRESHOLD", "0.3333333333"))
@@ -198,51 +142,70 @@ async def start() -> None:
             immediate_pause_threshold=immediate_threshold, delayed_pause_threshold=delayed_threshold
         )
 
-        logger.info(
-            f"💡 Power thresholds configured: immediate={immediate_threshold * 100}%, "
-            f"delayed={delayed_threshold * 100}%, delay=12h (fixed)"
-        )
-
-        # Validate Saga RPC URL and private key
-        saga_rpc_url = os.getenv("SAGA_EVM_RPC_URL")
+        # Validate Saga RPC URLs and private key
+        saga_rpc_urls = os.getenv("SAGA_RPC_URLS")
         saga_private_key = os.getenv("SAGA_PRIVATE_KEY")
 
-        if not saga_rpc_url:
-            raise ValueError("SAGA_EVM_RPC_URL environment variable is required when using --enable-saga-guard")
+        if not saga_rpc_urls:
+            raise ValueError("SAGA_RPC_URLS environment variable is required when using --enable-saga-guard")
         if not saga_private_key:
             raise ValueError("SAGA_PRIVATE_KEY environment variable is required when using --enable-saga-guard")
 
-        # Validate Saga RPC URL connectivity
-        logger.info("💡 Validating Saga EVM RPC connection...")
-        is_valid, error_msg = validate_rpc_url(saga_rpc_url, "Saga")
+        # Validate Saga RPC URL connectivity (test primary URL)
+        primary_saga_url = saga_rpc_urls.split(",")[0].strip()
+        is_valid, error_msg, saga_chain_id = validate_rpc_connection(primary_saga_url, "Saga", logger)
         if not is_valid:
-            raise ValueError(f"Saga RPC validation failed: {error_msg}")
+            console_logger.warning(f"⚠️ Saga RPC failed: {error_msg}")
+        else:
+            console_logger.info(f"✅ Saga RPC connected: chain_id={saga_chain_id}")
 
         saga_contract_manager = create_saga_contract_manager(logger)
-        if saga_contract_manager:
-            logger.info("💡 Saga contract manager initialized successfully")
-
-    threshold_config = ThresholdConfig.from_args(args)
+        if not saga_contract_manager:
+            console_logger.warning("⚠️ Saga contract manager failed to initialize")
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
+    logger.info(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
     config_watcher = ConfigWatcher(config_path)
-    logger.info("💡 Config watcher initialized")
+    logger.info("CONFIG DEBUG: Config watcher initialized")
+
+    # Log config summary (debug only)
+    logger.info("CONFIG DEBUG: Config summary:")
+    logger.info(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
+    logger.info(f"CONFIG DEBUG: - Query types: {list(config_watcher.query_types.keys())}")
+    logger.info(f"CONFIG DEBUG: - Query configs: {list(config_watcher.query_configs.keys())}")
+
+    # Test config methods (debug only)
+    logger.info("CONFIG DEBUG: Testing config methods...")
+    test_query_types = ["SpotPrice", "TrbBridge", "EvmCall", "UnknownType"]
+    for query_type in test_query_types:
+        is_supported = config_watcher.is_supported_query_type(query_type)
+        logger.info(f"CONFIG DEBUG: - is_supported_query_type('{query_type}'): {is_supported}")
+        if is_supported:
+            query_type_info = config_watcher.get_query_type_info(query_type)
+            logger.info(f"CONFIG DEBUG:   - get_query_type_info('{query_type}'): {query_type_info}")
+
+    # Terminal summary of config
+    supported_types = list(config_watcher.query_types.keys())
+    console_logger.info(f"✅ Monitoring {len(supported_types)} query types: {', '.join(supported_types)}")
 
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events
     agg_reports_queue = asyncio.Queue(maxsize=500)  # Aggregate reports for Saga Guard
     new_reports_queue = asyncio.Queue(maxsize=200)  # Batched new reports
     disputes_queue = asyncio.Queue(maxsize=100)  # Dispute submissions
-    logger.info("💡 Message queues initialized")
+    logger.info("Message queues initialized")
+
+    # TelliotConfig is used for fetching trusted values from telliot-feeds
     cfg = TelliotConfig()
     cfg.main.chain_id = 1
+    console_logger.info("✅ TelliotConfig initialized")
 
     # Height tracker for missed block detection
     max_catchup_blocks = int(os.getenv("MAX_CATCHUP_BLOCKS", "15"))
     height_tracker = HeightTracker(max_catchup_blocks=max_catchup_blocks)
 
-    logger.info(f"💡 Catch-up configuration: max {max_catchup_blocks} blocks to prevent stale price comparisons")
+    console_logger.info(f"✅ Catch-up: max {max_catchup_blocks} blocks")
 
     # Initialize row counter for CSV file management
     from layer_values_monitor.utils import initialize_row_counter
@@ -258,6 +221,8 @@ async def start() -> None:
         if args.enable_saga_guard:
             queries.append("aggregate_report.aggregate_power > 0")
 
+        console_logger.info(f"📡 WebSocket subscriptions: {len(queries)} ({', '.join(queries)})")
+
         # Build list of tasks to run concurrently
         tasks = [
             listen_to_websocket_events(uri, queries, raw_data_queue, logger, height_tracker),
@@ -268,7 +233,7 @@ async def start() -> None:
                 logger,
                 height_tracker,
             ),
-            new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger, threshold_config),
+            new_reports_queue_handler(new_reports_queue, disputes_queue, config_watcher, logger),
             process_disputes(
                 disputes_q=disputes_queue,
                 binary_path=args.binary_path,
@@ -277,7 +242,7 @@ async def start() -> None:
                 kdir=args.keyring_dir,
                 rpc=f"http://{uri}",
                 chain_id=chain_id,
-                payfrom_bond=args.payfrom_bond,
+                payfrom_bond=os.getenv("PAYFROM_BOND", "").lower() in ("true", "1", "yes"),
                 logger=logger,
             ),
             watch_config(config_watcher),
@@ -287,11 +252,10 @@ async def start() -> None:
         if args.enable_saga_guard:
             tasks.append(
                 agg_reports_queue_handler(
-                    agg_reports_queue, config_watcher, logger, threshold_config, saga_contract_manager, uri, power_thresholds
+                    agg_reports_queue, config_watcher, logger, saga_contract_manager, uri, power_thresholds
                 )
             )
 
-        logger.info("💡 Starting Layer Values Monitor...")
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         print("shutting down running tasks")

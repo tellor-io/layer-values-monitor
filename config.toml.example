@@ -1,0 +1,77 @@
+# =============================================================================
+# LAYER VALUES MONITOR CONFIGURATION EXAMPLE
+# =============================================================================
+# Copy this file to config.toml and customize with your actual values
+
+# Global default thresholds for all queries
+# These serve as fallback values when no specific config exists
+[global_defaults]
+
+    [global_defaults.percentage]
+    alert_threshold = 0.1       # Alert if deviation > 10%
+    warning_threshold = 0.0     # No warning disputes unless a specific query config says otherwise
+    minor_threshold = 0.0       # No minor disputes 
+    major_threshold = 0.0       # No major disputes
+    pause_threshold = 0.2       # Pause if deviation > 20% (for saga guardians only)
+
+    [global_defaults.equality]
+    alert_threshold = 1.0       # Alert if values don't match
+    warning_threshold = 0.0     #
+    minor_threshold = 0.0       #
+    major_threshold = 0.0       # 
+    pause_threshold = 0.0       # 
+
+    [global_defaults.range]
+    alert_threshold = 100.0     # Alert if difference > 100
+    warning_threshold = 0.0     #
+    minor_threshold = 0.0       #
+    major_threshold = 0.0       #
+    pause_threshold = 0.0       #
+
+# =============================================================================
+# QUERY TYPE DEFINITIONS
+# =============================================================================
+
+[query_types]
+
+    spotprice = { metric = "percentage", description = "Price feeds", handler = "telliot_feeds" }
+    trbbridge = { metric = "equality", description = "TRB bridge reports", handler = "trb_bridge" }
+    evmcall = { metric = "equality", description = "EVM call reports", handler = "evm_call" }
+
+# =============================================================================
+# QUERY CONFIGURATIONS
+# =============================================================================
+# Fields populated below will override global defaults
+# Query IDs are 32-byte hex strings (64 characters) derived from the query data
+
+[queries.spotprice]
+
+    # Example: EX/USD 
+    [queries.spotprice.your_query_id_hash_here_64_hex_characters_total_fill_remaining]
+    alert_threshold = 0.10                   # 10% alert threshold
+    minor_threshold = 0.20                   # 20% minor dispute threshold
+    datafeed_ca = "0x0000000000000000000000000000000000000000"  # Datafeed contract address
+
+    # Example: BTC/USD 
+    [queries.spotprice.another_query_id_hash_64_hex_chars_example_fill_rest_xxxxxxx]
+    alert_threshold = 0.05                   # 5% alert threshold 
+    datafeed_ca = "0x0000000000000000000000000000000000000000"  # Datafeed contract address
+
+[queries.trbbridge]
+
+    [queries.trbbridge.defaults]
+    # Uses equality defaults from global_defaults
+    # Configure specific TRB bridge query overrides here if needed
+
+[queries.evmcall]
+
+    [queries.evmcall.defaults]
+    # Uses equality defaults from global_defaults
+    # Configure specific EVM call query overrides here if needed
+
+# =============================================================================
+# NOTES
+# =============================================================================
+# - datafeed_ca: only for saga contract guardians
+# - Thresholds are decimal values (0.1 = 10%, 0.15 = 15%, etc.)
+# - Setting threshold to 0.0 disables that threshold level

@@ -13,13 +13,21 @@ def test_init(config_file, config_watcher):
     assert config_watcher.last_modified_time > 0
 
 
-def test_get_config(config_watcher):
-    """Test that config is correctly loaded and accessible."""
-    config = config_watcher.get_config()
-    assert "feed" in config
-    assert config["feed"]["test"] == "initial_value"
-    assert "settings" in config
-    assert config["settings"]["interval"] == 5
+def test_config_structure(config_watcher):
+    """Test that config is correctly loaded with new structure."""
+    assert "percentage" in config_watcher.global_defaults
+    assert "spotprice" in config_watcher.query_types
+    assert "spotprice" in config_watcher.query_configs
+
+    # Test query type info
+    query_type_info = config_watcher.get_query_type_info("spotprice")
+    assert query_type_info is not None
+    assert query_type_info["metric"] == "percentage"
+    assert query_type_info["handler"] == "telliot_feeds"
+
+    # Test query config
+    query_config = config_watcher.get_query_config("test_query_id", "spotprice")
+    assert query_config.get("alert_threshold") == 0.05
 
 
 def test_reload_config_when_changed(config_file, config_watcher):
@@ -33,12 +41,15 @@ def test_reload_config_when_changed(config_file, config_watcher):
     # Modify config file
     with open(config_file, "w") as f:
         f.write("""
-            [Feed]
-            test = "updated_value"
-            new_key = "new_value"
+            [global_defaults.percentage]
+            alert_threshold = 0.2
+            warning_threshold = 0.3
             
-            [Settings]
-            interval = 10
+            [query_types]
+            spotprice = { metric = "percentage", handler = "telliot_feeds" }
+            
+            [queries.spotprice.test_query_id]
+            alert_threshold = 0.15
         """)
 
     # Reload config
@@ -49,10 +60,9 @@ def test_reload_config_when_changed(config_file, config_watcher):
     assert config_watcher.last_modified_time > initial_timestamp
 
     # Check that config was updated
-    config = config_watcher.get_config()
-    assert config["feed"]["test"] == "updated_value"
-    assert config["feed"]["new_key"] == "new_value"
-    assert config["settings"]["interval"] == 10
+    assert config_watcher.global_defaults["percentage"]["alert_threshold"] == 0.2
+    query_config = config_watcher.get_query_config("test_query_id", "spotprice")
+    assert query_config["alert_threshold"] == 0.15
 
 
 def test_reload_config_when_unchanged(config_watcher):
@@ -81,16 +91,20 @@ async def test_watch_config(config_file, config_watcher):
 
     # Record the current state
     initial_timestamp = config_watcher.last_modified_time
-    initial_config = config_watcher.get_config()
+    initial_threshold = config_watcher.global_defaults["percentage"]["alert_threshold"]
 
     # Modify config file
     with open(config_file, "w") as f:
         f.write("""
-            [Feed]
-            test = "auto_updated"
+            [global_defaults.percentage]
+            alert_threshold = 0.99
+            warning_threshold = 0.25
             
-            [Settings]
-            interval = 15
+            [query_types]
+            spotprice = { metric = "percentage", handler = "telliot_feeds" }
+            
+            [queries.spotprice.test_query_id]
+            alert_threshold = 0.05
         """)
 
     # Wait for watch_config to detect the change
@@ -106,6 +120,46 @@ async def test_watch_config(config_file, config_watcher):
 
     # Verify that config was automatically updated
     assert config_watcher.last_modified_time > initial_timestamp
-    assert config_watcher.get_config() != initial_config
-    assert config_watcher.get_config()["feed"]["test"] == "auto_updated"
-    assert config_watcher.get_config()["settings"]["interval"] == 15
+    assert config_watcher.global_defaults["percentage"]["alert_threshold"] != initial_threshold
+    assert config_watcher.global_defaults["percentage"]["alert_threshold"] == 0.99
+
+
+def test_has_query_config(config_watcher):
+    """Test has_query_config method."""
+    assert config_watcher.has_query_config("test_query_id", "spotprice") is True
+    assert config_watcher.has_query_config("nonexistent", "spotprice") is False
+    assert config_watcher.has_query_config("test_query_id", "wrongtype") is False
+
+
+def test_find_query_config(config_watcher):
+    """Test find_query_config method."""
+    # Should find the config
+    config = config_watcher.find_query_config("test_query_id")
+    assert config.get("alert_threshold") == 0.05
+
+    # Should return empty dict for nonexistent query
+    config = config_watcher.find_query_config("nonexistent")
+    assert config == {}
+
+
+def test_get_metrics_for_query(config_watcher):
+    """Test get_metrics_for_query with inheritance."""
+    metrics = config_watcher.get_metrics_for_query("test_query_id", "spotprice")
+    assert metrics is not None
+    assert metrics.metric == "percentage"
+    assert metrics.alert_threshold == 0.05  # Overridden
+    assert metrics.warning_threshold == 0.25  # From global defaults
+    assert metrics.minor_threshold == 0.99  # From global defaults
+
+
+def test_is_supported_query_type(config_watcher):
+    """Test is_supported_query_type method."""
+    assert config_watcher.is_supported_query_type("spotprice") is True
+    assert config_watcher.is_supported_query_type("SpotPrice") is True  # Case insensitive
+    assert config_watcher.is_supported_query_type("unknown") is False
+
+
+def test_uses_telliot_catalog(config_watcher):
+    """Test uses_telliot_catalog method."""
+    assert config_watcher.uses_telliot_catalog("spotprice") is True
+    assert config_watcher.uses_telliot_catalog("unknown") is False

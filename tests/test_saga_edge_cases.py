@@ -22,26 +22,21 @@ class TestSagaEdgeCases:
     @pytest.fixture
     def saga_manager(self, mock_logger):
         """Create a SagaContractManager instance with mocked dependencies."""
-        with patch("layer_values_monitor.saga_contract.Web3") as mock_web3_class:
-            mock_web3 = MagicMock()
-            mock_web3.eth.block_number = 12345678
-            mock_web3.eth.gas_price = 20000000000
-            mock_web3.is_address.return_value = True
-            mock_web3.to_checksum_address.side_effect = lambda x: x.upper()
-            mock_web3.eth.get_code.return_value = b"contract_code"
-            mock_web3.eth.get_transaction_count.return_value = 5
-            mock_web3_class.return_value = mock_web3
+        mock_web3 = MagicMock()
+        mock_web3.eth.block_number = 12345678
+        mock_web3.eth.gas_price = 20000000000
+        mock_web3.is_address.return_value = True
+        mock_web3.to_checksum_address.side_effect = lambda x: x.upper()
+        mock_web3.eth.get_code.return_value = b"contract_code"
+        mock_web3.eth.get_transaction_count.return_value = 5
 
-            with patch("layer_values_monitor.saga_contract.Web3.eth.account.from_key") as mock_from_key:
-                mock_account = MagicMock()
-                mock_account.address = "0x742d35Cc6634C0532925a3b8D404d8E3c3dd542B"
-                mock_account.key = b"test_private_key"
-                mock_from_key.return_value = mock_account
+        mock_account = MagicMock()
+        mock_account.address = "0x742d35Cc6634C0532925a3b8D404d8E3c3dd542B"
+        mock_account.key = b"test_private_key"
+        mock_web3.eth.account.from_key.return_value = mock_account
 
-                manager = SagaContractManager("https://chainlet-2742.saga.xyz/", "test_private_key", mock_logger)
-                manager.w3 = mock_web3
-                manager.account = mock_account
-                return manager
+        manager = SagaContractManager(mock_web3, "test_private_key", mock_logger)
+        return manager
 
     @pytest.mark.asyncio
     async def test_pause_contract_network_error(self, saga_manager, mock_logger):
@@ -293,7 +288,6 @@ class TestSagaEdgeCases:
     async def test_rapid_fire_aggregate_reports(self, mock_saga_contract_manager, saga_config_watcher):
         """Test handling rapid succession of aggregate reports."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create many reports quickly
         reports = [
@@ -313,7 +307,6 @@ class TestSagaEdgeCases:
             await queue.put(report)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
 
         # Mock inspection to trigger pause for half the reports
         def side_effect(agg_report, *args):
@@ -322,9 +315,7 @@ class TestSagaEdgeCases:
 
         with patch("layer_values_monitor.monitor.inspect_aggregate_report", side_effect=side_effect):
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_contract_manager)
             )
 
             await asyncio.sleep(0.5)  # Let it process all reports

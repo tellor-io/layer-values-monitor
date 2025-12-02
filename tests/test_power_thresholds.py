@@ -11,7 +11,6 @@ from layer_values_monitor.monitor import (
     parse_reporters_response,
     query_reporters,
 )
-from layer_values_monitor.threshold_config import ThresholdConfig
 
 import pytest
 
@@ -182,30 +181,33 @@ class TestPowerThresholds:
     @pytest.mark.asyncio
     async def test_inspect_aggregate_report_with_power_thresholds(self, aggregate_report, power_thresholds, mock_logger):
         """Test inspect_aggregate_report with power threshold logic."""
-        mock_config_watcher = MagicMock(spec=ConfigWatcher)
-        mock_config_watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": 0.05,
-                "warning_threshold": 0.1,
-                "minor_threshold": 0.15,
-                "major_threshold": 0.2,
-                "pause_threshold": 0.25,
-            }
-        }
+        from layer_values_monitor.custom_types import Metrics
 
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        mock_config_watcher = MagicMock(spec=ConfigWatcher)
+        mock_config_watcher.is_supported_query_type.return_value = True
+        mock_config_watcher.get_metrics_for_query.return_value = Metrics(
+            metric="percentage",
+            alert_threshold=0.05,
+            warning_threshold=0.1,
+            minor_threshold=0.15,
+            major_threshold=0.2,
+            pause_threshold=0.25,
+        )
 
         with (
             patch("layer_values_monitor.monitor.get_query") as mock_get_query,
             patch("layer_values_monitor.monitor.get_feed") as mock_get_feed,
             patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value,
+            patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode,
             patch("layer_values_monitor.monitor.calculate_power_percentage") as mock_calc_power,
         ):
             # Mock the feed chain
-            mock_get_query.return_value = MagicMock()
+            mock_query = MagicMock()
+            mock_query.__class__.__name__ = "SpotPrice"
+            mock_get_query.return_value = mock_query
             mock_get_feed.return_value = MagicMock()
             mock_fetch_value.return_value = (1.0, None)  # trusted_value, _
+            mock_decode.return_value = 2.0  # Decoded aggregate value - 100% deviation
 
             # Mock power calculation for immediate pause scenario
             mock_calc_power.return_value = {
@@ -229,7 +231,7 @@ class TestPowerThresholds:
             )
 
             result = await inspect_aggregate_report(
-                agg_report_bad, mock_config_watcher, mock_logger, mock_threshold_config, "localhost:26657", power_thresholds
+                agg_report_bad, mock_config_watcher, mock_logger, "localhost:26657", power_thresholds
             )
 
             assert result is not None
@@ -242,30 +244,33 @@ class TestPowerThresholds:
     @pytest.mark.asyncio
     async def test_power_thresholds_override_traditional_pause(self, aggregate_report, power_thresholds, mock_logger):
         """Test that power thresholds override traditional pause logic when enabled."""
-        mock_config_watcher = MagicMock(spec=ConfigWatcher)
-        mock_config_watcher.get_config.return_value = {
-            "test_query_id": {
-                "metric": "percentage",
-                "alert_threshold": 0.05,
-                "warning_threshold": 0.1,
-                "minor_threshold": 0.15,
-                "major_threshold": 0.2,
-                "pause_threshold": 0.25,  # This would normally trigger pause
-            }
-        }
+        from layer_values_monitor.custom_types import Metrics
 
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        mock_config_watcher = MagicMock(spec=ConfigWatcher)
+        mock_config_watcher.is_supported_query_type.return_value = True
+        mock_config_watcher.get_metrics_for_query.return_value = Metrics(
+            metric="percentage",
+            alert_threshold=0.05,
+            warning_threshold=0.1,
+            minor_threshold=0.15,
+            major_threshold=0.2,
+            pause_threshold=0.25,  # This would normally trigger pause
+        )
 
         with (
             patch("layer_values_monitor.monitor.get_query") as mock_get_query,
             patch("layer_values_monitor.monitor.get_feed") as mock_get_feed,
             patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value,
+            patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode,
             patch("layer_values_monitor.monitor.calculate_power_percentage") as mock_calc_power,
         ):
             # Mock the feed chain
-            mock_get_query.return_value = MagicMock()
+            mock_query = MagicMock()
+            mock_query.__class__.__name__ = "SpotPrice"
+            mock_get_query.return_value = mock_query
             mock_get_feed.return_value = MagicMock()
             mock_fetch_value.return_value = (1.0, None)  # trusted_value, _
+            mock_decode.return_value = 2.0  # Decoded aggregate value - 100% deviation
 
             # Mock power calculation for low power (should NOT pause despite exceeding pause_threshold)
             mock_calc_power.return_value = {
@@ -293,7 +298,6 @@ class TestPowerThresholds:
                 agg_report_bad,
                 mock_config_watcher,
                 mock_logger,
-                mock_threshold_config,
                 "localhost:26657",  # URI provided
                 power_thresholds,  # Power thresholds provided
             )
@@ -311,7 +315,6 @@ class TestPowerThresholds:
                 agg_report_bad,
                 mock_config_watcher,
                 mock_logger,
-                mock_threshold_config,
                 None,  # No URI
                 None,  # No power thresholds
             )

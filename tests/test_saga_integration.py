@@ -17,7 +17,6 @@ class TestSagaIntegration:
     async def test_end_to_end_pause_flow(self, mock_saga_contract_manager, saga_config_watcher):
         """Test the complete flow from aggregate report to contract pause."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create aggregate report that will trigger pause
         agg_report = AggregateReport(
@@ -33,7 +32,7 @@ class TestSagaIntegration:
         await queue.put(agg_report)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock()
 
         # Mock the inspection to return should_pause=True
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
@@ -41,9 +40,7 @@ class TestSagaIntegration:
 
             # Run the queue handler for a short time
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_contract_manager)
             )
 
             await asyncio.sleep(0.1)
@@ -67,20 +64,20 @@ class TestSagaIntegration:
         """Test SagaContractManager creation from environment variables."""
         mock_logger = MagicMock()
 
-        with patch.dict(
-            os.environ, {"SAGA_EVM_RPC_URL": "https://chainlet-2742.saga.xyz/", "SAGA_PRIVATE_KEY": "test_private_key"}
-        ):
-            with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
-                mock_manager = MagicMock()
-                mock_manager.is_connected.return_value = True
-                mock_manager_class.return_value = mock_manager
+        with patch.dict(os.environ, {"SAGA_PRIVATE_KEY": "test_private_key"}):
+            with patch("layer_values_monitor.saga_contract.get_saga_web3_connection") as mock_get_conn:
+                mock_w3 = MagicMock()
+                mock_get_conn.return_value = (mock_w3, 123456)
 
-                result = create_saga_contract_manager(mock_logger)
+                with patch("layer_values_monitor.saga_contract.SagaContractManager") as mock_manager_class:
+                    mock_manager = MagicMock()
+                    mock_manager.is_connected.return_value = True
+                    mock_manager_class.return_value = mock_manager
 
-                assert result is not None
-                mock_manager_class.assert_called_once_with(
-                    "https://chainlet-2742.saga.xyz/", "test_private_key", mock_logger
-                )
+                    result = create_saga_contract_manager(mock_logger)
+
+                    assert result is not None
+                    mock_manager_class.assert_called_once_with(mock_w3, "test_private_key", mock_logger)
 
     def test_saga_manager_creation_missing_env_vars(self):
         """Test SagaContractManager creation with missing environment variables."""
@@ -97,7 +94,6 @@ class TestSagaIntegration:
     async def test_multiple_aggregate_reports(self, mock_saga_contract_manager, saga_config_watcher):
         """Test handling multiple aggregate reports with different outcomes."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create multiple reports
         report1 = AggregateReport(
@@ -123,7 +119,7 @@ class TestSagaIntegration:
         await queue.put(report2)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock()
 
         # Mock different inspection results
         def side_effect(agg_report, *args):
@@ -135,9 +131,7 @@ class TestSagaIntegration:
         with patch("layer_values_monitor.monitor.inspect_aggregate_report", side_effect=side_effect):
             # Run the queue handler
             task = asyncio.create_task(
-                agg_reports_queue_handler(
-                    queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_contract_manager
-                )
+                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_contract_manager)
             )
 
             await asyncio.sleep(0.2)  # Give time to process both reports
@@ -160,7 +154,6 @@ class TestSagaIntegration:
     async def test_contract_pause_with_guardian_failure(self, saga_config_watcher):
         """Test contract pause when guardian check fails."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
         # Create mock saga manager that fails guardian check
         mock_saga_manager = MagicMock()
@@ -179,14 +172,12 @@ class TestSagaIntegration:
         await queue.put(report)
 
         mock_logger = MagicMock()
-        mock_threshold_config = MagicMock(spec=ThresholdConfig)
+        MagicMock()
 
         with patch("layer_values_monitor.monitor.inspect_aggregate_report") as mock_inspect:
             mock_inspect.return_value = (True, "Should pause")
 
-            task = asyncio.create_task(
-                agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager)
-            )
+            task = asyncio.create_task(agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_manager))
 
             await asyncio.sleep(0.1)
             task.cancel()
@@ -205,17 +196,16 @@ class TestSagaIntegration:
     async def test_config_reload_during_monitoring(self, saga_config_watcher):
         """Test that config changes are picked up during monitoring."""
         from layer_values_monitor.monitor import agg_reports_queue_handler
-        from layer_values_monitor.threshold_config import ThresholdConfig
 
-        # Initial config
-        initial_config = saga_config_watcher.get_config()
+        # Initial datafeed_ca
+        initial_config = saga_config_watcher.find_query_config("test_query_id")
 
-        # Modify config (simulate file change)
+        # Prepare new config for mocking
         new_config = dict(initial_config)
-        new_config["test_query_id"]["datafeed_ca"] = "0xNEWADDRESS123456789"
+        new_config["datafeed_ca"] = "0xNEWADDRESS123456789"
 
         # Mock config watcher to return new config
-        with patch.object(saga_config_watcher, "get_config", return_value=new_config):
+        with patch.object(saga_config_watcher, "find_query_config", return_value=new_config):
             report = AggregateReport(
                 query_id="test_query_id",
                 query_data="0x123abc",
@@ -229,7 +219,7 @@ class TestSagaIntegration:
             await queue.put(report)
 
             mock_logger = MagicMock()
-            mock_threshold_config = MagicMock(spec=ThresholdConfig)
+            MagicMock()
             mock_saga_manager = MagicMock()
             mock_saga_manager.pause_contract = AsyncMock(return_value=("0xtest_hash", "success"))
 
@@ -237,9 +227,7 @@ class TestSagaIntegration:
                 mock_inspect.return_value = (True, "Should pause")
 
                 task = asyncio.create_task(
-                    agg_reports_queue_handler(
-                        queue, saga_config_watcher, mock_logger, mock_threshold_config, mock_saga_manager
-                    )
+                    agg_reports_queue_handler(queue, saga_config_watcher, mock_logger, mock_saga_manager)
                 )
 
                 await asyncio.sleep(0.1)
@@ -258,29 +246,24 @@ class TestSagaIntegration:
         from layer_values_monitor.saga_contract import SagaContractManager
 
         mock_logger = MagicMock()
+        mock_web3 = MagicMock()
+        mock_web3.eth.account.from_key.return_value = MagicMock()
 
-        with patch("layer_values_monitor.saga_contract.Web3") as mock_web3_class:
-            mock_web3 = MagicMock()
-            mock_web3_class.return_value = mock_web3
+        manager = SagaContractManager(mock_web3, "test_key", mock_logger)
 
-            with patch("layer_values_monitor.saga_contract.Web3.eth.account.from_key") as mock_from_key:
-                mock_from_key.return_value = MagicMock()
+        # Verify ABI contains expected functions
+        abi_functions = [func["name"] for func in manager.guarded_pausable_abi if func["type"] == "function"]
 
-                manager = SagaContractManager("https://test-rpc.saga.xyz/", "test_key", mock_logger)
+        assert "pause" in abi_functions
+        assert "unpause" in abi_functions
+        assert "paused" in abi_functions
+        assert "guardians" in abi_functions
 
-                # Verify ABI contains expected functions
-                abi_functions = [func["name"] for func in manager.guarded_pausable_abi if func["type"] == "function"]
+        # Verify function signatures match expected format
+        pause_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "pause")
+        assert pause_func["inputs"] == []
+        assert pause_func["stateMutability"] == "nonpayable"
 
-                assert "pause" in abi_functions
-                assert "unpause" in abi_functions
-                assert "paused" in abi_functions
-                assert "guardians" in abi_functions
-
-                # Verify function signatures match expected format
-                pause_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "pause")
-                assert pause_func["inputs"] == []
-                assert pause_func["stateMutability"] == "nonpayable"
-
-                guardians_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "guardians")
-                assert len(guardians_func["inputs"]) == 1
-                assert guardians_func["inputs"][0]["type"] == "address"
+        guardians_func = next(func for func in manager.guarded_pausable_abi if func["name"] == "guardians")
+        assert len(guardians_func["inputs"]) == 1
+        assert guardians_func["inputs"][0]["type"] == "address"

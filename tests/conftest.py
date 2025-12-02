@@ -64,14 +64,19 @@ def config_file():
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".toml")
     temp_file_path = Path(temp_file.name)
 
-    # Write initial config to the file
+    # Write initial config to the file with new format
     with open(temp_file_path, "w") as f:
         f.write("""
-            [Feed]
-            test = "initial_value"
+            [global_defaults.percentage]
+            alert_threshold = 0.1
+            warning_threshold = 0.25
+            minor_threshold = 0.99
             
-            [Settings]
-            interval = 5
+            [query_types]
+            spotprice = { metric = "percentage", handler = "telliot_feeds" }
+            
+            [queries.spotprice.test_query_id]
+            alert_threshold = 0.05
         """)
 
     # Allow filesystem to register the file
@@ -95,11 +100,20 @@ def saga_config_file():
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".toml")
     temp_file_path = Path(temp_file.name)
 
-    # Write config with contract addresses
+    # Write config with contract addresses using new format
     with open(temp_file_path, "w") as f:
         f.write("""
-            [test_query_id]
-            metric = "percentage"
+            [global_defaults.percentage]
+            alert_threshold = 0.1
+            warning_threshold = 0.25
+            minor_threshold = 0.99
+            major_threshold = 0.0
+            pause_threshold = 0.2
+            
+            [query_types]
+            spotprice = { metric = "percentage", handler = "telliot_feeds" }
+            
+            [queries.spotprice.test_query_id]
             alert_threshold = 0.05
             warning_threshold = 0.1
             minor_threshold = 0.15
@@ -107,8 +121,7 @@ def saga_config_file():
             pause_threshold = 0.25
             datafeed_ca = "0x9fe237b245466A5f088AfE808b27c1305E3027BC"
             
-            [another_query_id]
-            metric = "percentage"
+            [queries.spotprice.another_query_id]
             alert_threshold = 0.1
             warning_threshold = 0.2
             minor_threshold = 0.3

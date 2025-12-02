@@ -1,5 +1,6 @@
 """Telliot Feeds helper functions."""
 
+import asyncio
 import logging
 
 from clamfig.base import Registry
@@ -11,6 +12,8 @@ from telliot_feeds.feeds import CATALOG_FEEDS, DATAFEED_BUILDER_MAPPING
 from telliot_feeds.queries.abi_query import AbiQuery
 from telliot_feeds.queries.json_query import JsonQuery
 from telliot_feeds.queries.query_catalog import query_catalog
+
+logger = logging.getLogger(__name__)
 
 
 def get_query_from_data(query_data: bytes) -> AbiQuery | JsonQuery | None:
@@ -64,7 +67,10 @@ def get_source_from_data(query_data: bytes, logger: logging) -> DataSource | Non
     if feed_builder is None:
         logger.error(f"query type {query_type} not supported by datafeed builder")
         return None
-    source = feed_builder.source
+
+    source_class = feed_builder.source.__class__
+    source = source_class()
+
     for key, value in zip(param_names, param_values, strict=False):
         setattr(source, key, value)
     return source
@@ -82,7 +88,7 @@ async def get_feed(query_id: str, query: AbiQuery | JsonQuery | None, logger: lo
 
     catalog_entry = query_catalog.find(query_id=query_id)
     if len(catalog_entry) == 0:
-        source = get_source_from_data(query_data=query.query_data)
+        source = get_source_from_data(query_data=query.query_data, logger=logger)
         if source is None:
             logger.warning("no source found in telliot feeds found for query")
             return None
@@ -93,26 +99,38 @@ async def get_feed(query_id: str, query: AbiQuery | JsonQuery | None, logger: lo
 
 async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
     """Fetch the value from the data source in telliot-feeds."""
-    return await feed.source.fetch_new_datapoint()
+    try:
+        # Add timeout to prevent hanging on rate-limited APIs
+        return await asyncio.wait_for(feed.source.fetch_new_datapoint(), timeout=15.0)
+    except TimeoutError:
+        error_msg = "Timeout fetching trusted value from telliot-feeds (15s)"
+        logger.warning(error_msg)
+        print(f"Error fetching trusted value from telliot-feeds: {error_msg}")  # print to terminal_log
+        return None
+    except Exception as e:
+        error_msg = f"Error fetching trusted value from telliot-feeds: {e}"
+        logger.warning(error_msg)
+        print(error_msg)  # print to terminal_log
+        return None
 
 
 def extract_query_info(query: AbiQuery | JsonQuery | None, query_type: str | None = None) -> str:
     """Extract human-readable query information (e.g., asset pair) for discord messages.
-    
+
     Args:
         query: Query object from telliot-feeds
         query_type: Optional query type string from the report
-        
+
     Returns:
         str: Formatted query info (e.g., "BTC/USD", "EVMCall", "TRBBridge", etc.)
 
     """
     if query is None:
         return query_type or "Unknown"
-    
+
     # Try to extract asset/currency for SpotPrice queries
-    if hasattr(query, 'asset') and hasattr(query, 'currency'):
+    if hasattr(query, "asset") and hasattr(query, "currency"):
         return f"{query.asset}/{query.currency}"
-    
+
     # Fall back to query type
-    return getattr(query, 'type', query_type or "Unknown")
+    return getattr(query, "type", query_type or "Unknown")
