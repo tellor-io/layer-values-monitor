@@ -364,37 +364,66 @@ async def raw_data_queue_handler(
                     tx_hash=events["tx.hash"][0],
                 )
 
-                # Add the current report to the collection for the current height
+                # Process previous height's reports
+                if current_height is not None and height > current_height:
+                    if len(reports_collections) > 0:
+                        # query type summary for logging
+                        query_type_summaries = []
+                        for _query_id, reports in reports_collections.items():
+                            query_type = reports[0].query_type
+                            count = len(reports)
+
+                            # if spot price, extract asset pair for logging
+                            if query_type.lower() == "spotprice":
+                                try:
+                                    query_obj = get_query(reports[0].query_data)
+                                    if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
+                                        asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
+                                        query_type_summaries.append(f"{count} {asset_pair}")
+                                    else:
+                                        query_type_summaries.append(f"{count} {query_type}")
+                                except Exception:
+                                    query_type_summaries.append(f"{count} {query_type}")
+                            else:
+                                query_type_summaries.append(f"{count} {query_type}")
+
+                        console_logger.info(
+                            f"Processing reports from height {current_height}: {', '.join(query_type_summaries)}"
+                        )
+
+                        await new_reports_q.put(dict(reports_collections))
+                        reports_collections.clear()
+                        last_batch_time = time.time()
+
+                    current_height = height
+                    height_tracker.update(height)
+
+                # if first report, set current height
+                elif current_height is None:
+                    current_height = height
+                    height_tracker.update(height)
+
+                # add the current report to the collection (for current height only)
                 reports_collected = reports_collections.get(report.query_id, None)
                 if reports_collected is None:
                     reports_collections[report.query_id] = [report]
                 else:
                     reports_collections[report.query_id].append(report)
 
-                # Smart batching logic: process reports based on multiple conditions
+                # check for other batching conditions (size/timeout) after adding report
                 should_process = False
 
-                # Height has incremented (process previous height's reports)
-                if current_height is not None and height > current_height:
-                    should_process = True
-
                 # Batch size threshold reached
-                elif len(reports_collections) >= MAX_BATCH_SIZE:
+                if len(reports_collections) >= MAX_BATCH_SIZE:
                     should_process = True
-                    f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})"
+                    logger.debug(f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})")
 
                 # Timeout reached
                 elif time.time() - last_batch_time > BATCH_TIMEOUT:
                     should_process = True
-                    f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)"
-
-                # First report (current_height is None) - process immediately
-                elif current_height is None:
-                    should_process = True
+                    logger.debug(f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)")
 
                 if should_process and len(reports_collections) > 0:
-                    sum(len(reports) for reports in reports_collections.values())
-
                     # Build query type summary with asset pairs for spot prices
                     query_type_summaries = []
                     for _query_id, reports in reports_collections.items():
@@ -415,20 +444,13 @@ async def raw_data_queue_handler(
                         else:
                             query_type_summaries.append(f"{count} {query_type}")
 
-                    collected_height = current_height if current_height is not None else height
                     console_logger.info(
-                        f"Processing reports from height {collected_height}: {', '.join(query_type_summaries)}"
+                        f"Processing reports from height {current_height}: {', '.join(query_type_summaries)}"
                     )
 
                     await new_reports_q.put(dict(reports_collections))
                     reports_collections.clear()
                     last_batch_time = time.time()
-
-                # Update current height (either first time or after processing)
-                if current_height is None or height > current_height:
-                    current_height = height
-                    # Track height for missed block detection
-                    height_tracker.update(height)
 
             except (KeyError, IndexError) as e:
                 logger.warning(f"malformed new_report returned by websocket: {e.__str__()}")
