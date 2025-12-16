@@ -3,7 +3,6 @@ import logging
 from unittest.mock import MagicMock
 
 from layer_values_monitor.catchup import HeightTracker
-from layer_values_monitor.custom_types import NewReport
 from layer_values_monitor.monitor import raw_data_queue_handler
 
 import pytest
