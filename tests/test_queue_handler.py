@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from unittest.mock import MagicMock
 
 from layer_values_monitor.catchup import HeightTracker
@@ -21,8 +20,8 @@ def mock_logger():
 
 @pytest.mark.asyncio
 async def test_raw_data_queue_handler_basic_flow(mock_logger):
-    """Test the basic flow with proper height isolation.
-    
+    """Test the basic processing flow.
+
     Each collection should contain only reports from one height.
     """
     raw_data_q = asyncio.Queue()
@@ -125,7 +124,7 @@ async def test_raw_data_queue_handler_basic_flow(mock_logger):
     assert len(first_collection) == 2, "height 100 should have 2 query IDs"
     assert "query_id_1" in first_collection
     assert "query_id_2" in first_collection
-    
+
     # Verify both reports are from height 100
     assert first_collection["query_id_1"][0].value == "0x123"
     assert first_collection["query_id_2"][0].value == "0x456"
@@ -135,7 +134,7 @@ async def test_raw_data_queue_handler_basic_flow(mock_logger):
     assert len(second_collection) == 1, "height 101 should have 1 query ID"
     assert "query_id_1" in second_collection
     assert "query_id_2" not in second_collection, "query_id_2 should NOT be in height 101 collection"
-    
+
     # Verify report is from height 101
     assert second_collection["query_id_1"][0].value == "0x789"
     assert second_collection["query_id_1"][0].reporter == "reporter3"
@@ -153,7 +152,7 @@ async def test_raw_data_queue_handler_empty_queue(mock_logger):
     raw_data_q = asyncio.Queue()
     new_reports_q = asyncio.Queue()
 
-    # Create and run the task with a short timeout
+    # create and run task with short timeout
     height_tracker = HeightTracker()
     task = asyncio.create_task(
         raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=1)
@@ -175,16 +174,16 @@ async def test_raw_data_queue_handler_empty_queue(mock_logger):
 @pytest.mark.asyncio
 async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     """Test handling multiple reports with the same block height.
-    
+
     Multiple reports at the same height should be batched together.
-    When height changes, the batch should be processed without mixing heights.
+    When height changes, eacg batch should be processed without mixing heights.
     """
     raw_data_q = asyncio.Queue()
     new_reports_q = asyncio.Queue()
 
     height_tracker = HeightTracker()
-    
-    # Add a single report with block height 200
+
+    # height 200, data1.1
     report1 = {
         "result": {
             "events": {
@@ -205,7 +204,7 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     }
     await raw_data_q.put(report1)
 
-    # Add a second report with the same block height
+    # height 200, data1.2
     report2 = {
         "result": {
             "events": {
@@ -226,7 +225,7 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     }
     await raw_data_q.put(report2)
 
-    # Now add a report with a higher block height to trigger collection clearing
+    # height 201, data2.1
     final_report = {
         "result": {
             "events": {
@@ -246,8 +245,8 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
         }
     }
     await raw_data_q.put(final_report)
-    
-    # Add a trigger report at height 202 to ensure height 201 gets processed
+
+    # height 202, data3
     trigger_report = {
         "result": {
             "events": {
@@ -268,131 +267,31 @@ async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     }
     await raw_data_q.put(trigger_report)
 
-    # Process all reports (4 reports = 4 iterations)
+    # process queue with 4 reports
     await raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=4)
 
-    # Should have 3 collections: height 200, height 201, height 202
+    # should have 3 collections: height 200, height 201, height 202
     assert new_reports_q.qsize() == 3
 
-    # Get first collection - should have both reports from height 200
+    # first collection: height 200 with 2 reports
     first_collection = await new_reports_q.get()
     assert "same_query_id" in first_collection
-    # First collection has both reports from same height
+
     assert len(first_collection["same_query_id"]) == 2
     assert first_collection["same_query_id"][0].value == "0x111"
     assert first_collection["same_query_id"][1].value == "0x222"
 
-    # Get second collection - should have report from height 201 ONLY
+    # second collection: height 201 with one report
     second_collection = await new_reports_q.get()
     assert "other_query_id" in second_collection
     assert "same_query_id" not in second_collection, "Height 201 should not contain height 200 reports"
     assert len(second_collection["other_query_id"]) == 1
     assert second_collection["other_query_id"][0].value == "0xfinal"
-    
-    # Get third collection - should have report from height 202
+
+    # third collection: height 202 with one report
     third_collection = await new_reports_q.get()
     assert "trigger_query_id" in third_collection
     assert len(third_collection["trigger_query_id"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_raw_data_queue_handler():
-    """Test the raw_data_queue_handler function processes reports with height isolation.
-    
-    Reports from different heights should NOT be mixed in the same collection.
-    """
-
-    raw_data_q = asyncio.Queue()
-    new_reports_q = asyncio.Queue()
-    logger = MagicMock(spec=logging.Logger)
-
-    raw_data_height_5 = {
-        "result": {
-            "events": {
-                "tx.height": ["5"],
-                "new_report.query_type": ["price"],
-                "new_report.query_data": ["BTC/USD"],
-                "new_report.query_id": ["query1"],
-                "new_report.value": ["50000"],
-                "new_report.aggregate_method": ["median"],
-                "new_report.cyclelist": ["12"],
-                "new_report.reporter_power": ["100"],
-                "new_report.reporter": ["reporter1"],
-                "new_report.timestamp": ["1620000000"],
-                "new_report.meta_id": ["meta1"],
-                "tx.hash": ["hash1"],
-            }
-        }
-    }
-
-    raw_data_height_5_query2 = {
-        "result": {
-            "events": {
-                "tx.height": ["5"],
-                "new_report.query_type": ["price"],
-                "new_report.query_data": ["ETH/USD"],
-                "new_report.query_id": ["query2"],
-                "new_report.value": ["3000"],
-                "new_report.aggregate_method": ["median"],
-                "new_report.cyclelist": ["12"],
-                "new_report.reporter_power": ["100"],
-                "new_report.reporter": ["reporter1"],
-                "new_report.timestamp": ["1620000000"],
-                "new_report.meta_id": ["meta2"],
-                "tx.hash": ["hash2"],
-            }
-        }
-    }
-
-    raw_data_height_6 = {
-        "result": {
-            "events": {
-                "tx.height": ["6"],
-                "new_report.query_type": ["price"],
-                "new_report.query_data": ["BTC/USD"],
-                "new_report.query_id": ["query1"],
-                "new_report.value": ["52000"],
-                "new_report.aggregate_method": ["median"],
-                "new_report.cyclelist": ["12"],
-                "new_report.reporter_power": ["300"],
-                "new_report.reporter": ["reporter3"],
-                "new_report.timestamp": ["1620000020"],
-                "new_report.meta_id": ["meta4"],
-                "tx.hash": ["hash4"],
-            }
-        }
-    }
-
-    await raw_data_q.put(raw_data_height_5)
-    await raw_data_q.put(raw_data_height_5_query2)
-    await raw_data_q.put(raw_data_height_6)
-
-    height_tracker = HeightTracker()
-    await raw_data_queue_handler(raw_data_q, new_reports_q, None, logger, height_tracker, max_iterations=3)
-
-    assert not new_reports_q.empty(), "Queue should have items"
-
-    # Should have 2 collections: height 5, height 6
-    assert new_reports_q.qsize() == 2
-
-    # First collection: height 5 with BOTH query1 and query2
-    first_collection = await new_reports_q.get()
-    assert len(first_collection) == 2, "Height 5 should have 2 query IDs"
-    assert "query1" in first_collection, "Should have query1"
-    assert "query2" in first_collection, "Should have query2"
-    
-    # Verify both reports are from height 5
-    assert first_collection["query1"][0].value == "50000", "query1 should have value 50000"
-    assert first_collection["query2"][0].value == "3000", "query2 should have value 3000"
-
-    # Second collection: height 6 with only query1
-    second_collection = await new_reports_q.get()
-    assert len(second_collection) == 1, "Height 6 should have 1 query ID"
-    assert "query1" in second_collection, "Should have query1"
-    assert "query2" not in second_collection, "Should NOT have query2 from height 5"
-    
-    # Verify query1 from height 6
-    assert second_collection["query1"][0].value == "52000", "query1 from height 6 should have value 52000"
 
 
 @pytest.mark.asyncio
@@ -468,14 +367,13 @@ async def test_new_report_followed_by_aggregate_same_height(mock_logger):
 
 @pytest.mark.asyncio
 async def test_two_block_reporting_windows(mock_logger):
-    """Test oracle's 2-block reporting window behavior.
-    
-    Simulates oracle blockchain where:
-    - Blocks 100-101: eth/usd window (8 reporters)
-    - Blocks 102-103: btc/usd window (8 reporters)  
-    - Blocks 104-105: trb/usd window (8 reporters)
-    
-    Each window should be processed separately without cross-contamination.
+    """Test two block reporting window behavior.
+
+    - height 100-101: eth/usd window (8 reporters)
+    - height 102-103: btc/usd window (8 reporters)
+    - height 104-105: trb/usd window (8 reporters)
+
+    Each window should be processed separately without mixing heights.
     """
     raw_data_q = asyncio.Queue()
     new_reports_q = asyncio.Queue()
@@ -502,31 +400,35 @@ async def test_two_block_reporting_windows(mock_logger):
             }
         }
 
-    # ETH/USD window: blocks 100-101
+    # ETH/USD
     for height in [100, 101]:
         for i in range(1, 9):  # 8 reporters
             await raw_data_q.put(create_report(height, "eth_query_id", "SpotPrice", i))
 
-    # BTC/USD window: blocks 102-103
+    # BTC/USD
     for height in [102, 103]:
         for i in range(1, 9):  # 8 reporters
             await raw_data_q.put(create_report(height, "btc_query_id", "SpotPrice", i))
 
-    # TRB/USD window: blocks 104-105
+    # TRB/USD
     for height in [104, 105]:
         for i in range(1, 9):  # 8 reporters
             await raw_data_q.put(create_report(height, "trb_query_id", "SpotPrice", i))
 
     # Process all reports
     await raw_data_queue_handler(
-        raw_data_q, new_reports_q, None, mock_logger, height_tracker, 
-        max_iterations=48  # 3 windows * 2 blocks * 8 reporters
+        raw_data_q,
+        new_reports_q,
+        None,
+        mock_logger,
+        height_tracker,
+        max_iterations=48,  # 3 windows * 2 blocks * 8 reporters
     )
 
     # Should have 6 collections (one per block height: 100, 101, 102, 103, 104, 105)
     assert new_reports_q.qsize() == 6, f"Expected 6 collections, got {new_reports_q.qsize()}"
 
-    # Height 100: eth/usd only
+    # first collection: height 100 with eth/usd only
     collection_100 = await new_reports_q.get()
     assert len(collection_100) == 1, "Height 100 should have 1 query ID"
     assert "eth_query_id" in collection_100
@@ -534,7 +436,7 @@ async def test_two_block_reporting_windows(mock_logger):
     assert "trb_query_id" not in collection_100
     assert len(collection_100["eth_query_id"]) == 8, "Height 100 should have 8 eth reports"
 
-    # Height 101: eth/usd only
+    # second collection: height 101 with eth/usd only
     collection_101 = await new_reports_q.get()
     assert len(collection_101) == 1, "Height 101 should have 1 query ID"
     assert "eth_query_id" in collection_101
@@ -542,7 +444,7 @@ async def test_two_block_reporting_windows(mock_logger):
     assert "trb_query_id" not in collection_101
     assert len(collection_101["eth_query_id"]) == 8, "Height 101 should have 8 eth reports"
 
-    # Height 102: btc/usd only
+    # third collection: height 102 with btc/usd only
     collection_102 = await new_reports_q.get()
     assert len(collection_102) == 1, "Height 102 should have 1 query ID"
     assert "btc_query_id" in collection_102
@@ -550,7 +452,7 @@ async def test_two_block_reporting_windows(mock_logger):
     assert "trb_query_id" not in collection_102
     assert len(collection_102["btc_query_id"]) == 8, "Height 102 should have 8 btc reports"
 
-    # Height 103: btc/usd only
+    # fourth collection: height 103 with btc/usd only
     collection_103 = await new_reports_q.get()
     assert len(collection_103) == 1, "Height 103 should have 1 query ID"
     assert "btc_query_id" in collection_103
@@ -558,7 +460,7 @@ async def test_two_block_reporting_windows(mock_logger):
     assert "trb_query_id" not in collection_103
     assert len(collection_103["btc_query_id"]) == 8, "Height 103 should have 8 btc reports"
 
-    # Height 104: trb/usd only
+    # fifth collection: height 104 with trb/usd only
     collection_104 = await new_reports_q.get()
     assert len(collection_104) == 1, "Height 104 should have 1 query ID"
     assert "trb_query_id" in collection_104
@@ -566,7 +468,7 @@ async def test_two_block_reporting_windows(mock_logger):
     assert "btc_query_id" not in collection_104
     assert len(collection_104["trb_query_id"]) == 8, "Height 104 should have 8 trb reports"
 
-    # Height 105: trb/usd only
+    # sixth collection: height 105 with trb/usd only
     collection_105 = await new_reports_q.get()
     assert len(collection_105) == 1, "Height 105 should have 1 query ID"
     assert "trb_query_id" in collection_105
