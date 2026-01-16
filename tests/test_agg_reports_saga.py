@@ -292,13 +292,13 @@ class TestInspectAggregateReport:
         """Test inspection that should trigger pause."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
-                with patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value:
+                with patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached:
                     with patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode:
                         with patch("layer_values_monitor.monitor.is_disputable") as mock_is_disputable:
                             # Setup mocks
                             mock_get_query.return_value = MagicMock()
                             mock_get_feed.return_value = MagicMock()
-                            mock_fetch_value.return_value = (100.0, None)
+                            mock_fetch_value_cached.return_value = (100.0, None)
                             mock_decode.return_value = 130.0  # 30% difference
                             mock_is_disputable.return_value = (True, True, 0.3)  # 30% diff > 25% pause threshold
 
@@ -317,13 +317,13 @@ class TestInspectAggregateReport:
         """Test inspection that should not trigger pause."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
-                with patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value:
+                with patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached:
                     with patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode:
                         with patch("layer_values_monitor.monitor.is_disputable") as mock_is_disputable:
                             # Setup mocks
                             mock_get_query.return_value = MagicMock()
                             mock_get_feed.return_value = MagicMock()
-                            mock_fetch_value.return_value = (100.0, None)
+                            mock_fetch_value_cached.return_value = (100.0, None)
                             mock_decode.return_value = 105.0  # 5% difference
                             mock_is_disputable.return_value = (False, False, 0.05)  # 5% diff < 25% pause threshold
 
@@ -342,13 +342,13 @@ class TestInspectAggregateReport:
         """Test inspection when trusted value cannot be fetched."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
-                with patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value:
+                with patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached:
                     # Setup mocks
                     mock_query = MagicMock()
                     mock_query.__class__.__name__ = "SpotPrice"
                     mock_get_query.return_value = mock_query
                     mock_get_feed.return_value = MagicMock()
-                    mock_fetch_value.return_value = None  # No trusted value (function returns None on error)
+                    mock_fetch_value_cached.return_value = None  # No trusted value (function returns None on error)
 
                     result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
 
@@ -397,14 +397,14 @@ class TestInspectAggregateReport:
         """Test inspection with disputable value exceeding major threshold."""
         with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
             with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
-                with patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value:
+                with patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached:
                     with patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode:
                         with patch("layer_values_monitor.monitor.is_disputable") as mock_is_disputable:
                             with patch("layer_values_monitor.monitor.determine_dispute_category") as mock_category:
                                 # Setup mocks
                                 mock_get_query.return_value = MagicMock()
                                 mock_get_feed.return_value = MagicMock()
-                                mock_fetch_value.return_value = (100.0, None)
+                                mock_fetch_value_cached.return_value = (100.0, None)
                                 mock_decode.return_value = 120.0  # 20% difference
                                 mock_is_disputable.return_value = (True, True, 0.2)  # 20% diff < 25% pause threshold
                                 mock_category.return_value = "major"

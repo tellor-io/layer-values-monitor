@@ -29,7 +29,7 @@ from layer_values_monitor.dispute import (
 )
 from layer_values_monitor.logger import console_logger
 from layer_values_monitor.saga_contract import SagaContractManager
-from layer_values_monitor.telliot_feeds import fetch_value, get_feed, get_query
+from layer_values_monitor.telliot_feeds import fetch_value, fetch_value_cached, get_feed, get_price_cache, get_query
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
 from layer_values_monitor.utils import add_to_table, decode_hex_value
 
@@ -709,8 +709,10 @@ async def inspect_spotprice_path(
         logger.error("Unable to get feed")
         return None
 
-    logger.debug("Fetching trusted value from feed...")
-    result = await fetch_value(feed)
+    # Use cached fetch to reduce API calls (e.g., CoinGecko)
+    # Multiple reports for the same query_id will share the cached value
+    logger.debug("Fetching trusted value from feed (with cache)...")
+    result = await fetch_value_cached(feed, query_id, logger)
     if result is None:
         logger.error("Unable to fetch trusted value")
         return None
@@ -719,8 +721,10 @@ async def inspect_spotprice_path(
     logger.debug(f"Trusted value fetched: {trusted_value}")
 
     # Create fetcher lambda for double-check logic
+    # Note: Uses force_refresh=True to bypass cache for the second check
+    # This ensures we get a fresh value after the 10-second delay
     async def fetch_trusted_value() -> tuple[Any, Any]:
-        return await fetch_value(feed)
+        return await fetch_value_cached(feed, query_id, logger, force_refresh=True)
 
     logger.debug(f"Inspecting {len(reports)} report(s)...")
     for r in reports:
@@ -764,8 +768,9 @@ async def inspect_evmcall_path(
         logger.error("Unable to get feed for EVMCall")
         return None
 
-    logger.debug("Fetching trusted value from telliot feed...")
-    result = await fetch_value(feed)
+    # Use cached fetch to reduce API calls
+    logger.debug("Fetching trusted value from telliot feed (with cache)...")
+    result = await fetch_value_cached(feed, query_id, logger)
     if result is None:
         logger.error("Unable to fetch trusted value from telliot")
         return None
@@ -782,8 +787,9 @@ async def inspect_evmcall_path(
     trusted_value_bytes = trusted_value_tuple[0]
 
     # Create fetcher lambda for double-check logic (if needed)
+    # Note: Uses force_refresh=True to bypass cache for the second check
     async def fetch_trusted_value() -> tuple[Any, Any]:
-        return await fetch_value(feed)
+        return await fetch_value_cached(feed, query_id, logger, force_refresh=True)
 
     logger.debug(f"Inspecting {len(reports)} EVMCall report(s)...")
     for r in reports:
@@ -851,6 +857,8 @@ async def new_reports_queue_handler(
     """Handle new reports from the queue and process them."""
     running_tasks = set()
     task_cleanup_threshold = 1000  # Safety threshold for task cleanup
+    reports_processed = 0
+    cache_log_interval = 100  # Log cache stats every N reports
 
     while True:
         new_reports: dict = await new_reports_q.get()
@@ -860,6 +868,16 @@ async def new_reports_queue_handler(
             completed_tasks = {t for t in running_tasks if t.done()}
             running_tasks -= completed_tasks
             logger.warning(f"🧹 Cleaned up {len(completed_tasks)} completed tasks (active: {len(running_tasks)})")
+
+        # Periodic cache statistics logging
+        reports_processed += len(new_reports)
+        if reports_processed >= cache_log_interval:
+            cache_stats = get_price_cache().get_stats()
+            logger.info(
+                f"💾 Price cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
+                f"{cache_stats['hit_rate']} hit rate, {cache_stats['size']} entries cached"
+            )
+            reports_processed = 0
 
         for report in new_reports.values():
             # Create a task for each query id
@@ -912,6 +930,8 @@ async def inspect_aggregate_report(
         return None
 
     # Get feed and trusted value (same logic as inspect_reports)
+    # Uses cached fetch - aggregate reports often arrive shortly after new reports
+    # for the same query_id, so we can reuse the cached value
     query = get_query(query_data)
     if query is None:
         logger.error(f"Unable to parse query data for aggregate report query id: {query_id}")
@@ -922,7 +942,7 @@ async def inspect_aggregate_report(
         logger.error(f"Unable to get feed for aggregate report query id: {query_id}")
         return None
 
-    result = await fetch_value(feed)
+    result = await fetch_value_cached(feed, query_id, logger)
     if result is None:
         logger.error(f"Unable to fetch trusted value for aggregate report query id: {query_id}")
         return None
