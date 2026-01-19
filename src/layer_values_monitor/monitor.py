@@ -29,7 +29,14 @@ from layer_values_monitor.dispute import (
 )
 from layer_values_monitor.logger import console_logger
 from layer_values_monitor.saga_contract import SagaContractManager
-from layer_values_monitor.telliot_feeds import fetch_value, fetch_value_cached, get_feed, get_price_cache, get_query
+from layer_values_monitor.telliot_feeds import (
+    CacheResult,
+    fetch_value,
+    fetch_value_cached,
+    get_feed,
+    get_price_cache,
+    get_query,
+)
 from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
 from layer_values_monitor.utils import add_to_table, decode_hex_value
 
@@ -712,7 +719,19 @@ async def inspect_spotprice_path(
     # Use cached fetch to reduce API calls (e.g., CoinGecko)
     # Multiple reports for the same query_id will share the cached value
     logger.debug("Fetching trusted value from feed (with cache)...")
-    result = await fetch_value_cached(feed, query_id, logger)
+    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
+    
+    # Check for staleness
+    cache = get_price_cache()
+    cache_result = await cache.get_with_staleness(query_id, query_type)
+    if cache_result and cache_result.is_stale:
+        logger.warning(
+            f"⚠️ STALE CACHE for {query_id[:16]}... - age: {cache_result.age_seconds:.1f}s "
+            f"(threshold: {config_watcher.get_staleness_threshold(query_id, query_type):.1f}s)"
+        )
+        # Send staleness alert
+        await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+    
     if result is None:
         logger.error("Unable to fetch trusted value")
         return None
@@ -720,11 +739,10 @@ async def inspect_spotprice_path(
 
     logger.debug(f"Trusted value fetched: {trusted_value}")
 
-    # Create fetcher lambda for double-check logic
-    # Note: Uses force_refresh=True to bypass cache for the second check
-    # This ensures we get a fresh value after the 10-second delay
+    # Create fetcher lambda for immediate refresh when threshold is breached
+    # Note: Uses force_refresh=True to bypass cache
     async def fetch_trusted_value() -> tuple[Any, Any]:
-        return await fetch_value_cached(feed, query_id, logger, force_refresh=True)
+        return await fetch_value_cached(feed, query_id, logger, force_refresh=True, query_type=query_type)
 
     logger.debug(f"Inspecting {len(reports)} report(s)...")
     for r in reports:
@@ -755,6 +773,7 @@ async def inspect_evmcall_path(
 ) -> None:
     """EVMCall inspection path using telliot trusted lookup."""
     logger.info(f"⚙️ EVMCall inspection - QueryID: {query_id[:16]}...")
+    query_type = "evmcall"
 
     # Get query object
     query = get_query(query_data)
@@ -770,7 +789,7 @@ async def inspect_evmcall_path(
 
     # Use cached fetch to reduce API calls
     logger.debug("Fetching trusted value from telliot feed (with cache)...")
-    result = await fetch_value_cached(feed, query_id, logger)
+    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
     if result is None:
         logger.error("Unable to fetch trusted value from telliot")
         return None
@@ -786,10 +805,10 @@ async def inspect_evmcall_path(
 
     trusted_value_bytes = trusted_value_tuple[0]
 
-    # Create fetcher lambda for double-check logic (if needed)
-    # Note: Uses force_refresh=True to bypass cache for the second check
+    # Create fetcher lambda for immediate refresh when threshold is breached
+    # Note: Uses force_refresh=True to bypass cache
     async def fetch_trusted_value() -> tuple[Any, Any]:
-        return await fetch_value_cached(feed, query_id, logger, force_refresh=True)
+        return await fetch_value_cached(feed, query_id, logger, force_refresh=True, query_type=query_type)
 
     logger.debug(f"Inspecting {len(reports)} EVMCall report(s)...")
     for r in reports:
@@ -1345,6 +1364,43 @@ async def agg_reports_queue_handler(
         agg_reports_q.task_done()
 
 
+async def send_staleness_alert(
+    query_id: str,
+    query_type: str,
+    asset_pair: str,
+    cache_result: CacheResult,
+    logger: logging.Logger,
+) -> None:
+    """Send Discord alert when cache is stale (too old to be trusted).
+
+    Args:
+        query_id: The query ID
+        query_type: The query type string
+        asset_pair: Asset pair string (e.g. "eth/usd" or "Unknown")
+        cache_result: CacheResult with staleness information
+        logger: Logger instance
+    """
+    try:
+        from datetime import datetime
+
+        fetch_time_str = datetime.fromtimestamp(cache_result.fetch_time).strftime("%Y-%m-%d %H:%M:%S")
+        
+        alert_msg = f"**QueryId:** {query_id}\n"
+        alert_msg += f"**QueryType:** {query_type}\n"
+        if asset_pair != "Unknown":
+            alert_msg += f"**Asset pair:** {asset_pair}\n"
+        alert_msg += f"**Cached Value:** {cache_result.value}\n"
+        alert_msg += f"**Cache Age:** {cache_result.age_seconds:.1f} seconds\n"
+        alert_msg += f"**Last Fetched:** {fetch_time_str}\n"
+        alert_msg += "**Status:** Cache is stale - API may be having issues"
+
+        logger.warning(f"Staleness alert:\n{alert_msg}")
+        generic_alert(alert_msg, description="⏰ **STALE CACHE WARNING**")
+
+    except Exception as e:
+        logger.error(f"Failed to send staleness alert: {e}")
+
+
 async def send_unsupported_query_alert(
     query_id: str,
     query_type: str,
@@ -1485,17 +1541,32 @@ async def perform_dispute_verification(
 ) -> dict[str, Any]:
     """Perform verification logic to determine if a dispute should be submitted.
 
-    Handles both double-check logic (for SpotPrice/EVMCall with fetcher) and single-check logic
-    (for TRBBridge without fetcher).
+    Flow for SpotPrice/EVMCall (with fetcher):
+    1. If cached check crosses threshold → immediately fetch fresh trusted value
+    2. If fresh value still crosses threshold → wait 10s → fetch again → dispute if still bad
+    
+    Flow for TRBBridge (without fetcher):
+    - Single check, immediate dispute if threshold crossed
 
     Returns:
-        Dict with keys: should_dispute, dispute_category, second_trusted_value,
-        second_trusted_time, second_check_disputable, second_diff
-
+        Dict with keys: should_dispute, dispute_category, immediate_refresh_value,
+        immediate_refresh_time, immediate_check_disputable, immediate_diff,
+        final_trusted_value, final_trusted_time, final_check_disputable, final_diff
     """
     result = {
         "should_dispute": False,
         "dispute_category": None,
+        # Immediate refresh (right after cached check fails)
+        "immediate_refresh_value": None,
+        "immediate_refresh_time": None,
+        "immediate_check_disputable": None,
+        "immediate_diff": None,
+        # Final check (after 10s delay)
+        "final_trusted_value": None,
+        "final_trusted_time": None,
+        "final_check_disputable": None,
+        "final_diff": None,
+        # Legacy aliases for backward compatibility with alert formatting
         "second_trusted_value": None,
         "second_trusted_time": None,
         "second_check_disputable": None,
@@ -1503,66 +1574,106 @@ async def perform_dispute_verification(
     }
 
     if disputable and trusted_value_fetcher is not None:
-        # Double-check logic for SpotPrice queries
-        logger.info(f"⏳ First trusted value check crossed threshold (diff: {diff}). Waiting 10 seconds for second check...")
-        await asyncio.sleep(10)
-
-        logger.info("📡 Fetching second trusted value for verification...")
+        # Step 1: Immediately fetch fresh trusted value (cached check crossed threshold)
+        logger.info(f"🔄 Cached check crossed threshold (diff: {diff}). Immediately fetching fresh trusted value...")
+        
         try:
-            second_trusted_result = await trusted_value_fetcher()
-            if second_trusted_result is not None:
-                # fetch_value returns (value, timestamp) tuple
-                result["second_trusted_value"] = (
-                    second_trusted_result[0] if isinstance(second_trusted_result, tuple) else second_trusted_result
-                )
-                result["second_trusted_time"] = time.time()
-                logger.info(f"✅ Second trusted value fetched: {result['second_trusted_value']}")
-
-                # Compare reported value against second trusted value
-                _, second_check_disputable, second_diff = is_disputable(
-                    metrics.metric,
-                    metrics.alert_threshold,
-                    metrics.warning_threshold,
-                    reported_value,
-                    result["second_trusted_value"],
-                    logger=logger,
-                )
-                result["second_check_disputable"] = second_check_disputable
-                result["second_diff"] = second_diff
-
-                # Only dispute if BOTH checks cross threshold
-                if second_check_disputable:
-                    logger.info(f"✅ Second check also crossed threshold (diff: {second_diff}). Proceeding with dispute.")
-                    result["should_dispute"] = True
-
-                    # Determine dispute category
-                    if metrics.metric.lower() == "equality":
-                        if metrics.warning_threshold == 1.0:
-                            result["dispute_category"] = "warning"
-                        elif metrics.minor_threshold == 1.0:
-                            result["dispute_category"] = "minor"
-                        elif metrics.major_threshold == 1.0:
-                            result["dispute_category"] = "major"
-                    else:
-                        category = determine_dispute_category(
-                            diff=second_diff,
-                            category_thresholds={
-                                "major": metrics.major_threshold,
-                                "minor": metrics.minor_threshold,
-                                "warning": metrics.warning_threshold,
-                            },
-                        )
-                        if category is not None:
-                            result["dispute_category"] = category
+            immediate_result = await trusted_value_fetcher()
+            if immediate_result is None:
+                logger.error("❌ Failed to fetch fresh trusted value. Cancelling dispute.")
+                return result
+            
+            # Extract value from result tuple
+            result["immediate_refresh_value"] = (
+                immediate_result[0] if isinstance(immediate_result, tuple) else immediate_result
+            )
+            result["immediate_refresh_time"] = time.time()
+            logger.info(f"✅ Fresh trusted value fetched: {result['immediate_refresh_value']}")
+            
+            # Step 2: Check if fresh value still crosses threshold
+            _, immediate_disputable, immediate_diff = is_disputable(
+                metrics.metric,
+                metrics.alert_threshold,
+                metrics.warning_threshold,
+                reported_value,
+                result["immediate_refresh_value"],
+                logger=logger,
+            )
+            result["immediate_check_disputable"] = immediate_disputable
+            result["immediate_diff"] = immediate_diff
+            
+            if not immediate_disputable:
+                logger.info(f"⚠️ Fresh check did NOT cross threshold (diff: {immediate_diff}). Dispute cancelled - likely stale cache.")
+                return result
+            
+            logger.info(f"✅ Fresh check still crosses threshold (diff: {immediate_diff}). Waiting 10 seconds for final verification...")
+            
+            # Step 3: Wait 10 seconds then fetch again
+            await asyncio.sleep(10)
+            
+            logger.info("📡 Fetching final trusted value for verification...")
+            final_result = await trusted_value_fetcher()
+            
+            if final_result is None:
+                logger.error("❌ Failed to fetch final trusted value. Cancelling dispute.")
+                return result
+            
+            # Extract value from result tuple
+            result["final_trusted_value"] = (
+                final_result[0] if isinstance(final_result, tuple) else final_result
+            )
+            result["final_trusted_time"] = time.time()
+            # Set legacy aliases for alert formatting
+            result["second_trusted_value"] = result["final_trusted_value"]
+            result["second_trusted_time"] = result["final_trusted_time"]
+            logger.info(f"✅ Final trusted value fetched: {result['final_trusted_value']}")
+            
+            # Step 4: Final check - only dispute if still crosses threshold
+            _, final_disputable, final_diff = is_disputable(
+                metrics.metric,
+                metrics.alert_threshold,
+                metrics.warning_threshold,
+                reported_value,
+                result["final_trusted_value"],
+                logger=logger,
+            )
+            result["final_check_disputable"] = final_disputable
+            result["final_diff"] = final_diff
+            # Set legacy aliases
+            result["second_check_disputable"] = final_disputable
+            result["second_diff"] = final_diff
+            
+            if final_disputable:
+                logger.info(f"✅ Final check still crosses threshold (diff: {final_diff}). Proceeding with dispute.")
+                result["should_dispute"] = True
+                
+                # Determine dispute category
+                if metrics.metric.lower() == "equality":
+                    if metrics.warning_threshold == 1.0:
+                        result["dispute_category"] = "warning"
+                    elif metrics.minor_threshold == 1.0:
+                        result["dispute_category"] = "minor"
+                    elif metrics.major_threshold == 1.0:
+                        result["dispute_category"] = "major"
                 else:
-                    logger.info(f"⚠️ Second check did NOT cross threshold (diff: {second_diff}). Dispute cancelled.")
+                    category = determine_dispute_category(
+                        diff=final_diff,
+                        category_thresholds={
+                            "major": metrics.major_threshold,
+                            "minor": metrics.minor_threshold,
+                            "warning": metrics.warning_threshold,
+                        },
+                    )
+                    if category is not None:
+                        result["dispute_category"] = category
             else:
-                logger.error("❌ Failed to fetch second trusted value. Cancelling dispute.")
+                logger.info(f"⚠️ Final check did NOT cross threshold (diff: {final_diff}). Dispute cancelled.")
+                
         except Exception as e:
-            logger.error(f"❌ Error fetching second trusted value: {e}. Cancelling dispute.")
+            logger.error(f"❌ Error during dispute verification: {e}. Cancelling dispute.")
 
     elif disputable and trusted_value_fetcher is None:
-        # Single-check logic for TRBBridge queries
+        # Single-check logic for TRBBridge queries (no fetcher available)
         logger.info(f"disputable: true, diff: {diff} (single-check mode)")
 
         # For equality metrics, determine dispute level based on which threshold is set to 1.0

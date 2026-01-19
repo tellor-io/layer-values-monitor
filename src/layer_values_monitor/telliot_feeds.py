@@ -1,10 +1,12 @@
 """Telliot Feeds helper functions."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from clamfig.base import Registry
 from eth_abi import decode
@@ -16,7 +18,13 @@ from telliot_feeds.queries.abi_query import AbiQuery
 from telliot_feeds.queries.json_query import JsonQuery
 from telliot_feeds.queries.query_catalog import query_catalog
 
+if TYPE_CHECKING:
+    from layer_values_monitor.config_watcher import ConfigWatcher
+
 logger = logging.getLogger(__name__)
+
+# Default check interval (3 minutes) - can be overridden by config
+DEFAULT_CHECK_INTERVAL = 180.0
 
 
 # =============================================================================
@@ -31,19 +39,31 @@ class CachedValue:
     fetch_time: float  # When the value was fetched (for logging)
 
 
+@dataclass
+class CacheResult:
+    """Result from cache lookup with staleness information."""
+    value: Any
+    timestamp: float
+    fetch_time: float
+    age_seconds: float
+    is_stale: bool  # True if cache is older than staleness threshold
+
+
 class PriceCache:
-    """Thread-safe price cache with TTL to reduce redundant API calls.
+    """Thread-safe price cache with configurable TTL to reduce redundant API calls.
     
     This cache stores trusted values by query_id with a configurable TTL.
     When multiple reports arrive for the same query_id within the TTL window,
     only one API call is made and the cached value is reused.
+    
+    Supports per-query TTL overrides via ConfigWatcher.
     """
     
-    def __init__(self, ttl_seconds: float = 30.0, max_size: int = 1000):
+    def __init__(self, ttl_seconds: float = DEFAULT_CHECK_INTERVAL, max_size: int = 1000):
         """Initialize the price cache.
         
         Args:
-            ttl_seconds: Time-to-live for cached values in seconds. Default 30s.
+            ttl_seconds: Default time-to-live for cached values in seconds.
             max_size: Maximum number of entries to store. Oldest entries are
                       evicted when this limit is reached.
         """
@@ -53,23 +73,64 @@ class PriceCache:
         self._hits = 0
         self._misses = 0
         self._lock = asyncio.Lock()
+        self._config_watcher: ConfigWatcher | None = None
     
-    def _is_valid(self, entry: CachedValue) -> bool:
+    def set_config_watcher(self, config_watcher: ConfigWatcher) -> None:
+        """Set the config watcher for per-query TTL lookups.
+        
+        Args:
+            config_watcher: ConfigWatcher instance for reading per-query settings
+        """
+        self._config_watcher = config_watcher
+    
+    def _get_ttl_for_query(self, query_id: str, query_type: str | None = None) -> float:
+        """Get the TTL for a specific query, checking config for overrides.
+        
+        Args:
+            query_id: The query ID
+            query_type: Optional query type for config lookup
+            
+        Returns:
+            TTL in seconds (per-query override or global default)
+        """
+        if self._config_watcher and query_type:
+            return self._config_watcher.get_check_interval(query_id, query_type)
+        return self._ttl
+    
+    def _get_staleness_threshold(self, query_id: str, query_type: str | None = None) -> float:
+        """Get the staleness threshold for a specific query.
+        
+        Args:
+            query_id: The query ID
+            query_type: Optional query type for config lookup
+            
+        Returns:
+            Staleness threshold in seconds
+        """
+        if self._config_watcher and query_type:
+            return self._config_watcher.get_staleness_threshold(query_id, query_type)
+        # Default: 3x the TTL
+        return self._ttl * 3
+    
+    def _is_valid(self, entry: CachedValue, ttl: float) -> bool:
         """Check if a cached entry is still valid (within TTL)."""
-        return (time.time() - entry.fetch_time) < self._ttl
+        return (time.time() - entry.fetch_time) < ttl
     
-    async def get(self, query_id: str) -> tuple[Any, float] | None:
+    async def get(self, query_id: str, query_type: str | None = None) -> tuple[Any, float] | None:
         """Get a cached value if it exists and is still valid.
         
         Args:
             query_id: The query ID to look up
+            query_type: Optional query type for per-query TTL lookup
             
         Returns:
             Tuple of (value, timestamp) if cache hit, None if miss or expired
         """
+        ttl = self._get_ttl_for_query(query_id, query_type)
+        
         async with self._lock:
             entry = self._cache.get(query_id)
-            if entry and self._is_valid(entry):
+            if entry and self._is_valid(entry, ttl):
                 self._hits += 1
                 return (entry.value, entry.timestamp)
             
@@ -79,6 +140,56 @@ class PriceCache:
             
             self._misses += 1
             return None
+    
+    async def get_with_staleness(
+        self, query_id: str, query_type: str | None = None
+    ) -> CacheResult | None:
+        """Get a cached value with staleness information.
+        
+        This method returns the cached value even if it's expired (for comparison),
+        along with information about whether it's stale (too old to be trusted).
+        
+        Args:
+            query_id: The query ID to look up
+            query_type: Optional query type for per-query TTL lookup
+            
+        Returns:
+            CacheResult with value and staleness info, or None if not in cache at all
+        """
+        staleness_threshold = self._get_staleness_threshold(query_id, query_type)
+        
+        async with self._lock:
+            entry = self._cache.get(query_id)
+            if entry is None:
+                self._misses += 1
+                return None
+            
+            self._hits += 1
+            age = time.time() - entry.fetch_time
+            is_stale = age > staleness_threshold
+            
+            return CacheResult(
+                value=entry.value,
+                timestamp=entry.timestamp,
+                fetch_time=entry.fetch_time,
+                age_seconds=age,
+                is_stale=is_stale,
+            )
+    
+    async def get_age(self, query_id: str) -> float | None:
+        """Get the age of a cached entry in seconds.
+        
+        Args:
+            query_id: The query ID to look up
+            
+        Returns:
+            Age in seconds, or None if not in cache
+        """
+        async with self._lock:
+            entry = self._cache.get(query_id)
+            if entry is None:
+                return None
+            return time.time() - entry.fetch_time
     
     async def set(self, query_id: str, value: Any, timestamp: float) -> None:
         """Store a value in the cache.
@@ -139,9 +250,9 @@ class PriceCache:
         }
 
 
-# Global price cache instance - 30 second TTL by default
+# Global price cache instance - uses DEFAULT_CHECK_INTERVAL (3 minutes)
 # This is shared across all inspection paths to maximize cache hits
-_price_cache = PriceCache(ttl_seconds=30.0)
+_price_cache = PriceCache(ttl_seconds=DEFAULT_CHECK_INTERVAL)
 
 
 def get_price_cache() -> PriceCache:
@@ -150,13 +261,27 @@ def get_price_cache() -> PriceCache:
 
 
 def set_cache_ttl(ttl_seconds: float) -> None:
-    """Set the cache TTL. Useful for testing or configuration.
+    """Set the global cache TTL. Useful for testing or configuration.
+    
+    Note: Per-query TTL overrides via ConfigWatcher take precedence.
     
     Args:
         ttl_seconds: New TTL value in seconds
     """
     global _price_cache
     _price_cache._ttl = ttl_seconds
+
+
+def initialize_cache_with_config(config_watcher: ConfigWatcher) -> None:
+    """Initialize the price cache with config watcher for per-query TTL support.
+    
+    Args:
+        config_watcher: ConfigWatcher instance
+    """
+    global _price_cache
+    _price_cache.set_config_watcher(config_watcher)
+    _price_cache._ttl = config_watcher.get_check_interval()
+    logger.info(f"Price cache initialized with TTL: {_price_cache._ttl}s")
 
 
 def get_query_from_data(query_data: bytes) -> AbiQuery | JsonQuery | None:
@@ -265,7 +390,8 @@ async def fetch_value_cached(
     feed: DataFeed, 
     query_id: str, 
     logger_instance: logging.Logger | None = None,
-    force_refresh: bool = False
+    force_refresh: bool = False,
+    query_type: str | None = None,
 ) -> OptionalDataPoint:
     """Fetch the value from telliot-feeds with caching to reduce API calls.
     
@@ -277,6 +403,7 @@ async def fetch_value_cached(
         query_id: The query ID (used as cache key)
         logger_instance: Optional logger for cache hit/miss logging
         force_refresh: If True, bypass cache and fetch fresh value
+        query_type: Optional query type for per-query TTL lookup
         
     Returns:
         OptionalDataPoint tuple (value, timestamp) or None on error
@@ -286,7 +413,7 @@ async def fetch_value_cached(
     
     # Check cache first (unless force_refresh)
     if not force_refresh:
-        cached = await cache.get(query_id)
+        cached = await cache.get(query_id, query_type)
         if cached is not None:
             log.debug(f"💾 Cache HIT for {query_id[:16]}... (value: {cached[0]})")
             return cached
@@ -299,7 +426,8 @@ async def fetch_value_cached(
         value, timestamp = result
         # Store in cache
         await cache.set(query_id, value, timestamp)
-        log.debug(f"💾 Cached value for {query_id[:16]}... (TTL: {cache._ttl}s)")
+        ttl = cache._get_ttl_for_query(query_id, query_type)
+        log.debug(f"💾 Cached value for {query_id[:16]}... (TTL: {ttl}s)")
     
     return result
 
