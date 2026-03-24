@@ -51,6 +51,7 @@ staleness_alert_multiplier = 3  # Alert if cache is older than check_interval * 
 
     spotprice = { metric = "percentage", description = "Price feeds", handler = "telliot_feeds" }
     trbbridge = { metric = "equality", description = "TRB bridge reports", handler = "trb_bridge" }
+    trbbridgev2 = { metric = "equality", description = "TRB bridge v2 reports", handler = "trb_bridge" }
     evmcall = { metric = "equality", description = "EVM call reports", handler = "evm_call" }
 
 # =============================================================================
@@ -79,6 +80,12 @@ staleness_alert_multiplier = 3  # Alert if cache is older than check_interval * 
     [queries.trbbridge.defaults]
     # Uses equality defaults from global_defaults
     # Configure specific TRB bridge query overrides here if needed
+
+[queries.trbbridgev2]
+
+    [queries.trbbridgev2.defaults]
+    # Uses equality defaults from global_defaults
+    # Configure specific TRB bridge v2 query overrides here if needed
 
 [queries.evmcall]
 

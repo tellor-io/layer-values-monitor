@@ -599,8 +599,8 @@ async def inspect_reports(
         )
     elif query_type.lower() == "evmcall":
         return await inspect_evmcall_path(reports, disputes_q, query_id, query_data, metrics, logger)
-    elif query_type.lower() == "trbbridge":
-        return await inspect_trbbridge_path(reports, disputes_q, query_id, metrics, logger)
+    elif query_type.lower() in ("trbbridge", "trbbridgev2"):
+        return await inspect_trbbridge_path(reports, disputes_q, query_id, metrics, logger, query_type=query_type)
     else:
         logger.error(f"❌ No inspection path defined for query type: {query_type}")
         return None
@@ -858,13 +858,15 @@ async def inspect_trbbridge_path(
     query_id: str,
     metrics: Metrics,
     logger: logging,
+    query_type: str = "trbbridge",
 ) -> None:
-    """TRBBridge inspection path."""
-    logger.info(f"🌉 TRBBridge inspection - QueryID: {query_id[:16]}...")
-    logger.info(f"🔎 Inspecting {len(reports)} TRBBridge report(s)...")
+    """TRBBridge/TRBBridgeV2 inspection path."""
+    label = query_type if query_type else "TRBBridge"
+    logger.info(f"🌉 {label} inspection - QueryID: {query_id[:16]}...")
+    logger.info(f"🔎 Inspecting {len(reports)} {label} report(s)...")
 
-    # Call existing implementation
-    return await inspect_trbbridge_reports(reports, disputes_q, query_id, metrics, logger)
+    env_var = "TRBBRIDGEV2_CONTRACT_ADDRESS" if query_type.lower() == "trbbridgev2" else "TRBBRIDGE_CONTRACT_ADDRESS"
+    return await inspect_trbbridge_reports(reports, disputes_q, query_id, metrics, logger, contract_address_env=env_var)
 
 
 async def new_reports_queue_handler(
@@ -1458,8 +1460,9 @@ async def inspect_trbbridge_reports(
     query_id: str,
     metrics: Metrics,
     logger: logging,
+    contract_address_env: str = "TRBBRIDGE_CONTRACT_ADDRESS",
 ) -> None:
-    """Inspect reports for TRBBridge query type and check if they are disputable.
+    """Inspect reports for TRBBridge/TRBBridgeV2 query type and check if they are disputable.
 
     For TRBBridge reports, we decode the deposit ID from queryData, fetch the deposit details
     from the contract's deposits mapping, and compare against the reported values.
@@ -1469,16 +1472,14 @@ async def inspect_trbbridge_reports(
     query_id: the hash of the query data used to fetch the value.
     metrics: the metrics object for the query id
     logger: the logger object
+    contract_address_env: env var name for the bridge contract address
     """
-    # Get TRBBridge configuration from environment variables, default to mainnet if not set
-    contract_address = os.getenv("TRBBRIDGE_CONTRACT_ADDRESS")
+    contract_address = os.getenv(contract_address_env)
     chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
-    # Note: rpc_url is optional - get_trb_bridge_trusted_value will use unified connection manager
-    # BRIDGE_CHAIN_RPC_URL is deprecated in favor of EVMCALL_RPC_URL_{chain_id}
     rpc_url = None  # Let trb_bridge.py handle RPC URL lookup via unified manager
 
     if not contract_address:
-        logger.error("TRBBRIDGE_CONTRACT_ADDRESS environment variable is not set")
+        logger.error(f"{contract_address_env} environment variable is not set")
         return None
 
     logger.info(f"TRBBridge contract address: {contract_address}")

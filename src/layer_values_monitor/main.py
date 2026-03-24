@@ -195,7 +195,7 @@ async def start() -> None:
 
     # Test config methods (debug only)
     logger.info("CONFIG DEBUG: Testing config methods...")
-    test_query_types = ["SpotPrice", "TrbBridge", "EvmCall", "UnknownType"]
+    test_query_types = ["SpotPrice", "TRBBridge", "TRBBridgeV2", "EVMCall", "UnknownType"]
     for query_type in test_query_types:
         is_supported = config_watcher.is_supported_query_type(query_type)
         logger.info(f"CONFIG DEBUG: - is_supported_query_type('{query_type}'): {is_supported}")

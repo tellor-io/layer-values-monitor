@@ -57,8 +57,9 @@ uv run layer-values-monitor
   - Example: `EVM_RPC_URLS_137="https://polygonrpc1.com"`
 
 ### TRB Bridge Monitoring
-- `TRBBRIDGE_CONTRACT_ADDRESS` - Bridge contract address
-- `TRBBRIDGE_CHAIN_ID` - Bridge chain ID (default: `11155111`)
+- `TRBBRIDGE_CONTRACT_ADDRESS` - Bridge contract address (TRBBridge)
+- `TRBBRIDGEV2_CONTRACT_ADDRESS` - Bridge contract address (TRBBridgeV2)
+- `TRBBRIDGE_CHAIN_ID` - Bridge chain ID, shared by both versions (default: `11155111`)
 
 ### Saga Guardian (Contract Pausing)
 - `SAGA_RPC_URLS` - Comma-separated Saga RPC URLs
