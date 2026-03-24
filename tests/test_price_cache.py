@@ -2,10 +2,7 @@
 
 import asyncio
 import time
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from layer_values_monitor.telliot_feeds import (
     CacheResult,
@@ -15,6 +12,8 @@ from layer_values_monitor.telliot_feeds import (
     initialize_cache_with_config,
     set_cache_ttl,
 )
+
+import pytest
 
 
 class TestPriceCache:
@@ -144,11 +143,11 @@ class TestPriceCache:
         query_id = "test_query_staleness"
         value = 100.5
         timestamp = time.time()
-        
+
         await cache.set(query_id, value, timestamp)
-        
+
         result = await cache.get_with_staleness(query_id)
-        
+
         assert result is not None
         assert isinstance(result, CacheResult)
         assert result.value == value
@@ -160,15 +159,15 @@ class TestPriceCache:
     async def test_get_with_staleness_detects_stale_cache(self, cache):
         """Test that get_with_staleness correctly identifies stale cache."""
         query_id = "test_query_stale"
-        
+
         # Set cache with TTL of 1 second, staleness threshold is 3x = 3 seconds
         await cache.set(query_id, 100.5, time.time())
-        
+
         # Wait for cache to become stale (> 3 seconds)
         await asyncio.sleep(3.5)
-        
+
         result = await cache.get_with_staleness(query_id)
-        
+
         assert result is not None
         assert result.is_stale is True
         assert result.age_seconds >= 3.0
@@ -184,11 +183,11 @@ class TestPriceCache:
         """Test that get_age returns the correct age in seconds."""
         query_id = "test_query_age"
         await cache.set(query_id, 100.5, time.time())
-        
+
         await asyncio.sleep(0.5)
-        
+
         age = await cache.get_age(query_id)
-        
+
         assert age is not None
         assert 0.4 < age < 1.0  # Should be around 0.5 seconds
 
@@ -223,22 +222,22 @@ class TestPerQueryTTL:
         """Test that per-query TTL overrides are respected."""
         query_id = "test_query_custom_ttl"
         query_type = "spotprice"
-        
+
         # Configure mock to return custom TTL for this query
         def custom_interval(qid=None, qtype=None):
             if qid == query_id and qtype == query_type:
                 return 60.0  # 60 second TTL for this query
             return 180.0  # Default
-        
+
         mock_config_watcher.get_check_interval.side_effect = custom_interval
-        
+
         # Set value
         await cache_with_config.set(query_id, 100.5, time.time())
-        
+
         # Should be valid immediately
         result = await cache_with_config.get(query_id, query_type)
         assert result is not None
-        
+
         # Verify the custom TTL was used
         ttl = cache_with_config._get_ttl_for_query(query_id, query_type)
         assert ttl == 60.0
@@ -246,7 +245,7 @@ class TestPerQueryTTL:
     def test_ttl_fallback_without_config_watcher(self):
         """Test that TTL falls back to default without config watcher."""
         cache = PriceCache(ttl_seconds=180.0)
-        
+
         ttl = cache._get_ttl_for_query("any_query", "spotprice")
         assert ttl == 180.0  # Should use default
 
@@ -361,13 +360,13 @@ class TestGlobalCache:
         """Test initializing cache with config watcher."""
         mock_config = MagicMock()
         mock_config.get_check_interval.return_value = 120.0
-        
+
         original_ttl = get_price_cache()._ttl
         original_config = get_price_cache()._config_watcher
-        
+
         try:
             initialize_cache_with_config(mock_config)
-            
+
             cache = get_price_cache()
             assert cache._config_watcher is mock_config
             assert cache._ttl == 120.0
@@ -390,21 +389,21 @@ class TestCacheWithQueryType:
         """Test that fetch_value_cached passes query_type to cache."""
         cache = get_price_cache()
         await cache.clear()
-        
+
         query_id = f"test_query_type_{time.time()}"
         query_type = "spotprice"
         mock_feed = MagicMock()
         mock_feed.source.fetch_new_datapoint = AsyncMock(return_value=(100.5, time.time()))
-        
+
         # First call with query_type
         result = await fetch_value_cached(mock_feed, query_id, mock_logger, query_type=query_type)
-        
+
         assert result is not None
         assert result[0] == 100.5
-        
+
         # Second call should hit cache
         result2 = await fetch_value_cached(mock_feed, query_id, mock_logger, query_type=query_type)
-        
+
         # Should only have called API once
         assert mock_feed.source.fetch_new_datapoint.call_count == 1
         assert result[0] == result2[0]

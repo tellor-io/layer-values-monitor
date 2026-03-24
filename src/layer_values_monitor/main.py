@@ -178,10 +178,11 @@ async def start() -> None:
 
     # Initialize price cache with config (for per-query TTL support)
     initialize_cache_with_config(config_watcher)
-    
+
     # Override check interval if provided via command line
     if args.check_interval is not None:
         from layer_values_monitor.telliot_feeds import set_cache_ttl
+
         set_cache_ttl(float(args.check_interval))
         console_logger.info(f"✅ Check interval override: {args.check_interval}s")
     else:

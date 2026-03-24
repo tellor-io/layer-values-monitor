@@ -49,7 +49,7 @@ def metrics():
 @pytest.mark.asyncio
 async def test_triple_check_all_cross_threshold(sample_report, metrics):
     """Test that dispute proceeds when all checks cross threshold.
-    
+
     Flow: cached (90.0) → immediate refresh (88.0) → final (87.0) → dispute
     """
     from layer_values_monitor.monitor import inspect
@@ -57,9 +57,10 @@ async def test_triple_check_all_cross_threshold(sample_report, metrics):
     # Setup
     reported_value = 100.0
     cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    
+
     # Fetcher returns different values for immediate refresh and final check
     fetch_call_count = 0
+
     async def mock_fetcher():
         nonlocal fetch_call_count
         fetch_call_count += 1
@@ -111,7 +112,7 @@ async def test_triple_check_all_cross_threshold(sample_report, metrics):
 @pytest.mark.asyncio
 async def test_immediate_refresh_clears_dispute(sample_report, metrics):
     """Test that dispute is cancelled when immediate refresh doesn't cross threshold.
-    
+
     This tests the case where the cached value was stale and the fresh value is fine.
     Flow: cached (90.0) → immediate refresh (99.5) → NO 10s delay, NO dispute
     """
@@ -120,9 +121,10 @@ async def test_immediate_refresh_clears_dispute(sample_report, metrics):
     # Setup
     reported_value = 100.0
     cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    
+
     # Fetcher returns value that doesn't cross threshold
     fetch_call_count = 0
+
     async def mock_fetcher():
         nonlocal fetch_call_count
         fetch_call_count += 1
@@ -161,7 +163,7 @@ async def test_immediate_refresh_clears_dispute(sample_report, metrics):
 @pytest.mark.asyncio
 async def test_final_check_clears_dispute(sample_report, metrics):
     """Test that dispute is cancelled when final check doesn't cross threshold.
-    
+
     Flow: cached (90.0) → immediate refresh (88.0) → 10s → final (99.5) → NO dispute
     """
     from layer_values_monitor.monitor import inspect
@@ -169,9 +171,10 @@ async def test_final_check_clears_dispute(sample_report, metrics):
     # Setup
     reported_value = 100.0
     cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    
+
     # Fetcher returns bad value first, then good value
     fetch_call_count = 0
+
     async def mock_fetcher():
         nonlocal fetch_call_count
         fetch_call_count += 1
@@ -302,6 +305,7 @@ async def test_fetcher_error_on_final_check_cancels_dispute(sample_report, metri
 
     # Mock fetcher that succeeds first time, fails second time
     fetch_call_count = 0
+
     async def mock_fetcher():
         nonlocal fetch_call_count
         fetch_call_count += 1

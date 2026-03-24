@@ -41,7 +41,9 @@ class ConfigWatcher:
         cache_config = data.get("cache", {})
         self.cache_settings = {
             "check_interval": float(cache_config.get("check_interval", DEFAULT_CHECK_INTERVAL)),
-            "staleness_alert_multiplier": float(cache_config.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)),
+            "staleness_alert_multiplier": float(
+                cache_config.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)
+            ),
         }
 
         # Normalize all keys to lowercase once
@@ -60,7 +62,9 @@ class ConfigWatcher:
         self._validate_config()
         self.last_modified_time = current_mtime
         logger.info(f"Configuration reloaded at {time.strftime('%H:%M:%S')}")
-        logger.info(f"Cache settings: check_interval={self.cache_settings['check_interval']}s, staleness_multiplier={self.cache_settings['staleness_alert_multiplier']}")
+        check_iv = self.cache_settings["check_interval"]
+        stale_mult = self.cache_settings["staleness_alert_multiplier"]
+        logger.info(f"Cache settings: check_interval={check_iv}s, staleness_multiplier={stale_mult}")
         return True
 
     def get_query_type_info(self, query_type: str) -> dict | None:
@@ -104,6 +108,7 @@ class ConfigWatcher:
 
         Returns:
             Check interval in seconds
+
         """
         # Try per-query override first
         if query_id and query_type:
@@ -123,6 +128,7 @@ class ConfigWatcher:
 
         Returns:
             Staleness threshold in seconds (check_interval * staleness_multiplier)
+
         """
         check_interval = self.get_check_interval(query_id, query_type)
         multiplier = self.cache_settings.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)
