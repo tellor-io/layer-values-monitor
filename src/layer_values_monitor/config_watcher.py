@@ -75,6 +75,11 @@ class ConfigWatcher:
         """Check if query type is supported."""
         return query_type.lower() in self.query_types
 
+    def is_deprecated_query_type(self, query_type: str) -> bool:
+        """Check if query type is marked as deprecated in config."""
+        query_type_info = self.query_types.get(query_type.lower())
+        return bool(query_type_info.get("deprecated")) if query_type_info else False
+
     def uses_telliot_catalog(self, query_type: str) -> bool:
         """Check if query type uses telliot catalog for trusted values."""
         query_type_info = self.query_types.get(query_type.lower())

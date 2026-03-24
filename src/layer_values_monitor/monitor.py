@@ -21,7 +21,7 @@ from layer_values_monitor.custom_types import (
     Reporter,
     ReporterQueryResponse,
 )
-from layer_values_monitor.discord import generic_alert
+from layer_values_monitor.discord import deprecated_query_type_alert, generic_alert
 from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
@@ -581,6 +581,19 @@ async def inspect_reports(
             description=f"⚠️ **QUERY TYPE NOT IN LVM CONFIGS ({query_type.upper()})**",
             try_decode=False,
         )
+        return None
+
+    # Check if query type is deprecated (e.g., TRBBridge V1 after V2 upgrade)
+    if config_watcher.is_deprecated_query_type(query_type):
+        logger.warning(f"🚨 Deprecated query type '{query_type}' report detected!")
+        for report in reports:
+            deprecated_query_type_alert(
+                query_type=query_type,
+                query_id=query_id,
+                report_value=report.value,
+                reporter=report.reporter,
+                tx_hash=report.tx_hash,
+            )
         return None
 
     # Get metrics configuration using new method

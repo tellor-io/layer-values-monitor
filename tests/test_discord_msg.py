@@ -1,6 +1,13 @@
 """Test Discord alert message formatting for different report types."""
 
-from layer_values_monitor.discord import build_alert_message, format_difference, format_values
+from unittest.mock import patch
+
+from layer_values_monitor.discord import (
+    build_alert_message,
+    deprecated_query_type_alert,
+    format_difference,
+    format_values,
+)
 from layer_values_monitor.telliot_feeds import extract_query_info
 
 
@@ -385,3 +392,27 @@ def test_build_alert_message_improperly_configured():
     assert "**Disputer:** alice improperly configured, no dispute sent" in msg
     assert "**Asset:** ETH/USD" in msg
     assert "**QueryType:** SpotPrice" in msg
+
+
+@patch("layer_values_monitor.discord.send_discord_msg")
+def test_deprecated_query_type_alert(mock_send):
+    """Test that deprecated_query_type_alert formats and sends correctly."""
+    deprecated_query_type_alert(
+        query_type="TRBBridge",
+        query_id="0xabc123",
+        report_value="0xdeadbeef",
+        reporter="layer1reporter123",
+        tx_hash="AABB1234",
+    )
+
+    mock_send.assert_called_once()
+    (msg,) = mock_send.call_args.args
+    kwargs = mock_send.call_args.kwargs
+
+    assert "**QueryType:** TRBBridge" in msg
+    assert "**QueryId:** 0xabc123" in msg
+    assert "**Value:** 0xdeadbeef" in msg
+    assert "**Reporter:** layer1reporter123" in msg
+    assert "**Tx Hash:** AABB1234" in msg
+    assert "DEPRECATED" in kwargs["description"]
+    assert "TRBBRIDGE" in kwargs["description"]

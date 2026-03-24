@@ -52,6 +52,9 @@ staleness_alert_multiplier = 3  # Alert if cache is older than check_interval * 
     spotprice = { metric = "percentage", description = "Price feeds", handler = "telliot_feeds" }
     trbbridge = { metric = "equality", description = "TRB bridge reports", handler = "trb_bridge" }
     trbbridgev2 = { metric = "equality", description = "TRB bridge v2 reports", handler = "trb_bridge" }
+    # Set deprecated = true on a query type to skip inspection and send a Discord alert instead.
+    # Useful after bridge upgrades (e.g., trbbridge after migrating to trbbridgev2):
+    #   trbbridge = { metric = "equality", ..., deprecated = true }
     evmcall = { metric = "equality", description = "EVM call reports", handler = "evm_call" }
 
 # =============================================================================
