@@ -1618,6 +1618,12 @@ async def perform_dispute_verification(
             result["immediate_diff"] = immediate_diff
 
             if not immediate_disputable:
+                # Reuse the existing "second check" alert fields so operators can see
+                # the refreshed trusted value that cleared the dispute.
+                result["second_trusted_value"] = result["immediate_refresh_value"]
+                result["second_trusted_time"] = result["immediate_refresh_time"]
+                result["second_check_disputable"] = immediate_disputable
+                result["second_diff"] = immediate_diff
                 logger.info(
                     f"⚠️ Fresh check did NOT cross threshold (diff: {immediate_diff})."
                     " Dispute cancelled - likely stale cache."

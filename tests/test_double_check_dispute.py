@@ -158,6 +158,11 @@ async def test_immediate_refresh_clears_dispute(sample_report, metrics):
 
     # Alert should still be sent (alertable but not disputable after refresh)
     mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    assert "First Trusted Value" in alert_msg
+    assert "Second Trusted Value" in alert_msg
+    assert str(cached_trusted_value) in alert_msg
+    assert "99.5" in alert_msg
 
 
 @pytest.mark.asyncio
