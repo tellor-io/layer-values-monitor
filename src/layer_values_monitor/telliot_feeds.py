@@ -280,21 +280,27 @@ class PriceCache:
             if self._in_flight.get(query_id) is task:
                 del self._in_flight[query_id]
 
-    def get_stats(self) -> dict[str, Any]:
-        """Get cache statistics.
+    async def get_stats(self) -> dict[str, Any]:
+        """Get cache statistics from a locked snapshot.
 
         Returns:
             Dict with hits, misses, hit_rate, and size
 
         """
-        total = self._hits + self._misses
-        hit_rate = (self._hits / total * 100) if total > 0 else 0.0
+        async with self._lock:
+            hits = self._hits
+            misses = self._misses
+            size = len(self._cache)
+            ttl = self._ttl
+
+        total = hits + misses
+        hit_rate = (hits / total * 100) if total > 0 else 0.0
         return {
-            "hits": self._hits,
-            "misses": self._misses,
+            "hits": hits,
+            "misses": misses,
             "hit_rate": f"{hit_rate:.1f}%",
-            "size": len(self._cache),
-            "ttl_seconds": self._ttl,
+            "size": size,
+            "ttl_seconds": ttl,
         }
 
 

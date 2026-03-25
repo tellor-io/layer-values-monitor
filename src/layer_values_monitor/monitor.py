@@ -906,7 +906,7 @@ async def new_reports_queue_handler(
         # Periodic cache statistics logging
         reports_processed += len(new_reports)
         if reports_processed >= cache_log_interval:
-            cache_stats = get_price_cache().get_stats()
+            cache_stats = await get_price_cache().get_stats()
             logger.info(
                 f"💾 Price cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
                 f"{cache_stats['hit_rate']} hit rate, {cache_stats['size']} entries cached"

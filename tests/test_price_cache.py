@@ -107,12 +107,13 @@ class TestPriceCache:
             await asyncio.sleep(0.01)  # Small delay to ensure different fetch times
 
         # Cache should have evicted some entries
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert stats["size"] <= 10
 
-    def test_cache_stats(self, cache):
+    @pytest.mark.asyncio
+    async def test_cache_stats(self, cache):
         """Test cache statistics."""
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert "hits" in stats
         assert "misses" in stats
         assert "hit_rate" in stats
@@ -132,7 +133,7 @@ class TestPriceCache:
         await cache.get(query_id)
         await cache.get(query_id)
 
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert stats["hits"] == 2
         assert stats["misses"] == 1
         assert "66.7%" in stats["hit_rate"]
