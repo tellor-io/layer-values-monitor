@@ -166,6 +166,118 @@ async def test_immediate_refresh_clears_dispute(sample_report, metrics):
 
 
 @pytest.mark.asyncio
+async def test_zero_cached_trusted_value_sends_alert_and_skips_dispute(sample_report, metrics):
+    """Test that a zero cached trusted value sends an alert and skips inspection."""
+    from layer_values_monitor.monitor import inspect
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.type = "SpotPrice"
+
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        await inspect(
+            sample_report,
+            100.0,
+            0.0,
+            disputes_q,
+            metrics,
+            mock_logger,
+            query=mock_query,
+            trusted_value_fetcher=None,
+        )
+
+    assert disputes_q.empty()
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert sample_report.query_id in alert_msg
+    assert "Trusted value for" in alert_msg
+    assert "was 0" in alert_msg
+    assert "TRUSTED VALUE WAS 0" in alert_desc
+
+
+@pytest.mark.asyncio
+async def test_zero_immediate_refresh_value_sends_alert_and_cancels_dispute(sample_report, metrics):
+    """Test that a zero immediate refresh value sends an alert and cancels the dispute."""
+    from layer_values_monitor.monitor import inspect
+
+    async def mock_fetcher():
+        return (0.0, 1234567890)
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.type = "SpotPrice"
+
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        with patch("layer_values_monitor.monitor.asyncio.sleep") as mock_sleep:
+            await inspect(
+                sample_report,
+                100.0,
+                90.0,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+            mock_sleep.assert_not_called()
+
+    assert disputes_q.empty()
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert sample_report.query_id in alert_msg
+    assert "Trusted value for" in alert_msg
+    assert "was 0" in alert_msg
+    assert "TRUSTED VALUE WAS 0" in alert_desc
+
+
+@pytest.mark.asyncio
+async def test_zero_final_refresh_value_sends_alert_and_cancels_dispute(sample_report, metrics):
+    """Test that a zero final refresh value sends an alert and cancels the dispute."""
+    from layer_values_monitor.monitor import inspect
+
+    fetch_call_count = 0
+
+    async def mock_fetcher():
+        nonlocal fetch_call_count
+        fetch_call_count += 1
+        if fetch_call_count == 1:
+            return (88.0, 1234567890)
+        return (0.0, 1234567891)
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.type = "SpotPrice"
+
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        with patch("layer_values_monitor.monitor.asyncio.sleep", return_value=None):
+            await inspect(
+                sample_report,
+                100.0,
+                90.0,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+
+    assert disputes_q.empty()
+    assert fetch_call_count == 2
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert sample_report.query_id in alert_msg
+    assert "Trusted value for" in alert_msg
+    assert "was 0" in alert_msg
+    assert "TRUSTED VALUE WAS 0" in alert_desc
+
+
+@pytest.mark.asyncio
 async def test_final_check_clears_dispute(sample_report, metrics):
     """Test that dispute is cancelled when final check doesn't cross threshold.
 

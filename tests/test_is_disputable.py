@@ -38,6 +38,26 @@ def test_percentage_metric(reported_value, trusted_value, alert_threshold, dispu
         assert abs(result[2] - expected[2]) < 1e-10
 
 
+def test_percentage_metric_handles_zero_trusted_value():
+    """Test that zero trusted values are rejected for percentage metrics."""
+    zero_logger = MagicMock(spec=logging.Logger)
+
+    result = is_disputable("percentage", 0.1, 0.2, 100, 0, zero_logger)
+
+    assert result == (None, None, None)
+    zero_logger.error.assert_called_once()
+
+
+def test_percentage_metric_handles_matching_zero_values():
+    """Test that matching zero values are also rejected for percentage metrics."""
+    zero_logger = MagicMock(spec=logging.Logger)
+
+    result = is_disputable("percentage", 0.1, 0.2, 0, 0, zero_logger)
+
+    assert result == (None, None, None)
+    zero_logger.error.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "reported_value,trusted_value,expected",
     [
