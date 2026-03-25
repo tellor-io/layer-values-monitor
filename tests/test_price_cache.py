@@ -249,6 +249,27 @@ class TestPerQueryTTL:
         ttl = cache._get_ttl_for_query("any_query", "spotprice")
         assert ttl == 180.0  # Should use default
 
+    def test_global_ttl_uses_latest_config_without_query_type(self, cache_with_config, mock_config_watcher):
+        """Test that default TTL follows live config changes when no override is set."""
+        assert cache_with_config._get_ttl_for_query("any_query") == 180.0
+        assert cache_with_config._get_staleness_threshold("any_query") == 540.0
+
+        mock_config_watcher.get_check_interval.return_value = 60.0
+        mock_config_watcher.get_staleness_threshold.return_value = 180.0
+
+        assert cache_with_config._get_ttl_for_query("any_query") == 60.0
+        assert cache_with_config._get_staleness_threshold("any_query") == 180.0
+
+    def test_ttl_override_beats_reloaded_config_defaults(self, cache_with_config, mock_config_watcher):
+        """Test that explicit TTL overrides are not replaced by config defaults."""
+        cache_with_config._ttl = 45.0
+        cache_with_config._ttl_override = 45.0
+        mock_config_watcher.get_check_interval.return_value = 60.0
+        mock_config_watcher.get_staleness_threshold.return_value = 180.0
+
+        assert cache_with_config._get_ttl_for_query("any_query") == 45.0
+        assert cache_with_config._get_staleness_threshold("any_query") == 135.0
+
 
 class TestFetchValueCached:
     """Test cases for fetch_value_cached function."""
@@ -389,12 +410,14 @@ class TestGlobalCache:
     def test_set_cache_ttl(self):
         """Test setting the cache TTL."""
         original_ttl = get_price_cache()._ttl
+        original_override = get_price_cache()._ttl_override
         try:
             set_cache_ttl(60.0)
             assert get_price_cache()._ttl == 60.0
         finally:
-            # Restore original TTL
-            set_cache_ttl(original_ttl)
+            # Restore original TTL state without forcing a new override.
+            get_price_cache()._ttl = original_ttl
+            get_price_cache()._ttl_override = original_override
 
     def test_initialize_cache_with_config(self):
         """Test initializing cache with config watcher."""
@@ -403,8 +426,10 @@ class TestGlobalCache:
 
         original_ttl = get_price_cache()._ttl
         original_config = get_price_cache()._config_watcher
+        original_override = get_price_cache()._ttl_override
 
         try:
+            get_price_cache()._ttl_override = None
             initialize_cache_with_config(mock_config)
 
             cache = get_price_cache()
@@ -414,6 +439,7 @@ class TestGlobalCache:
             # Restore original state
             get_price_cache()._ttl = original_ttl
             get_price_cache()._config_watcher = original_config
+            get_price_cache()._ttl_override = original_override
 
 
 class TestCacheWithQueryType:

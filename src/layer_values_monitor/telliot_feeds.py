@@ -79,6 +79,7 @@ class PriceCache:
         self._lock = asyncio.Lock()
         self._in_flight: dict[str, asyncio.Task[OptionalDataPoint]] = {}
         self._config_watcher: ConfigWatcher | None = None
+        self._ttl_override: float | None = None
 
     def set_config_watcher(self, config_watcher: ConfigWatcher) -> None:
         """Set the config watcher for per-query TTL lookups.
@@ -100,8 +101,11 @@ class PriceCache:
             TTL in seconds (per-query override or global default)
 
         """
-        if self._config_watcher and query_type:
-            return self._config_watcher.get_check_interval(query_id, query_type)
+        if self._config_watcher:
+            if query_type:
+                return self._config_watcher.get_check_interval(query_id, query_type)
+            if self._ttl_override is None:
+                return self._config_watcher.get_check_interval()
         return self._ttl
 
     def _get_staleness_threshold(self, query_id: str, query_type: str | None = None) -> float:
@@ -115,8 +119,11 @@ class PriceCache:
             Staleness threshold in seconds
 
         """
-        if self._config_watcher and query_type:
-            return self._config_watcher.get_staleness_threshold(query_id, query_type)
+        if self._config_watcher:
+            if query_type:
+                return self._config_watcher.get_staleness_threshold(query_id, query_type)
+            if self._ttl_override is None:
+                return self._config_watcher.get_staleness_threshold()
         # Default: 3x the TTL
         return self._ttl * 3
 
@@ -312,6 +319,7 @@ def set_cache_ttl(ttl_seconds: float) -> None:
     """
     global _price_cache
     _price_cache._ttl = ttl_seconds
+    _price_cache._ttl_override = ttl_seconds
 
 
 def initialize_cache_with_config(config_watcher: ConfigWatcher) -> None:
@@ -323,7 +331,8 @@ def initialize_cache_with_config(config_watcher: ConfigWatcher) -> None:
     """
     global _price_cache
     _price_cache.set_config_watcher(config_watcher)
-    _price_cache._ttl = config_watcher.get_check_interval()
+    if _price_cache._ttl_override is None:
+        _price_cache._ttl = config_watcher.get_check_interval()
     logger.info(f"Price cache initialized with TTL: {_price_cache._ttl}s")
 
 
