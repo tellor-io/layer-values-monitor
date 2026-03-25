@@ -300,6 +300,46 @@ class TestFetchValueCached:
         assert result1[0] == result2[0]
 
     @pytest.mark.asyncio
+    async def test_concurrent_misses_share_one_api_call(self, mock_logger):
+        """Test that concurrent cache misses share a single API fetch."""
+        cache = get_price_cache()
+        await cache.clear()
+
+        query_id = f"test_query_concurrent_{time.time()}"
+        mock_feed = MagicMock()
+
+        async def slow_fetch():
+            await asyncio.sleep(0.05)
+            return (100.5, time.time())
+
+        mock_feed.source.fetch_new_datapoint = AsyncMock(side_effect=slow_fetch)
+
+        results = await asyncio.gather(*[fetch_value_cached(mock_feed, query_id, mock_logger) for _ in range(5)])
+
+        assert mock_feed.source.fetch_new_datapoint.call_count == 1
+        assert all(result == results[0] for result in results)
+
+    @pytest.mark.asyncio
+    async def test_failed_shared_fetch_can_retry(self, mock_logger):
+        """Test that a failed shared fetch clears in-flight state for retries."""
+        cache = get_price_cache()
+        await cache.clear()
+
+        query_id = f"test_query_retry_{time.time()}"
+        feed = MagicMock()
+
+        with patch(
+            "layer_values_monitor.telliot_feeds.fetch_value",
+            new=AsyncMock(side_effect=[None, (100.5, 1234567890.0)]),
+        ) as mock_fetch_value:
+            first_results = await asyncio.gather(*[fetch_value_cached(feed, query_id, mock_logger) for _ in range(2)])
+            second_result = await fetch_value_cached(feed, query_id, mock_logger)
+
+        assert first_results == [None, None]
+        assert second_result == (100.5, 1234567890.0)
+        assert mock_fetch_value.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_force_refresh_bypasses_cache(self, mock_logger):
         """Test that force_refresh bypasses the cache."""
         # Clear cache first
