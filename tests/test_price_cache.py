@@ -180,6 +180,19 @@ class TestPriceCache:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_get_with_staleness_does_not_change_cache_stats(self, cache):
+        """Test that staleness inspection does not affect hit/miss counters."""
+        query_id = "test_query_stats"
+        await cache.set(query_id, 100.5, time.time())
+
+        await cache.get_with_staleness(query_id)
+        await cache.get_with_staleness("missing_query")
+
+        stats = await cache.get_stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+
+    @pytest.mark.asyncio
     async def test_get_age_returns_correct_age(self, cache):
         """Test that get_age returns the correct age in seconds."""
         query_id = "test_query_age"

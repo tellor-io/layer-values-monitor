@@ -162,6 +162,7 @@ class PriceCache:
 
         This method returns the cached value even if it's expired (for comparison),
         along with information about whether it's stale (too old to be trusted).
+        It is a diagnostic read, so it does not affect hit/miss statistics.
 
         Args:
             query_id: The query ID to look up
@@ -176,10 +177,8 @@ class PriceCache:
         async with self._lock:
             entry = self._cache.get(query_id)
             if entry is None:
-                self._misses += 1
                 return None
 
-            self._hits += 1
             age = time.time() - entry.fetch_time
             is_stale = age > staleness_threshold
 
