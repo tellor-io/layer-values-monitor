@@ -296,7 +296,9 @@ class TestInspectAggregateReport:
                     with patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode:
                         with patch("layer_values_monitor.monitor.is_disputable") as mock_is_disputable:
                             # Setup mocks
-                            mock_get_query.return_value = MagicMock()
+                            mock_query = MagicMock()
+                            mock_query.__class__.__name__ = "SpotPrice"
+                            mock_get_query.return_value = mock_query
                             mock_get_feed.return_value = MagicMock()
                             mock_fetch_value_cached.return_value = (100.0, None)
                             mock_decode.return_value = 130.0  # 30% difference
@@ -311,6 +313,12 @@ class TestInspectAggregateReport:
                             should_pause, reason = result
                             assert should_pause is True
                             assert "exceeds pause threshold" in reason
+                            mock_fetch_value_cached.assert_called_once_with(
+                                mock_get_feed.return_value,
+                                sample_aggregate_report.query_id,
+                                mock_logger,
+                                query_type="SpotPrice",
+                            )
 
     @pytest.mark.asyncio
     async def test_inspect_should_not_pause(self, mock_logger, mock_config_watcher, sample_aggregate_report):

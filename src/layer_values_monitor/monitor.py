@@ -975,7 +975,9 @@ async def inspect_aggregate_report(
         logger.error(f"Unable to get feed for aggregate report query id: {query_id}")
         return None
 
-    result = await fetch_value_cached(feed, query_id, logger)
+    # Pass the resolved query type so aggregate checks use the same TTL rules
+    # as single-report inspection for that query.
+    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
     if result is None:
         logger.error(f"Unable to fetch trusted value for aggregate report query id: {query_id}")
         return None
