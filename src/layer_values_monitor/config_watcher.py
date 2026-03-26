@@ -10,6 +10,10 @@ from pathlib import Path
 from layer_values_monitor.custom_types import Metrics
 from layer_values_monitor.logger import logger
 
+# Default cache settings
+DEFAULT_CHECK_INTERVAL = 180  # 3 minutes
+DEFAULT_STALENESS_MULTIPLIER = 3  # Alert if cache is 3x older than check_interval
+
 
 class ConfigWatcher:
     """Class to watch and manage a live configuration."""
@@ -20,6 +24,7 @@ class ConfigWatcher:
         self.global_defaults: dict[str, dict] = {}
         self.query_types: dict[str, dict] = {}
         self.query_configs: dict[str, dict[str, dict]] = {}
+        self.cache_settings: dict[str, float] = {}
         self.last_modified_time = 0
         self.reload_config()
 
@@ -31,6 +36,15 @@ class ConfigWatcher:
 
         with open(self.config_path, "rb") as f:
             data = tomllib.load(f)
+
+        # Load cache settings
+        cache_config = data.get("cache", {})
+        self.cache_settings = {
+            "check_interval": float(cache_config.get("check_interval", DEFAULT_CHECK_INTERVAL)),
+            "staleness_alert_multiplier": float(
+                cache_config.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)
+            ),
+        }
 
         # Normalize all keys to lowercase once
         self.global_defaults = {
@@ -48,6 +62,9 @@ class ConfigWatcher:
         self._validate_config()
         self.last_modified_time = current_mtime
         logger.info(f"Configuration reloaded at {time.strftime('%H:%M:%S')}")
+        check_iv = self.cache_settings["check_interval"]
+        stale_mult = self.cache_settings["staleness_alert_multiplier"]
+        logger.info(f"Cache settings: check_interval={check_iv}s, staleness_multiplier={stale_mult}")
         return True
 
     def get_query_type_info(self, query_type: str) -> dict | None:
@@ -57,6 +74,11 @@ class ConfigWatcher:
     def is_supported_query_type(self, query_type: str) -> bool:
         """Check if query type is supported."""
         return query_type.lower() in self.query_types
+
+    def is_deprecated_query_type(self, query_type: str) -> bool:
+        """Check if query type is marked as deprecated in config."""
+        query_type_info = self.query_types.get(query_type.lower())
+        return bool(query_type_info.get("deprecated")) if query_type_info else False
 
     def uses_telliot_catalog(self, query_type: str) -> bool:
         """Check if query type uses telliot catalog for trusted values."""
@@ -81,6 +103,41 @@ class ConfigWatcher:
         """Get query-specific config (e.g., datafeed_ca, custom thresholds)."""
         query_type_configs = self.query_configs.get(query_type.lower(), {})
         return query_type_configs.get(query_id.lower(), {})
+
+    def get_check_interval(self, query_id: str | None = None, query_type: str | None = None) -> float:
+        """Get the check interval for a query, with fallback to global default.
+
+        Args:
+            query_id: Optional query ID for per-query override
+            query_type: Optional query type (required if query_id is provided)
+
+        Returns:
+            Check interval in seconds
+
+        """
+        # Try per-query override first
+        if query_id and query_type:
+            query_config = self.get_query_config(query_id, query_type)
+            if "check_interval" in query_config:
+                return float(query_config["check_interval"])
+
+        # Fall back to global cache setting
+        return self.cache_settings.get("check_interval", DEFAULT_CHECK_INTERVAL)
+
+    def get_staleness_threshold(self, query_id: str | None = None, query_type: str | None = None) -> float:
+        """Get the staleness threshold (age at which to alert about stale cache).
+
+        Args:
+            query_id: Optional query ID for per-query check_interval override
+            query_type: Optional query type (required if query_id is provided)
+
+        Returns:
+            Staleness threshold in seconds (check_interval * staleness_multiplier)
+
+        """
+        check_interval = self.get_check_interval(query_id, query_type)
+        multiplier = self.cache_settings.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)
+        return check_interval * multiplier
 
     def find_query_config(self, query_id: str) -> dict:
         """Find query config by searching all query types (when query_type unknown).

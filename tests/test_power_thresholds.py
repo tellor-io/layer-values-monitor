@@ -197,7 +197,7 @@ class TestPowerThresholds:
         with (
             patch("layer_values_monitor.monitor.get_query") as mock_get_query,
             patch("layer_values_monitor.monitor.get_feed") as mock_get_feed,
-            patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value,
+            patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached,
             patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode,
             patch("layer_values_monitor.monitor.calculate_power_percentage") as mock_calc_power,
         ):
@@ -206,7 +206,7 @@ class TestPowerThresholds:
             mock_query.__class__.__name__ = "SpotPrice"
             mock_get_query.return_value = mock_query
             mock_get_feed.return_value = MagicMock()
-            mock_fetch_value.return_value = (1.0, None)  # trusted_value, _
+            mock_fetch_value_cached.return_value = (1.0, None)  # trusted_value, _
             mock_decode.return_value = 2.0  # Decoded aggregate value - 100% deviation
 
             # Mock power calculation for immediate pause scenario
@@ -260,7 +260,7 @@ class TestPowerThresholds:
         with (
             patch("layer_values_monitor.monitor.get_query") as mock_get_query,
             patch("layer_values_monitor.monitor.get_feed") as mock_get_feed,
-            patch("layer_values_monitor.monitor.fetch_value") as mock_fetch_value,
+            patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached,
             patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode,
             patch("layer_values_monitor.monitor.calculate_power_percentage") as mock_calc_power,
         ):
@@ -269,7 +269,7 @@ class TestPowerThresholds:
             mock_query.__class__.__name__ = "SpotPrice"
             mock_get_query.return_value = mock_query
             mock_get_feed.return_value = MagicMock()
-            mock_fetch_value.return_value = (1.0, None)  # trusted_value, _
+            mock_fetch_value_cached.return_value = (1.0, None)  # trusted_value, _
             mock_decode.return_value = 2.0  # Decoded aggregate value - 100% deviation
 
             # Mock power calculation for low power (should NOT pause despite exceeding pause_threshold)

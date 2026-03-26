@@ -199,6 +199,10 @@ def is_disputable(
     metric: str, alert_threshold: float, dispute_threshold: float, reported_value: Any, trusted_value: Any, logger: logging
 ) -> tuple[bool, bool, float] | tuple[None, None, None]:
     """Determine if a value is disputable based on comparison with a trusted value using specified metrics and thresholds."""
+    if trusted_value is None:
+        logger.error("Cannot determine if disputable: trusted_value is None")
+        return None, None, None
+
     if metric.lower() == "percentage":
         percent_diff: float = (reported_value - trusted_value) / trusted_value
         percent_diff = abs(percent_diff)

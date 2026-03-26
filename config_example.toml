@@ -3,6 +3,21 @@
 # =============================================================================
 # Copy this file to config.toml and customize with your actual values
 
+# =============================================================================
+# CACHE SETTINGS
+# =============================================================================
+# Controls how often trusted values are fetched from external APIs (e.g., CoinGecko)
+# This reduces API calls by caching trusted values for a period of time.
+#
+# Flow when a report comes in:
+# 1. Compare reported value against cached trusted value
+# 2. If deviation exceeds threshold → immediately fetch fresh trusted value
+# 3. If fresh value still exceeds threshold → wait 10s → fetch again → dispute if still bad
+
+[cache]
+check_interval = 180            # Default: 180 seconds (3 minutes) between trusted value refreshes
+staleness_alert_multiplier = 3  # Alert if cache is older than check_interval * this multiplier (e.g., 9 min)
+
 # Global default thresholds for all queries
 # These serve as fallback values when no specific config exists
 [global_defaults]
@@ -36,6 +51,10 @@
 
     spotprice = { metric = "percentage", description = "Price feeds", handler = "telliot_feeds" }
     trbbridge = { metric = "equality", description = "TRB bridge reports", handler = "trb_bridge" }
+    trbbridgev2 = { metric = "equality", description = "TRB bridge v2 reports", handler = "trb_bridge" }
+    # Set deprecated = true on a query type to skip inspection and send a Discord alert instead.
+    # Useful after bridge upgrades (e.g., trbbridge after migrating to trbbridgev2):
+    #   trbbridge = { metric = "equality", ..., deprecated = true }
     evmcall = { metric = "equality", description = "EVM call reports", handler = "evm_call" }
 
 # =============================================================================
@@ -51,6 +70,8 @@
     alert_threshold = 0.10                   # 10% alert threshold
     minor_threshold = 0.20                   # 20% minor dispute threshold
     datafeed_ca = "0x0000000000000000000000000000000000000000"  # Datafeed contract address
+    check_interval = 60  # 1 minute check interval between trusted values
+
 
     # Example: BTC/USD 
     [queries.spotprice.another_query_id_hash_64_hex_chars_example_fill_rest_xxxxxxx]
@@ -62,6 +83,12 @@
     [queries.trbbridge.defaults]
     # Uses equality defaults from global_defaults
     # Configure specific TRB bridge query overrides here if needed
+
+[queries.trbbridgev2]
+
+    [queries.trbbridgev2.defaults]
+    # Uses equality defaults from global_defaults
+    # Configure specific TRB bridge v2 query overrides here if needed
 
 [queries.evmcall]
 

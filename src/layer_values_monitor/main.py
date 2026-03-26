@@ -21,6 +21,7 @@ from layer_values_monitor.monitor import (
     raw_data_queue_handler,
 )
 from layer_values_monitor.saga_contract import create_saga_contract_manager
+from layer_values_monitor.telliot_feeds import initialize_cache_with_config
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
@@ -90,6 +91,12 @@ async def start() -> None:
     )
     parser.add_argument(
         "--enable-saga-guard", action="store_true", help="Enable Saga aggregate report monitoring and contract pausing"
+    )
+    parser.add_argument(
+        "--check-interval",
+        type=int,
+        default=None,
+        help="Override the default trusted value check interval in seconds (default: 180s from config.toml)",
     )
     args = parser.parse_args()
 
@@ -169,6 +176,18 @@ async def start() -> None:
     config_watcher = ConfigWatcher(config_path)
     logger.info("CONFIG DEBUG: Config watcher initialized")
 
+    # Initialize price cache with config (for per-query TTL support)
+    initialize_cache_with_config(config_watcher)
+
+    # Override check interval if provided via command line
+    if args.check_interval is not None:
+        from layer_values_monitor.telliot_feeds import set_cache_ttl
+
+        set_cache_ttl(float(args.check_interval))
+        console_logger.info(f"✅ Check interval override: {args.check_interval}s")
+    else:
+        console_logger.info(f"✅ Check interval: {config_watcher.get_check_interval()}s (from config)")
+
     # Log config summary (debug only)
     logger.info("CONFIG DEBUG: Config summary:")
     logger.info(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
@@ -177,7 +196,7 @@ async def start() -> None:
 
     # Test config methods (debug only)
     logger.info("CONFIG DEBUG: Testing config methods...")
-    test_query_types = ["SpotPrice", "TrbBridge", "EvmCall", "UnknownType"]
+    test_query_types = ["SpotPrice", "TRBBridge", "TRBBridgeV2", "EVMCall", "UnknownType"]
     for query_type in test_query_types:
         is_supported = config_watcher.is_supported_query_type(query_type)
         logger.info(f"CONFIG DEBUG: - is_supported_query_type('{query_type}'): {is_supported}")

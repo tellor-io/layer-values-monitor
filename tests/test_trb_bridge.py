@@ -27,6 +27,22 @@ class TestTRBBridgeDecoding:
         # The deposit ID should be 1
         assert deposit_id == 1
 
+    def test_decode_query_data_v2(self):
+        """Test decoding of TRBBridgeV2 queryData to extract deposit ID."""
+        query_data = (
+            "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000"
+            "000000000000000000000000000000000000000000000080000000000000000000000000000000000000"
+            "000000000000000000000000000b5452424272696467655632000000000000000000000000000000000000"
+            "00000000000000000000000000000000000000000000000000000000000000000000400000000000000000"
+            "000000000000000000000000000000000000000000000001000000000000000000000000000000000000"
+            "000000000000000000000000009a"
+        )
+
+        deposit_id = decode_query_data(query_data)
+
+        # The last 32-byte word is 0x9a = 154
+        assert deposit_id == 154
+
     def test_decode_report_value(self):
         """Test decoding of TRBBridge report value to extract deposit details."""
         # Example report value from the user

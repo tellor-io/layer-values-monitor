@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 
 [options]
@@ -584,7 +584,7 @@ wheels = [
 
 [[package]]
 name = "layer-values-monitor"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -611,7 +611,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "ruff", specifier = ">=0.13.3" },
-    { name = "telliot-feeds", specifier = "==0.4.14" },
+    { name = "telliot-feeds", specifier = ">=0.4.15" },
     { name = "websockets", specifier = "==13.1" },
 ]
 
@@ -1220,24 +1220,26 @@ wheels = [
 
 [[package]]
 name = "telliot-core"
-version = "0.4.0"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "attrs" },
     { name = "chained-accounts" },
     { name = "clamfig" },
     { name = "click" },
+    { name = "protobuf" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "web3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/90/0b/e8991abfe1739dca5885de2553ec6c404cd5b6c7c9b660390ead80be5842/telliot_core-0.4.0.tar.gz", hash = "sha256:df6432594164b111f35e3047b193803ec0461ae5684d2097f47027a52a28fe67", size = 263300, upload-time = "2025-09-19T17:36:25.696Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/31/0b6f4044d65460ff0de52f3c3c5dbcbc520d61ca022c423632af30d3cf4c/telliot_core-0.4.1.tar.gz", hash = "sha256:bfd0b9cc249a4e21ec08d2c64a5b6843140dde48e3dd62831cbd5b8416a4bfb6", size = 263411, upload-time = "2026-02-13T19:53:05.435Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/d6/8cd7e8fe4c51152e46724d3bdd409c5ca111b6c47029195e6887d653ee85/telliot_core-0.4.0-py3-none-any.whl", hash = "sha256:5677488da2531881e9c6a6981a0e4d6a78bba7b9d684702007a6be8bbbc322ed", size = 72083, upload-time = "2025-09-19T17:36:22.603Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/c9/334aa19d5f042b4c0f1c2ca6c964d75cdad3656fa38cd335ef906578249e/telliot_core-0.4.1-py3-none-any.whl", hash = "sha256:45ebc10d5d82451b726b03fcfc47d181e2ad7e1a69abd40bbcaeb0a931033c03", size = 72166, upload-time = "2026-02-13T19:53:03.979Z" },
 ]
 
 [[package]]
 name = "telliot-feeds"
-version = "0.4.14"
+version = "0.4.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1293,9 +1295,9 @@ dependencies = [
     { name = "websockets" },
     { name = "yarl" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/38/0f/a69d2f582e58abb1154bff76dfdaf74781860d21edc06766e72fa6ed58e3/telliot_feeds-0.4.14.tar.gz", hash = "sha256:7d9b77d969720b3288355581e1e865ca7e96fa2ed32e15569233b86968d81005", size = 588734, upload-time = "2025-11-25T21:01:37.408Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/61/f44c32a0da553609a48f1ab82a00aa5d2f721c48a8a7b17ab40bb4ffc515/telliot_feeds-0.4.15.tar.gz", hash = "sha256:9d82e23655e7fab58a2328658747bf2f058f1bf38c357855b233299dadc2eed6", size = 589236, upload-time = "2026-02-18T19:35:09.723Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/af/66/2efd1c030b84f59dae96705e93bcabc1762250a1d1a5238dbbc171b4da55/telliot_feeds-0.4.14-py3-none-any.whl", hash = "sha256:cd99d552df116af714e17c6354ef837ed111b3cee1f131e289659d35630cb5d0", size = 478759, upload-time = "2025-11-25T21:01:35.87Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/d1/ccaaea0adca90754ef6f8714f8cb425d31f50a493701620f2b5d0f1f9359/telliot_feeds-0.4.15-py3-none-any.whl", hash = "sha256:b24fbd90d544f9d39df280c2628e3e42533a7e1ffcb66f4b973b9b57626406d4", size = 479286, upload-time = "2026-02-18T19:35:08.307Z" },
 ]
 
 [[package]]

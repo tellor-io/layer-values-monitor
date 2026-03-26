@@ -88,6 +88,34 @@ def send_discord_msg(msg: str, description: str = None) -> None:
     return
 
 
+def deprecated_query_type_alert(
+    query_type: str,
+    query_id: str,
+    report_value: str,
+    reporter: str,
+    tx_hash: str,
+) -> None:
+    """Send Discord alert when a report is submitted for a deprecated query type.
+
+    Args:
+        query_type: The deprecated query type (e.g. "TRBBridge")
+        query_id: The query ID hex string
+        report_value: The raw reported value
+        reporter: Reporter address
+        tx_hash: Transaction hash
+
+    """
+    alert_msg = (
+        f"**QueryType:** {query_type}\n"
+        f"**QueryId:** {query_id}\n"
+        f"**Value:** {report_value}\n"
+        f"**Reporter:** {reporter}\n"
+        f"**Tx Hash:** {tx_hash}"
+    )
+    description = f"🚨 **DEPRECATED QUERY TYPE DETECTED ({query_type.upper()})**"
+    send_discord_msg(alert_msg, description=description)
+
+
 def format_difference(diff: float, metric: str) -> str:
     """Format difference value based on metric type."""
     if metric.lower() == "percentage":

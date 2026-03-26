@@ -1,4 +1,11 @@
-"""Test double-check dispute logic for SpotPrice queries."""
+"""Test double-check dispute logic for SpotPrice queries.
+
+The flow is:
+1. Compare reported value against CACHED trusted value
+2. If threshold crossed → immediately fetch fresh trusted value
+3. If fresh value still crosses threshold → wait 10s → fetch final value
+4. Only dispute if final check still crosses threshold
+"""
 
 import asyncio
 from unittest.mock import Mock, patch
@@ -40,35 +47,45 @@ def metrics():
 
 
 @pytest.mark.asyncio
-async def test_double_check_both_cross_threshold(sample_report, metrics):
-    """Test that dispute proceeds when both checks cross threshold."""
+async def test_triple_check_all_cross_threshold(sample_report, metrics):
+    """Test that dispute proceeds when all checks cross threshold.
+
+    Flow: cached (90.0) → immediate refresh (88.0) → final (87.0) → dispute
+    """
     from layer_values_monitor.monitor import inspect
 
     # Setup
     reported_value = 100.0
-    first_trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    second_trusted_value = 88.0  # 13.6% diff - crosses major threshold
+    cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
+
+    # Fetcher returns different values for immediate refresh and final check
+    fetch_call_count = 0
+
+    async def mock_fetcher():
+        nonlocal fetch_call_count
+        fetch_call_count += 1
+        if fetch_call_count == 1:
+            return (88.0, 1234567890)  # Immediate refresh: 13.6% diff - still crosses
+        else:
+            return (87.0, 1234567891)  # Final check: 14.9% diff - still crosses
 
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
     mock_query = Mock()
 
-    # Mock fetcher that returns second trusted value
-    async def mock_fetcher():
-        return (second_trusted_value, 1234567890)
-
-    # Execute
+    # Execute with patched sleep to speed up test
     with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
-        await inspect(
-            sample_report,
-            reported_value,
-            first_trusted_value,
-            disputes_q,
-            metrics,
-            mock_logger,
-            query=mock_query,
-            trusted_value_fetcher=mock_fetcher,
-        )
+        with patch("layer_values_monitor.monitor.asyncio.sleep", return_value=None):
+            await inspect(
+                sample_report,
+                reported_value,
+                cached_trusted_value,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
 
     # Verify dispute was added to queue
     assert not disputes_q.empty()
@@ -76,61 +93,125 @@ async def test_double_check_both_cross_threshold(sample_report, metrics):
     assert dispute.reporter == sample_report.reporter
     assert dispute.query_id == sample_report.query_id
 
-    # Verify Discord alert was sent with both values
+    # Verify fetcher was called twice (immediate + final)
+    assert fetch_call_count == 2
+
+    # Verify Discord alert was sent
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
-    # Message format: **First Trusted Value:** X (retrieved at TIME)\n**Second Trusted Value:** Y (retrieved at TIME)
+    # Should show first (cached) and second (final) trusted values
     assert "First Trusted Value" in alert_msg
     assert "Second Trusted Value" in alert_msg
-    assert str(first_trusted_value) in alert_msg
-    assert str(second_trusted_value) in alert_msg
+    assert str(cached_trusted_value) in alert_msg
+    assert "87.0" in alert_msg  # Final trusted value
     # Verify it's the dispute version
     alert_desc = mock_alert.call_args[1].get("description", "")
     assert "ATTEMPTING TO SEND DISPUTE" in alert_desc
 
 
 @pytest.mark.asyncio
-async def test_double_check_second_does_not_cross(sample_report, metrics):
-    """Test that dispute is cancelled when second check doesn't cross threshold."""
+async def test_immediate_refresh_clears_dispute(sample_report, metrics):
+    """Test that dispute is cancelled when immediate refresh doesn't cross threshold.
+
+    This tests the case where the cached value was stale and the fresh value is fine.
+    Flow: cached (90.0) → immediate refresh (99.5) → NO 10s delay, NO dispute
+    """
     from layer_values_monitor.monitor import inspect
 
     # Setup
     reported_value = 100.0
-    first_trusted_value = 90.0  # 11.1% diff - crosses major threshold
-    second_trusted_value = 99.0  # 1.01% diff - does NOT cross warning threshold (2%)
+    cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
+
+    # Fetcher returns value that doesn't cross threshold
+    fetch_call_count = 0
+
+    async def mock_fetcher():
+        nonlocal fetch_call_count
+        fetch_call_count += 1
+        return (99.5, 1234567890)  # 0.5% diff - does NOT cross any threshold
 
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
     mock_query = Mock()
 
-    # Mock fetcher that returns second trusted value
-    async def mock_fetcher():
-        return (second_trusted_value, 1234567890)
-
-    # Execute
+    # Execute - should NOT wait 10s since immediate refresh clears it
     with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
-        await inspect(
-            sample_report,
-            reported_value,
-            first_trusted_value,
-            disputes_q,
-            metrics,
-            mock_logger,
-            query=mock_query,
-            trusted_value_fetcher=mock_fetcher,
-        )
+        with patch("layer_values_monitor.monitor.asyncio.sleep") as mock_sleep:
+            await inspect(
+                sample_report,
+                reported_value,
+                cached_trusted_value,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+            # Should NOT have waited 10s since immediate refresh cleared
+            mock_sleep.assert_not_called()
 
     # Verify NO dispute was added to queue
     assert disputes_q.empty()
 
+    # Verify fetcher was only called once (immediate refresh only)
+    assert fetch_call_count == 1
+
+    # Alert should still be sent (alertable but not disputable after refresh)
+    mock_alert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_final_check_clears_dispute(sample_report, metrics):
+    """Test that dispute is cancelled when final check doesn't cross threshold.
+
+    Flow: cached (90.0) → immediate refresh (88.0) → 10s → final (99.5) → NO dispute
+    """
+    from layer_values_monitor.monitor import inspect
+
+    # Setup
+    reported_value = 100.0
+    cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
+
+    # Fetcher returns bad value first, then good value
+    fetch_call_count = 0
+
+    async def mock_fetcher():
+        nonlocal fetch_call_count
+        fetch_call_count += 1
+        if fetch_call_count == 1:
+            return (88.0, 1234567890)  # Immediate: 13.6% diff - crosses
+        else:
+            return (99.5, 1234567891)  # Final: 0.5% diff - does NOT cross
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+
+    # Execute
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        with patch("layer_values_monitor.monitor.asyncio.sleep", return_value=None):
+            await inspect(
+                sample_report,
+                reported_value,
+                cached_trusted_value,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+
+    # Verify NO dispute was added to queue
+    assert disputes_q.empty()
+
+    # Verify fetcher was called twice
+    assert fetch_call_count == 2
+
     # Verify Discord alert was sent with both values
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
-    # Message format: **First Trusted Value:** X (retrieved at TIME)\n**Second Trusted Value:** Y (retrieved at TIME)
     assert "First Trusted Value" in alert_msg
     assert "Second Trusted Value" in alert_msg
-    assert str(first_trusted_value) in alert_msg
-    assert str(second_trusted_value) in alert_msg
     # Verify it's the NO dispute version
     alert_desc = mock_alert.call_args[1].get("description", "")
     assert "NO DISPUTE SENT" in alert_desc
@@ -138,7 +219,7 @@ async def test_double_check_second_does_not_cross(sample_report, metrics):
 
 @pytest.mark.asyncio
 async def test_single_check_mode_without_fetcher(sample_report, metrics):
-    """Test that single-check mode works when no fetcher is provided (EVMCall, TRBBridge)."""
+    """Test that single-check mode works when no fetcher is provided (TRBBridge)."""
     from layer_values_monitor.monitor import inspect
 
     # Setup
@@ -169,23 +250,23 @@ async def test_single_check_mode_without_fetcher(sample_report, metrics):
     # Verify standard alert was sent
     mock_alert.assert_called_once()
     alert_msg = mock_alert.call_args[0][0]
-    assert "Second inspection triggered" not in alert_msg
+    assert "Second Trusted Value" not in alert_msg
 
 
 @pytest.mark.asyncio
-async def test_fetcher_error_cancels_dispute(sample_report, metrics):
-    """Test that dispute is cancelled if second fetch fails."""
+async def test_fetcher_error_on_immediate_refresh_cancels_dispute(sample_report, metrics):
+    """Test that dispute is cancelled if immediate refresh fails."""
     from layer_values_monitor.monitor import inspect
 
     # Setup
     reported_value = 100.0
-    first_trusted_value = 90.0  # 11.1% diff - crosses major threshold
+    cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
 
     disputes_q = asyncio.Queue()
     mock_logger = Mock()
     mock_query = Mock()
 
-    # Mock fetcher that raises an error
+    # Mock fetcher that raises an error on first call
     async def mock_fetcher():
         raise Exception("API Error")
 
@@ -194,7 +275,7 @@ async def test_fetcher_error_cancels_dispute(sample_report, metrics):
         await inspect(
             sample_report,
             reported_value,
-            first_trusted_value,
+            cached_trusted_value,
             disputes_q,
             metrics,
             mock_logger,
@@ -206,4 +287,86 @@ async def test_fetcher_error_cancels_dispute(sample_report, metrics):
     assert disputes_q.empty()
 
     # Verify error was logged
-    assert any("Error fetching second trusted value" in str(call) for call in mock_logger.error.call_args_list)
+    assert any("Error during dispute verification" in str(call) for call in mock_logger.error.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_fetcher_error_on_final_check_cancels_dispute(sample_report, metrics):
+    """Test that dispute is cancelled if final check fetch fails."""
+    from layer_values_monitor.monitor import inspect
+
+    # Setup
+    reported_value = 100.0
+    cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+
+    # Mock fetcher that succeeds first time, fails second time
+    fetch_call_count = 0
+
+    async def mock_fetcher():
+        nonlocal fetch_call_count
+        fetch_call_count += 1
+        if fetch_call_count == 1:
+            return (88.0, 1234567890)  # Immediate: crosses threshold
+        else:
+            raise Exception("API Error on final check")
+
+    # Execute
+    with patch("layer_values_monitor.monitor.generic_alert"):
+        with patch("layer_values_monitor.monitor.asyncio.sleep", return_value=None):
+            await inspect(
+                sample_report,
+                reported_value,
+                cached_trusted_value,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+
+    # Verify NO dispute was added (error cancels dispute)
+    assert disputes_q.empty()
+
+    # Verify error was logged
+    assert any("Error during dispute verification" in str(call) for call in mock_logger.error.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_fetcher_returns_none_cancels_dispute(sample_report, metrics):
+    """Test that dispute is cancelled if fetcher returns None."""
+    from layer_values_monitor.monitor import inspect
+
+    # Setup
+    reported_value = 100.0
+    cached_trusted_value = 90.0  # 11.1% diff - crosses major threshold
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+
+    # Mock fetcher that returns None
+    async def mock_fetcher():
+        return None
+
+    # Execute
+    with patch("layer_values_monitor.monitor.generic_alert"):
+        await inspect(
+            sample_report,
+            reported_value,
+            cached_trusted_value,
+            disputes_q,
+            metrics,
+            mock_logger,
+            query=mock_query,
+            trusted_value_fetcher=mock_fetcher,
+        )
+
+    # Verify NO dispute was added
+    assert disputes_q.empty()
+
+    # Verify error was logged
+    assert any("Failed to fetch fresh trusted value" in str(call) for call in mock_logger.error.call_args_list)
