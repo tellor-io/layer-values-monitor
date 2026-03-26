@@ -1,5 +1,9 @@
 """Tests for TRBBridge monitoring functionality."""
 
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from layer_values_monitor.custom_types import Metrics, NewReport
 from layer_values_monitor.trb_bridge import decode_query_data, decode_report_value, get_trb_bridge_trusted_value
 
 import pytest
@@ -160,3 +164,48 @@ class TestTRBBridgeDecoding:
         assert result[1] == "tellor17gc67q05d5rgsz9caznm0s7s5eazwg2e3fkk8e"
         assert result[2] == 1000000000000000000
         assert result[3] == 50000000000000000
+
+
+@pytest.mark.asyncio
+async def test_inspect_trbbridge_reports_defaults_to_chain_id_one(monkeypatch):
+    """Test that bridge inspection defaults to chain ID 1 when unset."""
+    from layer_values_monitor.monitor import inspect_trbbridge_reports
+
+    monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", "0x62733e63499a25E35844c91275d4c3bdb159D29d")
+    monkeypatch.delenv("TRBBRIDGE_CHAIN_ID", raising=False)
+
+    report = NewReport(
+        query_type="TRBBridge",
+        query_data="0xabc",
+        query_id="0x123",
+        value="0xdeadbeef",
+        aggregate_method="weighted-median",
+        cyclelist="layer-1",
+        power="1000",
+        reporter="layer1testreporter",
+        timestamp="1234567890000",
+        meta_id="1",
+        tx_hash="0xtesthash",
+    )
+    metrics = Metrics(
+        metric="equality",
+        alert_threshold=1.0,
+        warning_threshold=1.0,
+        minor_threshold=0.0,
+        major_threshold=0.0,
+        pause_threshold=0.0,
+    )
+    logger = MagicMock()
+
+    with patch(
+        "layer_values_monitor.monitor.decode_report_value",
+        return_value=("0xsender", "layer1recipient", 1, 0),
+    ):
+        with patch(
+            "layer_values_monitor.monitor.get_trb_bridge_trusted_value",
+            new=AsyncMock(return_value=("0xsender", "layer1recipient", 1, 0)),
+        ) as mock_get_trusted_value:
+            with patch("layer_values_monitor.monitor.inspect", new=AsyncMock()):
+                await inspect_trbbridge_reports([report], asyncio.Queue(), report.query_id, metrics, logger)
+
+    assert mock_get_trusted_value.await_args.args[2] == 1

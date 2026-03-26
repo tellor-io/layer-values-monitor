@@ -729,11 +729,6 @@ async def inspect_spotprice_path(
         logger.error("Unable to get feed")
         return None
 
-    # Use cached fetch to reduce API calls (e.g., CoinGecko)
-    # Multiple reports for the same query_id will share the cached value
-    logger.debug("Fetching trusted value from feed (with cache)...")
-    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
-
     # Check for staleness
     cache = get_price_cache()
     cache_result = await cache.get_with_staleness(query_id, query_type)
@@ -744,6 +739,11 @@ async def inspect_spotprice_path(
         )
         # Send staleness alert
         await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+
+    # Use cached fetch to reduce API calls (e.g., CoinGecko)
+    # Multiple reports for the same query_id will share the cached value
+    logger.debug("Fetching trusted value from feed (with cache)...")
+    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
 
     if result is None:
         logger.error("Unable to fetch trusted value")
@@ -820,8 +820,19 @@ async def inspect_evmcall_path(
 
     # Create fetcher lambda for immediate refresh when threshold is breached
     # Note: Uses force_refresh=True to bypass cache
-    async def fetch_trusted_value() -> tuple[Any, Any]:
-        return await fetch_value_cached(feed, query_id, logger, force_refresh=True, query_type=query_type)
+    async def fetch_trusted_value() -> tuple[Any, Any] | None:
+        refreshed = await fetch_value_cached(feed, query_id, logger, force_refresh=True, query_type=query_type)
+        if refreshed is None:
+            return None
+
+        refreshed_value_tuple, refreshed_timestamp = refreshed
+        if not isinstance(refreshed_value_tuple, tuple) or len(refreshed_value_tuple) != 2:
+            logger.error(
+                f"Expected tuple (value, timestamp) from refreshed EVMCall feed, got: {type(refreshed_value_tuple)}"
+            )
+            return None
+
+        return refreshed_value_tuple[0], refreshed_timestamp
 
     logger.debug(f"Inspecting {len(reports)} EVMCall report(s)...")
     for r in reports:
@@ -904,7 +915,7 @@ async def new_reports_queue_handler(
             logger.warning(f"🧹 Cleaned up {len(completed_tasks)} completed tasks (active: {len(running_tasks)})")
 
         # Periodic cache statistics logging
-        reports_processed += len(new_reports)
+        reports_processed += sum(len(reports) for reports in new_reports.values())
         if reports_processed >= cache_log_interval:
             cache_stats = await get_price_cache().get_stats()
             logger.info(
@@ -1620,6 +1631,8 @@ async def perform_dispute_verification(
         "second_check_disputable": None,
         "second_diff": None,
         "zero_trusted_value_detected": False,
+        "verification_failed": False,
+        "verification_failure_reason": None,
     }
 
     if disputable and trusted_value_fetcher is not None:
@@ -1630,6 +1643,8 @@ async def perform_dispute_verification(
             immediate_result = await trusted_value_fetcher()
             if immediate_result is None:
                 logger.error("❌ Failed to fetch fresh trusted value. Cancelling dispute.")
+                result["verification_failed"] = True
+                result["verification_failure_reason"] = "Fresh trusted value verification failed on immediate refresh."
                 return result
 
             # Extract value from result tuple
@@ -1684,6 +1699,8 @@ async def perform_dispute_verification(
 
             if final_result is None:
                 logger.error("❌ Failed to fetch final trusted value. Cancelling dispute.")
+                result["verification_failed"] = True
+                result["verification_failure_reason"] = "Fresh trusted value verification failed during final check."
                 return result
 
             # Extract value from result tuple
@@ -1744,6 +1761,8 @@ async def perform_dispute_verification(
 
         except Exception as e:
             logger.error(f"❌ Error during dispute verification: {e}. Cancelling dispute.")
+            result["verification_failed"] = True
+            result["verification_failure_reason"] = f"Fresh trusted value verification failed: {e}"
 
     elif disputable and trusted_value_fetcher is None:
         # Single-check logic for TRBBridge queries (no fetcher available)
@@ -1896,6 +1915,8 @@ async def inspect(
     second_check_disputable = verification_result["second_check_disputable"]
     second_diff = verification_result["second_diff"]
     zero_trusted_value_detected = verification_result["zero_trusted_value_detected"]
+    verification_failed = verification_result["verification_failed"]
+    verification_failure_reason = verification_result["verification_failure_reason"]
 
     if zero_trusted_value_detected:
         display["DISPUTABLE"] = False
@@ -1966,7 +1987,7 @@ async def inspect(
 
             # Get disputer information based on dispute level and keyring config
             disputer_info = None
-            if is_disputable_flag and dispute_level != "warning":
+            if is_disputable_flag and dispute_level != "warning" and not verification_failed:
                 # Only show disputer info for disputable alerts (not warnings)
                 binary_path = os.getenv("LAYER_BINARY_PATH")
                 key_name = os.getenv("LAYER_KEY_NAME")
@@ -1995,7 +2016,11 @@ async def inspect(
             )
 
             # Determine description based on whether it's disputable
-            if alertable and not is_disputable_flag:
+            if verification_failed:
+                description = "⚠️ **VERIFICATION FAILED - NO DISPUTE SENT**"
+                reason = verification_failure_reason or "Fresh trusted value verification failed."
+                msg += f"\n**Status:** {reason}"
+            elif alertable and not is_disputable_flag:
                 description = "⚠️ **ALERT THRESHOLD TRIGGERED, BUT NOT AT DISPUTE LEVEL**"
             else:
                 description = "❗**FOUND SOMETHING**❗"

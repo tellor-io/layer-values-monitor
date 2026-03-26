@@ -276,6 +276,77 @@ async def test_inspect_reports_skips_deprecated_query_type(config_file):
 
 
 @pytest.mark.asyncio
+async def test_inspect_reports_sends_deprecated_alert_for_each_report_in_batch(config_file):
+    """Test that a deprecated query batch triggers one alert per report."""
+    from layer_values_monitor.monitor import inspect_reports
+
+    with open(config_file, "w") as f:
+        f.write("""
+            [global_defaults.equality]
+            alert_threshold = 1.0
+
+            [query_types]
+            trbbridge = { metric = "equality", handler = "trb_bridge", deprecated = true }
+            trbbridgev2 = { metric = "equality", handler = "trb_bridge" }
+        """)
+
+    time.sleep(0.1)
+    watcher = ConfigWatcher(config_file)
+
+    reports = [
+        NewReport(
+            query_type="TRBBridge",
+            query_data="0xabc",
+            query_id="0x123",
+            value="0xdeadbeef",
+            aggregate_method="weighted-median",
+            cyclelist="layer-1",
+            power="1000",
+            reporter="layer1testreporter",
+            timestamp="1234567890000",
+            meta_id="1",
+            tx_hash="0xtesthash",
+        ),
+        NewReport(
+            query_type="TRBBridge",
+            query_data="0xabc",
+            query_id="0x123",
+            value="0xcafebabe",
+            aggregate_method="weighted-median",
+            cyclelist="layer-1",
+            power="1000",
+            reporter="layer1secondreporter",
+            timestamp="1234567890001",
+            meta_id="2",
+            tx_hash="0xsecondhash",
+        ),
+    ]
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+
+    with patch("layer_values_monitor.monitor.deprecated_query_type_alert") as mock_alert:
+        await inspect_reports(reports, disputes_q, watcher, mock_logger)
+
+    assert mock_alert.call_count == 2
+    assert mock_alert.call_args_list[0].kwargs == {
+        "query_type": "TRBBridge",
+        "query_id": "0x123",
+        "report_value": "0xdeadbeef",
+        "reporter": "layer1testreporter",
+        "tx_hash": "0xtesthash",
+    }
+    assert mock_alert.call_args_list[1].kwargs == {
+        "query_type": "TRBBridge",
+        "query_id": "0x123",
+        "report_value": "0xcafebabe",
+        "reporter": "layer1secondreporter",
+        "tx_hash": "0xsecondhash",
+    }
+    assert disputes_q.empty()
+
+
+@pytest.mark.asyncio
 async def test_inspect_reports_does_not_skip_non_deprecated(config_file):
     """Test that non-deprecated types proceed to normal inspection."""
     from layer_values_monitor.monitor import inspect_reports
