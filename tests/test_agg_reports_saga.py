@@ -319,6 +319,7 @@ class TestInspectAggregateReport:
                                 mock_logger,
                                 query_type="SpotPrice",
                             )
+                            mock_get_query.assert_called_once_with(sample_aggregate_report.query_data)
 
     @pytest.mark.asyncio
     async def test_inspect_should_not_pause(self, mock_logger, mock_config_watcher, sample_aggregate_report):
