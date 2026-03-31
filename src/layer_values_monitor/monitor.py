@@ -6,7 +6,8 @@ import logging
 import os
 import random
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
