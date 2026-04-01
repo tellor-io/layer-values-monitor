@@ -107,12 +107,13 @@ class TestPriceCache:
             await asyncio.sleep(0.01)  # Small delay to ensure different fetch times
 
         # Cache should have evicted some entries
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert stats["size"] <= 10
 
-    def test_cache_stats(self, cache):
+    @pytest.mark.asyncio
+    async def test_cache_stats(self, cache):
         """Test cache statistics."""
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert "hits" in stats
         assert "misses" in stats
         assert "hit_rate" in stats
@@ -132,7 +133,7 @@ class TestPriceCache:
         await cache.get(query_id)
         await cache.get(query_id)
 
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
         assert stats["hits"] == 2
         assert stats["misses"] == 1
         assert "66.7%" in stats["hit_rate"]
@@ -177,6 +178,19 @@ class TestPriceCache:
         """Test that get_with_staleness returns None for missing entries."""
         result = await cache.get_with_staleness("nonexistent_query")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_with_staleness_does_not_change_cache_stats(self, cache):
+        """Test that staleness inspection does not affect hit/miss counters."""
+        query_id = "test_query_stats"
+        await cache.set(query_id, 100.5, time.time())
+
+        await cache.get_with_staleness(query_id)
+        await cache.get_with_staleness("missing_query")
+
+        stats = await cache.get_stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
 
     @pytest.mark.asyncio
     async def test_get_age_returns_correct_age(self, cache):
@@ -249,6 +263,27 @@ class TestPerQueryTTL:
         ttl = cache._get_ttl_for_query("any_query", "spotprice")
         assert ttl == 180.0  # Should use default
 
+    def test_global_ttl_uses_latest_config_without_query_type(self, cache_with_config, mock_config_watcher):
+        """Test that default TTL follows live config changes when no override is set."""
+        assert cache_with_config._get_ttl_for_query("any_query") == 180.0
+        assert cache_with_config._get_staleness_threshold("any_query") == 540.0
+
+        mock_config_watcher.get_check_interval.return_value = 60.0
+        mock_config_watcher.get_staleness_threshold.return_value = 180.0
+
+        assert cache_with_config._get_ttl_for_query("any_query") == 60.0
+        assert cache_with_config._get_staleness_threshold("any_query") == 180.0
+
+    def test_ttl_override_beats_reloaded_config_defaults(self, cache_with_config, mock_config_watcher):
+        """Test that explicit TTL overrides are not replaced by config defaults."""
+        cache_with_config._ttl = 45.0
+        cache_with_config._ttl_override = 45.0
+        mock_config_watcher.get_check_interval.return_value = 60.0
+        mock_config_watcher.get_staleness_threshold.return_value = 180.0
+
+        assert cache_with_config._get_ttl_for_query("any_query") == 45.0
+        assert cache_with_config._get_staleness_threshold("any_query") == 135.0
+
 
 class TestFetchValueCached:
     """Test cases for fetch_value_cached function."""
@@ -300,6 +335,46 @@ class TestFetchValueCached:
         assert result1[0] == result2[0]
 
     @pytest.mark.asyncio
+    async def test_concurrent_misses_share_one_api_call(self, mock_logger):
+        """Test that concurrent cache misses share a single API fetch."""
+        cache = get_price_cache()
+        await cache.clear()
+
+        query_id = f"test_query_concurrent_{time.time()}"
+        mock_feed = MagicMock()
+
+        async def slow_fetch():
+            await asyncio.sleep(0.05)
+            return (100.5, time.time())
+
+        mock_feed.source.fetch_new_datapoint = AsyncMock(side_effect=slow_fetch)
+
+        results = await asyncio.gather(*[fetch_value_cached(mock_feed, query_id, mock_logger) for _ in range(5)])
+
+        assert mock_feed.source.fetch_new_datapoint.call_count == 1
+        assert all(result == results[0] for result in results)
+
+    @pytest.mark.asyncio
+    async def test_failed_shared_fetch_can_retry(self, mock_logger):
+        """Test that a failed shared fetch clears in-flight state for retries."""
+        cache = get_price_cache()
+        await cache.clear()
+
+        query_id = f"test_query_retry_{time.time()}"
+        feed = MagicMock()
+
+        with patch(
+            "layer_values_monitor.telliot_feeds.fetch_value",
+            new=AsyncMock(side_effect=[None, (100.5, 1234567890.0)]),
+        ) as mock_fetch_value:
+            first_results = await asyncio.gather(*[fetch_value_cached(feed, query_id, mock_logger) for _ in range(2)])
+            second_result = await fetch_value_cached(feed, query_id, mock_logger)
+
+        assert first_results == [None, None]
+        assert second_result == (100.5, 1234567890.0)
+        assert mock_fetch_value.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_force_refresh_bypasses_cache(self, mock_logger):
         """Test that force_refresh bypasses the cache."""
         # Clear cache first
@@ -349,12 +424,14 @@ class TestGlobalCache:
     def test_set_cache_ttl(self):
         """Test setting the cache TTL."""
         original_ttl = get_price_cache()._ttl
+        original_override = get_price_cache()._ttl_override
         try:
             set_cache_ttl(60.0)
             assert get_price_cache()._ttl == 60.0
         finally:
-            # Restore original TTL
-            set_cache_ttl(original_ttl)
+            # Restore original TTL state without forcing a new override.
+            get_price_cache()._ttl = original_ttl
+            get_price_cache()._ttl_override = original_override
 
     def test_initialize_cache_with_config(self):
         """Test initializing cache with config watcher."""
@@ -363,8 +440,10 @@ class TestGlobalCache:
 
         original_ttl = get_price_cache()._ttl
         original_config = get_price_cache()._config_watcher
+        original_override = get_price_cache()._ttl_override
 
         try:
+            get_price_cache()._ttl_override = None
             initialize_cache_with_config(mock_config)
 
             cache = get_price_cache()
@@ -374,6 +453,7 @@ class TestGlobalCache:
             # Restore original state
             get_price_cache()._ttl = original_ttl
             get_price_cache()._config_watcher = original_config
+            get_price_cache()._ttl_override = original_override
 
 
 class TestCacheWithQueryType:

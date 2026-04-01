@@ -296,7 +296,9 @@ class TestInspectAggregateReport:
                     with patch("layer_values_monitor.monitor.decode_hex_value") as mock_decode:
                         with patch("layer_values_monitor.monitor.is_disputable") as mock_is_disputable:
                             # Setup mocks
-                            mock_get_query.return_value = MagicMock()
+                            mock_query = MagicMock()
+                            mock_query.__class__.__name__ = "SpotPrice"
+                            mock_get_query.return_value = mock_query
                             mock_get_feed.return_value = MagicMock()
                             mock_fetch_value_cached.return_value = (100.0, None)
                             mock_decode.return_value = 130.0  # 30% difference
@@ -311,6 +313,13 @@ class TestInspectAggregateReport:
                             should_pause, reason = result
                             assert should_pause is True
                             assert "exceeds pause threshold" in reason
+                            mock_fetch_value_cached.assert_called_once_with(
+                                mock_get_feed.return_value,
+                                sample_aggregate_report.query_id,
+                                mock_logger,
+                                query_type="SpotPrice",
+                            )
+                            mock_get_query.assert_called_once_with(sample_aggregate_report.query_data)
 
     @pytest.mark.asyncio
     async def test_inspect_should_not_pause(self, mock_logger, mock_config_watcher, sample_aggregate_report):
@@ -360,6 +369,29 @@ class TestInspectAggregateReport:
                         if "Unable to fetch trusted value" in str(call)
                     ]
                     assert len(error_calls) > 0
+
+    @pytest.mark.asyncio
+    async def test_inspect_zero_trusted_value_sends_alert(self, mock_logger, mock_config_watcher, sample_aggregate_report):
+        """Test inspection when the trusted value is zero for a percentage query."""
+        with patch("layer_values_monitor.monitor.get_query") as mock_get_query:
+            with patch("layer_values_monitor.monitor.get_feed") as mock_get_feed:
+                with patch("layer_values_monitor.monitor.fetch_value_cached") as mock_fetch_value_cached:
+                    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+                        mock_query = MagicMock()
+                        mock_query.__class__.__name__ = "SpotPrice"
+                        mock_query.type = "SpotPrice"
+                        mock_get_query.return_value = mock_query
+                        mock_get_feed.return_value = MagicMock()
+                        mock_fetch_value_cached.return_value = (0.0, None)
+
+                        result = await inspect_aggregate_report(sample_aggregate_report, mock_config_watcher, mock_logger)
+
+                        assert result is None
+                        mock_alert.assert_called_once()
+                        alert_msg = mock_alert.call_args[0][0]
+                        assert sample_aggregate_report.query_id in alert_msg
+                        assert "Trusted value for" in alert_msg
+                        assert "was 0" in alert_msg
 
     @pytest.mark.asyncio
     async def test_inspect_no_config(self, mock_logger, mock_config_watcher, sample_aggregate_report):

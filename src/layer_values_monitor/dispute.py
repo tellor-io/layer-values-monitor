@@ -204,8 +204,10 @@ def is_disputable(
         return None, None, None
 
     if metric.lower() == "percentage":
-        percent_diff: float = (reported_value - trusted_value) / trusted_value
-        percent_diff = abs(percent_diff)
+        if trusted_value == 0:
+            logger.error("Cannot determine if disputable: trusted_value is 0 for percentage metric")
+            return None, None, None
+        percent_diff = abs((reported_value - trusted_value) / trusted_value)
         logger.debug(f"percent diff: {percent_diff}, reported value: {reported_value} - trusted value: {trusted_value}")
 
         # Handle None values for thresholds - but don't override valid thresholds

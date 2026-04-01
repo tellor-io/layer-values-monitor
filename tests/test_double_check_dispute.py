@@ -8,7 +8,8 @@ The flow is:
 """
 
 import asyncio
-from unittest.mock import Mock, patch
+from dataclasses import replace
+from unittest.mock import AsyncMock, Mock, patch
 
 from layer_values_monitor.custom_types import Metrics, NewReport
 
@@ -158,6 +159,177 @@ async def test_immediate_refresh_clears_dispute(sample_report, metrics):
 
     # Alert should still be sent (alertable but not disputable after refresh)
     mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    assert "First Trusted Value" in alert_msg
+    assert "Second Trusted Value" in alert_msg
+    assert str(cached_trusted_value) in alert_msg
+    assert "99.5" in alert_msg
+
+
+@pytest.mark.asyncio
+async def test_evmcall_refresh_matching_bytes_cancels_dispute(sample_report):
+    """Test that EVMCall refreshes compare the inner bytes payload, not the full tuple."""
+    from layer_values_monitor.monitor import inspect_evmcall_path
+
+    evm_report = replace(
+        sample_report,
+        query_type="EVMCall",
+        value="0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    evm_metrics = Metrics(
+        metric="equality",
+        alert_threshold=1.0,
+        warning_threshold=1.0,
+        minor_threshold=0.0,
+        major_threshold=0.0,
+        pause_threshold=0.0,
+    )
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.value_type.decode.return_value = (b"\x01", 1234567890)
+    mock_feed = Mock()
+
+    with patch("layer_values_monitor.monitor.get_query", return_value=mock_query):
+        with patch("layer_values_monitor.monitor.get_feed", return_value=mock_feed):
+            with patch(
+                "layer_values_monitor.monitor.fetch_value_cached",
+                new=AsyncMock(
+                    side_effect=[
+                        ((b"\x02", 1234567880), 9999999980),
+                        ((b"\x01", 1234567890), 9999999999),
+                    ]
+                ),
+            ):
+                with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+                    with patch("layer_values_monitor.monitor.asyncio.sleep") as mock_sleep:
+                        await inspect_evmcall_path(
+                            [evm_report],
+                            disputes_q,
+                            evm_report.query_id,
+                            evm_report.query_data,
+                            evm_metrics,
+                            mock_logger,
+                        )
+            mock_sleep.assert_not_called()
+
+    assert disputes_q.empty()
+    mock_alert.assert_called_once()
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert "NO DISPUTE SENT" in alert_desc
+
+
+@pytest.mark.asyncio
+async def test_zero_cached_trusted_value_sends_alert_and_skips_dispute(sample_report, metrics):
+    """Test that a zero cached trusted value sends an alert and skips inspection."""
+    from layer_values_monitor.monitor import inspect
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.type = "SpotPrice"
+
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        await inspect(
+            sample_report,
+            100.0,
+            0.0,
+            disputes_q,
+            metrics,
+            mock_logger,
+            query=mock_query,
+            trusted_value_fetcher=None,
+        )
+
+    assert disputes_q.empty()
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert sample_report.query_id in alert_msg
+    assert "Trusted value for" in alert_msg
+    assert "was 0" in alert_msg
+    assert "TRUSTED VALUE WAS 0" in alert_desc
+
+
+@pytest.mark.asyncio
+async def test_zero_immediate_refresh_value_sends_alert_and_cancels_dispute(sample_report, metrics):
+    """Test that a zero immediate refresh value sends an alert and cancels the dispute."""
+    from layer_values_monitor.monitor import inspect
+
+    async def mock_fetcher():
+        return (0.0, 1234567890)
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.type = "SpotPrice"
+
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        with patch("layer_values_monitor.monitor.asyncio.sleep") as mock_sleep:
+            await inspect(
+                sample_report,
+                100.0,
+                90.0,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+            mock_sleep.assert_not_called()
+
+    assert disputes_q.empty()
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert sample_report.query_id in alert_msg
+    assert "Trusted value for" in alert_msg
+    assert "was 0" in alert_msg
+    assert "TRUSTED VALUE WAS 0" in alert_desc
+
+
+@pytest.mark.asyncio
+async def test_zero_final_refresh_value_sends_alert_and_cancels_dispute(sample_report, metrics):
+    """Test that a zero final refresh value sends an alert and cancels the dispute."""
+    from layer_values_monitor.monitor import inspect
+
+    fetch_call_count = 0
+
+    async def mock_fetcher():
+        nonlocal fetch_call_count
+        fetch_call_count += 1
+        if fetch_call_count == 1:
+            return (88.0, 1234567890)
+        return (0.0, 1234567891)
+
+    disputes_q = asyncio.Queue()
+    mock_logger = Mock()
+    mock_query = Mock()
+    mock_query.type = "SpotPrice"
+
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
+        with patch("layer_values_monitor.monitor.asyncio.sleep", return_value=None):
+            await inspect(
+                sample_report,
+                100.0,
+                90.0,
+                disputes_q,
+                metrics,
+                mock_logger,
+                query=mock_query,
+                trusted_value_fetcher=mock_fetcher,
+            )
+
+    assert disputes_q.empty()
+    assert fetch_call_count == 2
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert sample_report.query_id in alert_msg
+    assert "Trusted value for" in alert_msg
+    assert "was 0" in alert_msg
+    assert "TRUSTED VALUE WAS 0" in alert_desc
 
 
 @pytest.mark.asyncio
@@ -271,7 +443,7 @@ async def test_fetcher_error_on_immediate_refresh_cancels_dispute(sample_report,
         raise Exception("API Error")
 
     # Execute
-    with patch("layer_values_monitor.monitor.generic_alert"):
+    with patch("layer_values_monitor.monitor.generic_alert") as mock_alert:
         await inspect(
             sample_report,
             reported_value,
@@ -288,6 +460,11 @@ async def test_fetcher_error_on_immediate_refresh_cancels_dispute(sample_report,
 
     # Verify error was logged
     assert any("Error during dispute verification" in str(call) for call in mock_logger.error.call_args_list)
+    mock_alert.assert_called_once()
+    alert_msg = mock_alert.call_args[0][0]
+    alert_desc = mock_alert.call_args[1].get("description", "")
+    assert "VERIFICATION FAILED" in alert_desc
+    assert "Fresh trusted value verification failed" in alert_msg
 
 
 @pytest.mark.asyncio

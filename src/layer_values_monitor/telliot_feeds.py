@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -77,7 +78,9 @@ class PriceCache:
         self._hits = 0
         self._misses = 0
         self._lock = asyncio.Lock()
+        self._in_flight: dict[str, asyncio.Task[OptionalDataPoint]] = {}
         self._config_watcher: ConfigWatcher | None = None
+        self._ttl_override: float | None = None
 
     def set_config_watcher(self, config_watcher: ConfigWatcher) -> None:
         """Set the config watcher for per-query TTL lookups.
@@ -99,8 +102,11 @@ class PriceCache:
             TTL in seconds (per-query override or global default)
 
         """
-        if self._config_watcher and query_type:
-            return self._config_watcher.get_check_interval(query_id, query_type)
+        if self._config_watcher:
+            if query_type:
+                return self._config_watcher.get_check_interval(query_id, query_type)
+            if self._ttl_override is None:
+                return self._config_watcher.get_check_interval()
         return self._ttl
 
     def _get_staleness_threshold(self, query_id: str, query_type: str | None = None) -> float:
@@ -114,8 +120,11 @@ class PriceCache:
             Staleness threshold in seconds
 
         """
-        if self._config_watcher and query_type:
-            return self._config_watcher.get_staleness_threshold(query_id, query_type)
+        if self._config_watcher:
+            if query_type:
+                return self._config_watcher.get_staleness_threshold(query_id, query_type)
+            if self._ttl_override is None:
+                return self._config_watcher.get_staleness_threshold()
         # Default: 3x the TTL
         return self._ttl * 3
 
@@ -154,6 +163,7 @@ class PriceCache:
 
         This method returns the cached value even if it's expired (for comparison),
         along with information about whether it's stale (too old to be trusted).
+        It is a diagnostic read, so it does not affect hit/miss statistics.
 
         Args:
             query_id: The query ID to look up
@@ -168,10 +178,8 @@ class PriceCache:
         async with self._lock:
             entry = self._cache.get(query_id)
             if entry is None:
-                self._misses += 1
                 return None
 
-            self._hits += 1
             age = time.time() - entry.fetch_time
             is_stale = age > staleness_threshold
 
@@ -236,21 +244,63 @@ class PriceCache:
             self._hits = 0
             self._misses = 0
 
-    def get_stats(self) -> dict[str, Any]:
-        """Get cache statistics.
+    async def get_cached_or_in_flight(
+        self,
+        query_id: str,
+        query_type: str | None,
+        fetcher: Callable[[], Awaitable[OptionalDataPoint]],
+        *,
+        allow_cached: bool,
+    ) -> tuple[tuple[Any, float] | None, asyncio.Task[OptionalDataPoint] | None, bool]:
+        """Return a cached value or a shared in-flight fetch task.
+
+        This prevents a thundering herd when many callers miss the cache for the
+        same query at the same time.
+        """
+        ttl = self._get_ttl_for_query(query_id, query_type)
+
+        async with self._lock:
+            if allow_cached:
+                entry = self._cache.get(query_id)
+                if entry and self._is_valid(entry, ttl):
+                    return (entry.value, entry.timestamp), None, False
+                if entry:
+                    del self._cache[query_id]
+
+            task = self._in_flight.get(query_id)
+            if task is None:
+                task = asyncio.create_task(fetcher())
+                self._in_flight[query_id] = task
+                return None, task, True
+            return None, task, False
+
+    async def clear_in_flight(self, query_id: str, task: asyncio.Task[OptionalDataPoint]) -> None:
+        """Remove a completed in-flight fetch task if it still matches the key."""
+        async with self._lock:
+            if self._in_flight.get(query_id) is task:
+                del self._in_flight[query_id]
+
+    async def get_stats(self) -> dict[str, Any]:
+        """Get cache statistics from a locked snapshot.
 
         Returns:
             Dict with hits, misses, hit_rate, and size
 
         """
-        total = self._hits + self._misses
-        hit_rate = (self._hits / total * 100) if total > 0 else 0.0
+        async with self._lock:
+            hits = self._hits
+            misses = self._misses
+            size = len(self._cache)
+            ttl = self._ttl
+
+        total = hits + misses
+        hit_rate = (hits / total * 100) if total > 0 else 0.0
         return {
-            "hits": self._hits,
-            "misses": self._misses,
+            "hits": hits,
+            "misses": misses,
             "hit_rate": f"{hit_rate:.1f}%",
-            "size": len(self._cache),
-            "ttl_seconds": self._ttl,
+            "size": size,
+            "ttl_seconds": ttl,
         }
 
 
@@ -275,6 +325,7 @@ def set_cache_ttl(ttl_seconds: float) -> None:
     """
     global _price_cache
     _price_cache._ttl = ttl_seconds
+    _price_cache._ttl_override = ttl_seconds
 
 
 def initialize_cache_with_config(config_watcher: ConfigWatcher) -> None:
@@ -286,7 +337,8 @@ def initialize_cache_with_config(config_watcher: ConfigWatcher) -> None:
     """
     global _price_cache
     _price_cache.set_config_watcher(config_watcher)
-    _price_cache._ttl = config_watcher.get_check_interval()
+    if _price_cache._ttl_override is None:
+        _price_cache._ttl = config_watcher.get_check_interval()
     logger.info(f"Price cache initialized with TTL: {_price_cache._ttl}s")
 
 
@@ -425,18 +477,36 @@ async def fetch_value_cached(
             log.debug(f"💾 Cache HIT for {query_id[:16]}... (value: {cached[0]})")
             return cached
 
-    # Cache miss or force refresh - fetch from API
-    log.debug(f"🌐 Cache MISS for {query_id[:16]}... - fetching from API")
-    result = await fetch_value(feed)
+    async def fetch_and_cache() -> OptionalDataPoint:
+        log.debug(f"🌐 Cache MISS for {query_id[:16]}... - fetching from API")
+        result = await fetch_value(feed)
 
-    if result is not None:
-        value, timestamp = result
-        # Store in cache
-        await cache.set(query_id, value, timestamp)
-        ttl = cache._get_ttl_for_query(query_id, query_type)
-        log.debug(f"💾 Cached value for {query_id[:16]}... (TTL: {ttl}s)")
+        if result is not None:
+            value, timestamp = result
+            await cache.set(query_id, value, timestamp)
+            ttl = cache._get_ttl_for_query(query_id, query_type)
+            log.debug(f"💾 Cached value for {query_id[:16]}... (TTL: {ttl}s)")
 
-    return result
+        return result
+
+    cached_after_wait, in_flight_task, is_owner = await cache.get_cached_or_in_flight(
+        query_id,
+        query_type,
+        fetch_and_cache,
+        allow_cached=not force_refresh,
+    )
+    if cached_after_wait is not None:
+        log.debug(f"💾 Cache FILLED for {query_id[:16]}... while waiting for shared fetch")
+        return cached_after_wait
+
+    if in_flight_task is None:
+        return None
+
+    try:
+        return await asyncio.shield(in_flight_task)
+    finally:
+        if is_owner:
+            await cache.clear_in_flight(query_id, in_flight_task)
 
 
 def extract_query_info(query: AbiQuery | JsonQuery | None, query_type: str | None = None) -> str:

@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
@@ -31,6 +32,7 @@ from layer_values_monitor.logger import console_logger
 from layer_values_monitor.saga_contract import SagaContractManager
 from layer_values_monitor.telliot_feeds import (
     CacheResult,
+    extract_query_info,
     fetch_value_cached,
     get_feed,
     get_price_cache,
@@ -728,11 +730,6 @@ async def inspect_spotprice_path(
         logger.error("Unable to get feed")
         return None
 
-    # Use cached fetch to reduce API calls (e.g., CoinGecko)
-    # Multiple reports for the same query_id will share the cached value
-    logger.debug("Fetching trusted value from feed (with cache)...")
-    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
-
     # Check for staleness
     cache = get_price_cache()
     cache_result = await cache.get_with_staleness(query_id, query_type)
@@ -743,6 +740,11 @@ async def inspect_spotprice_path(
         )
         # Send staleness alert
         await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+
+    # Use cached fetch to reduce API calls (e.g., CoinGecko)
+    # Multiple reports for the same query_id will share the cached value
+    logger.debug("Fetching trusted value from feed (with cache)...")
+    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
 
     if result is None:
         logger.error("Unable to fetch trusted value")
@@ -819,8 +821,19 @@ async def inspect_evmcall_path(
 
     # Create fetcher lambda for immediate refresh when threshold is breached
     # Note: Uses force_refresh=True to bypass cache
-    async def fetch_trusted_value() -> tuple[Any, Any]:
-        return await fetch_value_cached(feed, query_id, logger, force_refresh=True, query_type=query_type)
+    async def fetch_trusted_value() -> tuple[Any, Any] | None:
+        refreshed = await fetch_value_cached(feed, query_id, logger, force_refresh=True, query_type=query_type)
+        if refreshed is None:
+            return None
+
+        refreshed_value_tuple, refreshed_timestamp = refreshed
+        if not isinstance(refreshed_value_tuple, tuple) or len(refreshed_value_tuple) != 2:
+            logger.error(
+                f"Expected tuple (value, timestamp) from refreshed EVMCall feed, got: {type(refreshed_value_tuple)}"
+            )
+            return None
+
+        return refreshed_value_tuple[0], refreshed_timestamp
 
     logger.debug(f"Inspecting {len(reports)} EVMCall report(s)...")
     for r in reports:
@@ -903,9 +916,9 @@ async def new_reports_queue_handler(
             logger.warning(f"🧹 Cleaned up {len(completed_tasks)} completed tasks (active: {len(running_tasks)})")
 
         # Periodic cache statistics logging
-        reports_processed += len(new_reports)
+        reports_processed += sum(len(reports) for reports in new_reports.values())
         if reports_processed >= cache_log_interval:
-            cache_stats = get_price_cache().get_stats()
+            cache_stats = await get_price_cache().get_stats()
             logger.info(
                 f"💾 Price cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
                 f"{cache_stats['hit_rate']} hit rate, {cache_stats['size']} entries cached"
@@ -965,21 +978,23 @@ async def inspect_aggregate_report(
     # Get feed and trusted value (same logic as inspect_reports)
     # Uses cached fetch - aggregate reports often arrive shortly after new reports
     # for the same query_id, so we can reuse the cached value
-    query = get_query(query_data)
-    if query is None:
-        logger.error(f"Unable to parse query data for aggregate report query id: {query_id}")
-        return None
-
     feed = await get_feed(query_id, query, logger)
     if feed is None:
         logger.error(f"Unable to get feed for aggregate report query id: {query_id}")
         return None
 
-    result = await fetch_value_cached(feed, query_id, logger)
+    # Pass the resolved query type so aggregate checks use the same TTL rules
+    # as single-report inspection for that query.
+    result = await fetch_value_cached(feed, query_id, logger, query_type=query_type)
     if result is None:
         logger.error(f"Unable to fetch trusted value for aggregate report query id: {query_id}")
         return None
     trusted_value, _ = result
+
+    if metrics.metric.lower() == "percentage" and trusted_value == 0:
+        query_info = extract_query_info(query, query_type=query_type)
+        await send_zero_trusted_value_alert(query_id, query_type, query_info, logger)
+        return None
 
     # Decode the aggregate hex value
     try:
@@ -1416,6 +1431,35 @@ async def send_staleness_alert(
         logger.error(f"Failed to send staleness alert: {e}")
 
 
+async def send_zero_trusted_value_alert(
+    query_id: str,
+    query_type: str,
+    query_info: str,
+    logger: logging.Logger,
+    reported_value: Any | None = None,
+) -> None:
+    """Send Discord alert when a percentage-based trusted value is zero.
+
+    A zero trusted value makes percentage comparisons invalid, so we alert and
+    skip inspection instead of treating the report as disputable.
+    """
+    try:
+        query_label = query_info if isinstance(query_info, str) and query_info else query_type
+
+        alert_msg = f"**QueryId:** {query_id}\n"
+        alert_msg += f"**QueryType:** {query_type}\n"
+        if query_label and query_label not in {query_type, "Unknown"}:
+            alert_msg += f"**Asset:** {query_label}\n"
+        if reported_value is not None:
+            alert_msg += f"**Reported Value:** {reported_value}\n"
+        alert_msg += f"**Status:** Trusted value for {query_label} query was 0"
+
+        logger.warning(f"Zero trusted value alert:\n{alert_msg}")
+        generic_alert(alert_msg, description="⚠️ **TRUSTED VALUE WAS 0**")
+    except Exception as e:
+        logger.error(f"Failed to send zero trusted value alert: {e}")
+
+
 async def send_unsupported_query_alert(
     query_id: str,
     query_type: str,
@@ -1552,6 +1596,7 @@ async def perform_dispute_verification(
     metrics: Metrics,
     logger: logging.Logger,
     trusted_value_fetcher: Any = None,
+    zero_trusted_value_handler: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Perform verification logic to determine if a dispute should be submitted.
 
@@ -1586,6 +1631,9 @@ async def perform_dispute_verification(
         "second_trusted_time": None,
         "second_check_disputable": None,
         "second_diff": None,
+        "zero_trusted_value_detected": False,
+        "verification_failed": False,
+        "verification_failure_reason": None,
     }
 
     if disputable and trusted_value_fetcher is not None:
@@ -1596,6 +1644,8 @@ async def perform_dispute_verification(
             immediate_result = await trusted_value_fetcher()
             if immediate_result is None:
                 logger.error("❌ Failed to fetch fresh trusted value. Cancelling dispute.")
+                result["verification_failed"] = True
+                result["verification_failure_reason"] = "Fresh trusted value verification failed on immediate refresh."
                 return result
 
             # Extract value from result tuple
@@ -1604,6 +1654,13 @@ async def perform_dispute_verification(
             )
             result["immediate_refresh_time"] = time.time()
             logger.info(f"✅ Fresh trusted value fetched: {result['immediate_refresh_value']}")
+
+            if metrics.metric.lower() == "percentage" and result["immediate_refresh_value"] == 0:
+                result["zero_trusted_value_detected"] = True
+                if zero_trusted_value_handler is not None:
+                    await zero_trusted_value_handler()
+                logger.warning("Fresh trusted value was 0. Cancelling dispute.")
+                return result
 
             # Step 2: Check if fresh value still crosses threshold
             _, immediate_disputable, immediate_diff = is_disputable(
@@ -1618,6 +1675,12 @@ async def perform_dispute_verification(
             result["immediate_diff"] = immediate_diff
 
             if not immediate_disputable:
+                # Reuse the existing "second check" alert fields so operators can see
+                # the refreshed trusted value that cleared the dispute.
+                result["second_trusted_value"] = result["immediate_refresh_value"]
+                result["second_trusted_time"] = result["immediate_refresh_time"]
+                result["second_check_disputable"] = immediate_disputable
+                result["second_diff"] = immediate_diff
                 logger.info(
                     f"⚠️ Fresh check did NOT cross threshold (diff: {immediate_diff})."
                     " Dispute cancelled - likely stale cache."
@@ -1637,6 +1700,8 @@ async def perform_dispute_verification(
 
             if final_result is None:
                 logger.error("❌ Failed to fetch final trusted value. Cancelling dispute.")
+                result["verification_failed"] = True
+                result["verification_failure_reason"] = "Fresh trusted value verification failed during final check."
                 return result
 
             # Extract value from result tuple
@@ -1646,6 +1711,13 @@ async def perform_dispute_verification(
             result["second_trusted_value"] = result["final_trusted_value"]
             result["second_trusted_time"] = result["final_trusted_time"]
             logger.info(f"✅ Final trusted value fetched: {result['final_trusted_value']}")
+
+            if metrics.metric.lower() == "percentage" and result["final_trusted_value"] == 0:
+                result["zero_trusted_value_detected"] = True
+                if zero_trusted_value_handler is not None:
+                    await zero_trusted_value_handler()
+                logger.warning("Final trusted value was 0. Cancelling dispute.")
+                return result
 
             # Step 4: Final check - only dispute if still crosses threshold
             _, final_disputable, final_diff = is_disputable(
@@ -1690,6 +1762,8 @@ async def perform_dispute_verification(
 
         except Exception as e:
             logger.error(f"❌ Error during dispute verification: {e}. Cancelling dispute.")
+            result["verification_failed"] = True
+            result["verification_failure_reason"] = f"Fresh trusted value verification failed: {e}"
 
     elif disputable and trusted_value_fetcher is None:
         # Single-check logic for TRBBridge queries (no fetcher available)
@@ -1771,6 +1845,22 @@ async def inspect(
     # Store first trusted value timestamp
     first_trusted_value = trusted_value
     first_trusted_time = time.time()
+    query_info = extract_query_info(query, query_type=report.query_type)
+
+    async def alert_zero_trusted_value() -> None:
+        await send_zero_trusted_value_alert(
+            report.query_id,
+            report.query_type,
+            query_info,
+            logger,
+            reported_value=reported_value,
+        )
+
+    if metrics.metric.lower() == "percentage" and trusted_value == 0:
+        await alert_zero_trusted_value()
+        display["DISPUTABLE"] = False
+        add_to_table(display)
+        return None
 
     # compare values and check against threshold- three metrics(percentage, equality, range)
     alertable, disputable, diff = is_disputable(
@@ -1810,7 +1900,13 @@ async def inspect(
 
     # Perform dispute verification (double-check for SpotPrice, single-check for others)
     verification_result = await perform_dispute_verification(
-        disputable, diff, reported_value, metrics, logger, trusted_value_fetcher
+        disputable,
+        diff,
+        reported_value,
+        metrics,
+        logger,
+        trusted_value_fetcher,
+        zero_trusted_value_handler=alert_zero_trusted_value,
     )
 
     should_dispute = verification_result["should_dispute"]
@@ -1819,6 +1915,14 @@ async def inspect(
     second_trusted_time = verification_result["second_trusted_time"]
     second_check_disputable = verification_result["second_check_disputable"]
     second_diff = verification_result["second_diff"]
+    zero_trusted_value_detected = verification_result["zero_trusted_value_detected"]
+    verification_failed = verification_result["verification_failed"]
+    verification_failure_reason = verification_result["verification_failure_reason"]
+
+    if zero_trusted_value_detected:
+        display["DISPUTABLE"] = False
+        add_to_table(display)
+        return None
 
     # Send Discord alert AFTER double-check completes (or immediately if no double-check)
     if alertable or (disputable and trusted_value_fetcher is not None):
@@ -1827,9 +1931,7 @@ async def inspect(
 
         from layer_values_monitor.discord import build_alert_message, format_difference, format_values
         from layer_values_monitor.dispute import get_disputer_address, validate_keyring_config
-        from layer_values_monitor.telliot_feeds import extract_query_info
 
-        query_info = extract_query_info(query, query_type=report.query_type)
         diff_str = format_difference(diff, metrics.metric)
 
         # Build message based on whether we did double-check
@@ -1886,7 +1988,7 @@ async def inspect(
 
             # Get disputer information based on dispute level and keyring config
             disputer_info = None
-            if is_disputable_flag and dispute_level != "warning":
+            if is_disputable_flag and dispute_level != "warning" and not verification_failed:
                 # Only show disputer info for disputable alerts (not warnings)
                 binary_path = os.getenv("LAYER_BINARY_PATH")
                 key_name = os.getenv("LAYER_KEY_NAME")
@@ -1915,7 +2017,11 @@ async def inspect(
             )
 
             # Determine description based on whether it's disputable
-            if alertable and not is_disputable_flag:
+            if verification_failed:
+                description = "⚠️ **VERIFICATION FAILED - NO DISPUTE SENT**"
+                reason = verification_failure_reason or "Fresh trusted value verification failed."
+                msg += f"\n**Status:** {reason}"
+            elif alertable and not is_disputable_flag:
                 description = "⚠️ **ALERT THRESHOLD TRIGGERED, BUT NOT AT DISPUTE LEVEL**"
             else:
                 description = "❗**FOUND SOMETHING**❗"
