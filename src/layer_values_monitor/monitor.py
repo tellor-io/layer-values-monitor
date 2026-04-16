@@ -738,8 +738,11 @@ async def inspect_spotprice_path(
             f"⚠️ STALE CACHE for {query_id[:16]}... - age: {cache_result.age_seconds:.1f}s "
             f"(threshold: {config_watcher.get_staleness_threshold(query_id, query_type):.1f}s)"
         )
-        # Send staleness alert
-        await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+        if not await cache.is_stale_alerted(query_id):
+            await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+            await cache.mark_stale_alerted(query_id)
+        else:
+            logger.warning(f"Stale cache repeat alert suppressed for {query_id[:16]}...")
 
     # Use cached fetch to reduce API calls (e.g., CoinGecko)
     # Multiple reports for the same query_id will share the cached value
@@ -1422,7 +1425,7 @@ async def send_staleness_alert(
         alert_msg += f"**Cached Value:** {cache_result.value}\n"
         alert_msg += f"**Cache Age:** {cache_result.age_seconds:.1f} seconds\n"
         alert_msg += f"**Last Fetched:** {fetch_time_str}\n"
-        alert_msg += "**Status:** Cache is stale - API may be having issues"
+        alert_msg += "**Status:** Cache is stale - check telliot sources for errors"
 
         logger.warning(f"Staleness alert:\n{alert_msg}")
         generic_alert(alert_msg, description="⏰ **STALE CACHE WARNING**")

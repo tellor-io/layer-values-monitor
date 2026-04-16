@@ -21,7 +21,7 @@ from layer_values_monitor.monitor import (
     raw_data_queue_handler,
 )
 from layer_values_monitor.saga_contract import create_saga_contract_manager
-from layer_values_monitor.telliot_feeds import initialize_cache_with_config
+from layer_values_monitor.telliot_feeds import get_price_cache, initialize_cache_with_config, run_cache_refresh_loop
 
 from dotenv import load_dotenv
 from telliot_core.apps.telliot_config import TelliotConfig
@@ -265,6 +265,7 @@ async def start() -> None:
                 logger=logger,
             ),
             watch_config(config_watcher),
+            run_cache_refresh_loop(get_price_cache(), logger),
         ]
 
         # Only add Saga-related tasks if enabled

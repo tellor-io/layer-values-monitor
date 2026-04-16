@@ -211,6 +211,42 @@ class TestPriceCache:
         age = await cache.get_age("nonexistent_query")
         assert age is None
 
+    @pytest.mark.asyncio
+    async def test_stale_alert_state_clears_on_successful_cache_set(self, cache):
+        """A successful refresh should clear the stale-alert suppression flag."""
+        query_id = "test_query_stale_alert"
+
+        await cache.mark_stale_alerted(query_id)
+        assert await cache.is_stale_alerted(query_id) is True
+
+        await cache.set(query_id, 100.5, time.time())
+
+        assert await cache.is_stale_alerted(query_id) is False
+
+    @pytest.mark.asyncio
+    async def test_get_refresh_candidates_only_returns_active_entries_near_ttl(self, cache):
+        """Only active queries near TTL expiry should be proactively refreshed."""
+        query_id = "test_query_refresh_candidate"
+        inactive_query_id = "test_query_inactive"
+        query_type = "spotprice"
+        feed = MagicMock()
+        inactive_feed = MagicMock()
+
+        await cache.set(query_id, 100.5, time.time())
+        await cache.register_feed(query_id, feed, query_type)
+        await cache.record_report_activity(query_id, query_type)
+        cache._last_fetch_time[query_id] -= 0.9
+
+        await cache.set(inactive_query_id, 101.5, time.time())
+        await cache.register_feed(inactive_query_id, inactive_feed, query_type)
+        await cache.record_report_activity(inactive_query_id, query_type)
+        cache._last_fetch_time[inactive_query_id] -= 0.9
+        cache._last_report_time[inactive_query_id] -= 4.0
+
+        candidates = await cache.get_refresh_candidates(0.8)
+
+        assert candidates == [(query_id, feed, query_type)]
+
 
 class TestPerQueryTTL:
     """Test cases for per-query TTL configuration."""
@@ -410,6 +446,24 @@ class TestFetchValueCached:
             result = await fetch_value_cached(feed, query_id, mock_logger)
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_value_cached_registers_feed_and_report_activity(self, mock_logger):
+        """fetch_value_cached should keep feed metadata for proactive refreshes."""
+        cache = get_price_cache()
+        await cache.clear()
+
+        query_id = f"test_query_activity_{time.time()}"
+        query_type = "spotprice"
+        feed = MagicMock()
+        feed.source.fetch_new_datapoint = AsyncMock(return_value=(100.5, time.time()))
+
+        await fetch_value_cached(feed, query_id, mock_logger, query_type=query_type)
+
+        assert cache._feeds[query_id] is feed
+        assert cache._query_types[query_id] == query_type
+        assert query_id in cache._last_report_time
+        assert query_id in cache._last_fetch_time
 
 
 class TestGlobalCache:

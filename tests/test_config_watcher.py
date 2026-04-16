@@ -144,6 +144,14 @@ def test_find_query_config(config_watcher):
     assert config == {}
 
 
+def test_cache_refresh_settings_default_when_not_configured(config_watcher):
+    """New cache refresh settings should fall back to defaults cleanly."""
+    assert config_watcher.get_refresh_threshold() == 0.8
+    assert config_watcher.get_active_window_multiplier() == 3
+    assert config_watcher.get_active_window("test_query_id", "spotprice") > 0
+    assert config_watcher.get_max_concurrent_refreshes() == 3
+
+
 def test_get_metrics_for_query(config_watcher):
     """Test get_metrics_for_query with inheritance."""
     metrics = config_watcher.get_metrics_for_query("test_query_id", "spotprice")
