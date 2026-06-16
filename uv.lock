@@ -611,7 +611,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "ruff", specifier = ">=0.13.3" },
-    { name = "telliot-feeds", specifier = ">=0.4.15" },
+    { name = "telliot-feeds", directory = "../../../telliot-feeds" },
     { name = "websockets", specifier = "==13.1" },
 ]
 
@@ -1240,7 +1240,7 @@ wheels = [
 [[package]]
 name = "telliot-feeds"
 version = "0.4.15"
-source = { registry = "https://pypi.org/simple" }
+source = { directory = "../../../telliot-feeds" }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiosignal" },
@@ -1295,9 +1295,61 @@ dependencies = [
     { name = "websockets" },
     { name = "yarl" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/14/61/f44c32a0da553609a48f1ab82a00aa5d2f721c48a8a7b17ab40bb4ffc515/telliot_feeds-0.4.15.tar.gz", hash = "sha256:9d82e23655e7fab58a2328658747bf2f058f1bf38c357855b233299dadc2eed6", size = 589236, upload-time = "2026-02-18T19:35:09.723Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/d1/ccaaea0adca90754ef6f8714f8cb425d31f50a493701620f2b5d0f1f9359/telliot_feeds-0.4.15-py3-none-any.whl", hash = "sha256:b24fbd90d544f9d39df280c2628e3e42533a7e1ffcb66f4b973b9b57626406d4", size = 479286, upload-time = "2026-02-18T19:35:08.307Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = "==3.11.13" },
+    { name = "aiosignal", specifier = "==1.3.2" },
+    { name = "async-timeout", specifier = "==5.0.1" },
+    { name = "attrs", specifier = ">=24.0.0" },
+    { name = "bitarray", specifier = "==3.1.0" },
+    { name = "certifi", specifier = "==2025.1.31" },
+    { name = "chained-accounts", specifier = "==0.0.1" },
+    { name = "charset-normalizer", specifier = "==3.4.1" },
+    { name = "clamfig", specifier = "==0.1.3" },
+    { name = "click", specifier = "==8.1.8" },
+    { name = "cytoolz", specifier = "==1.0.1" },
+    { name = "eth-abi", specifier = "==5.2.0" },
+    { name = "eth-account", specifier = ">=0.13.6,<0.14" },
+    { name = "eth-hash", specifier = "==0.7.1" },
+    { name = "eth-keyfile", specifier = ">=0.8.0,<0.9.0" },
+    { name = "eth-keys", specifier = "==0.6.1" },
+    { name = "eth-retry", specifier = "==0.2.1" },
+    { name = "eth-rlp", specifier = ">=2.1.0,<3" },
+    { name = "eth-tester", specifier = "==0.13.0b1" },
+    { name = "eth-typing", specifier = ">=5,<6" },
+    { name = "eth-utils", specifier = ">=5,<6" },
+    { name = "frozenlist", specifier = "==1.5.0" },
+    { name = "hexbytes", specifier = ">=1.2.0,<2" },
+    { name = "idna", specifier = "==3.10" },
+    { name = "ipfshttpclient", specifier = "==0.8.0a2" },
+    { name = "jsonschema", specifier = "==4.23.0" },
+    { name = "lru-dict", specifier = "==1.2.0" },
+    { name = "multiaddr", specifier = "==0.0.9" },
+    { name = "multicall", specifier = "==0.10.0" },
+    { name = "multidict", specifier = "==6.1.0" },
+    { name = "netaddr", specifier = "==0.8.0" },
+    { name = "parsimonious", specifier = "==0.10.0" },
+    { name = "protobuf", specifier = ">=5.29.3" },
+    { name = "pycryptodome", specifier = "==3.21.0" },
+    { name = "pyrsistent", specifier = "==0.19.2" },
+    { name = "python-dateutil", specifier = "==2.9.0.post0" },
+    { name = "python-dotenv", specifier = "==1.0.1" },
+    { name = "pytz", specifier = "==2025.1" },
+    { name = "pyyaml", specifier = "==6.0.2" },
+    { name = "requests", specifier = "==2.32.3" },
+    { name = "rlp", specifier = ">=4,<5" },
+    { name = "setuptools", specifier = "<81" },
+    { name = "simple-term-menu", specifier = "==1.6.6" },
+    { name = "six", specifier = "==1.17.0" },
+    { name = "telliot-core", specifier = "==0.4.1" },
+    { name = "toolz", specifier = "==1.0.0" },
+    { name = "typing-extensions", specifier = "==4.12.2" },
+    { name = "urllib3", specifier = "==2.3.0" },
+    { name = "varint", specifier = "==1.0.2" },
+    { name = "web3", specifier = ">=7,<8" },
+    { name = "websockets", specifier = "==13.1" },
+    { name = "yarl", specifier = "==1.18.3" },
 ]
 
 [[package]]

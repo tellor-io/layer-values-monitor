@@ -31,6 +31,10 @@ DEFAULT_ACTIVE_WINDOW_MULTIPLIER = 3.0
 DEFAULT_MAX_CONCURRENT_REFRESHES = 3
 REFRESH_POLL_INTERVAL_SECONDS = 30.0
 
+# Stale cache alert rate-limiting constants
+STALE_ALERT_COOLDOWN = 300.0  # 5 minutes between stale alerts
+STALE_RECOVERY_WINDOW = 600.0  # 10 min since first alert + 5 min of freshness = recovery
+
 
 # =============================================================================
 # PRICE CACHE - Reduces redundant API calls (e.g., CoinGecko)
@@ -85,7 +89,8 @@ class PriceCache:
         self._in_flight: dict[str, asyncio.Task[OptionalDataPoint]] = {}
         self._config_watcher: ConfigWatcher | None = None
         self._ttl_override: float | None = None
-        self._stale_alerted: set[str] = set()
+        self._stale_state: dict[str, dict[str, Any]] = {}
+        # Per-query stale tracking: {query_id: {"first_alert_time", "last_alert_time", "last_stale_seen", "recovery_sent"}}
         self._feeds: dict[str, DataFeed] = {}
         self._query_types: dict[str, str | None] = {}
         self._last_report_time: dict[str, float] = {}
@@ -258,11 +263,10 @@ class PriceCache:
                     self._last_report_time.pop(key, None)
                     self._feeds.pop(key, None)
                     self._query_types.pop(key, None)
-                    self._stale_alerted.discard(key)
+                    self._stale_state.pop(key, None)
 
             self._cache[query_id] = CachedValue(value=value, timestamp=timestamp, fetch_time=now)
             self._last_fetch_time[query_id] = now
-            self._stale_alerted.discard(query_id)
 
     async def register_feed(self, query_id: str, feed: DataFeed, query_type: str | None = None) -> None:
         """Store the latest feed metadata for proactive refreshes."""
@@ -278,15 +282,73 @@ class PriceCache:
             if query_type is not None:
                 self._query_types[query_id] = query_type
 
-    async def mark_stale_alerted(self, query_id: str) -> None:
-        """Mark a query as having emitted a stale-cache alert."""
+    async def record_stale_seen(self, query_id: str) -> None:
+        """Record that staleness was detected (called on every stale check, even if alert is suppressed)."""
         async with self._lock:
-            self._stale_alerted.add(query_id)
+            state = self._stale_state.get(query_id)
+            now = time.time()
+            if state is None:
+                self._stale_state[query_id] = {
+                    "first_alert_time": 0.0,
+                    "last_alert_time": 0.0,
+                    "last_stale_seen": now,
+                    "recovery_sent": False,
+                }
+            else:
+                state["last_stale_seen"] = now
+                state["recovery_sent"] = False  # Reset: stale episode is still ongoing
+
+    async def mark_stale_alerted(self, query_id: str) -> None:
+        """Record that a stale-cache alert was sent for query_id."""
+        async with self._lock:
+            now = time.time()
+            state = self._stale_state.get(query_id)
+            if state is None:
+                self._stale_state[query_id] = {
+                    "first_alert_time": now,
+                    "last_alert_time": now,
+                    "last_stale_seen": now,
+                    "recovery_sent": False,
+                }
+            else:
+                if state["first_alert_time"] == 0.0:
+                    state["first_alert_time"] = now
+                state["last_alert_time"] = now
+                state["last_stale_seen"] = now
+                state["recovery_sent"] = False
 
     async def is_stale_alerted(self, query_id: str) -> bool:
-        """Check if a query already emitted a stale-cache alert."""
+        """Return True if a stale alert was sent within the 5-minute cooldown window."""
         async with self._lock:
-            return query_id in self._stale_alerted
+            state = self._stale_state.get(query_id)
+            if state is None:
+                return False
+            return (time.time() - state["last_alert_time"]) < STALE_ALERT_COOLDOWN
+
+    async def should_send_recovery(self, query_id: str) -> bool:
+        """Return True if it's time to send a 'Cache Freshness Recovered' alert.
+
+        Criteria: stale episode lasted >= 10 min (first_alert_time set) AND
+        no staleness detected in the last 5 min AND recovery not yet sent.
+        """
+        async with self._lock:
+            state = self._stale_state.get(query_id)
+            if state is None or state["recovery_sent"]:
+                return False
+            if state["first_alert_time"] == 0.0:
+                return False
+            now = time.time()
+            episode_long_enough = (now - state["first_alert_time"]) >= STALE_RECOVERY_WINDOW
+            fresh_long_enough = (now - state["last_stale_seen"]) >= (STALE_ALERT_COOLDOWN)
+            return episode_long_enough and fresh_long_enough
+
+    async def mark_recovery_sent(self, query_id: str) -> None:
+        """Record that a cache-freshness recovery alert was sent. Resets the stale episode."""
+        async with self._lock:
+            state = self._stale_state.get(query_id)
+            if state:
+                state["recovery_sent"] = True
+                state["first_alert_time"] = 0.0  # Reset so a future episode starts fresh
 
     async def get_refresh_candidates(self, ttl_ratio: float) -> list[tuple[str, DataFeed, str | None]]:
         """Return active queries that are approaching TTL expiry."""
@@ -325,7 +387,7 @@ class PriceCache:
             self._last_report_time.pop(query_id, None)
             self._feeds.pop(query_id, None)
             self._query_types.pop(query_id, None)
-            self._stale_alerted.discard(query_id)
+            self._stale_state.pop(query_id, None)
 
     async def clear(self) -> None:
         """Clear all cached entries."""
@@ -335,7 +397,7 @@ class PriceCache:
             self._query_types.clear()
             self._last_report_time.clear()
             self._last_fetch_time.clear()
-            self._stale_alerted.clear()
+            self._stale_state.clear()
             self._in_flight.clear()
             self._hits = 0
             self._misses = 0

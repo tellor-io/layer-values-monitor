@@ -212,16 +212,51 @@ class TestPriceCache:
         assert age is None
 
     @pytest.mark.asyncio
-    async def test_stale_alert_state_clears_on_successful_cache_set(self, cache):
-        """A successful refresh should clear the stale-alert suppression flag."""
+    async def test_stale_alert_state_cooldown_expires(self, cache):
+        """Stale alert suppression expires after the 5-minute cooldown window."""
+        from layer_values_monitor.telliot_feeds import STALE_ALERT_COOLDOWN
+
         query_id = "test_query_stale_alert"
 
         await cache.mark_stale_alerted(query_id)
         assert await cache.is_stale_alerted(query_id) is True
 
-        await cache.set(query_id, 100.5, time.time())
+        # Manually backdate the alert time past the cooldown window
+        cache._stale_state[query_id]["last_alert_time"] -= STALE_ALERT_COOLDOWN + 1
 
         assert await cache.is_stale_alerted(query_id) is False
+
+    @pytest.mark.asyncio
+    async def test_stale_state_persists_after_cache_set(self, cache):
+        """Stale state is retained after a cache.set() so recovery can be triggered."""
+        query_id = "test_query_stale_persist"
+
+        await cache.mark_stale_alerted(query_id)
+        assert await cache.is_stale_alerted(query_id) is True
+
+        # A fresh value arriving should NOT clear stale tracking
+        await cache.set(query_id, 100.5, time.time())
+
+        assert query_id in cache._stale_state
+
+    @pytest.mark.asyncio
+    async def test_stale_recovery_waits_for_episode_and_freshness_windows(self, cache):
+        """Recovery is eligible only after a long-enough stale episode and freshness window."""
+        from layer_values_monitor.telliot_feeds import STALE_ALERT_COOLDOWN, STALE_RECOVERY_WINDOW
+
+        query_id = "test_query_stale_recovery"
+
+        await cache.mark_stale_alerted(query_id)
+        assert await cache.should_send_recovery(query_id) is False
+
+        cache._stale_state[query_id]["first_alert_time"] -= STALE_RECOVERY_WINDOW + 1
+        assert await cache.should_send_recovery(query_id) is False
+
+        cache._stale_state[query_id]["last_stale_seen"] -= STALE_ALERT_COOLDOWN + 1
+        assert await cache.should_send_recovery(query_id) is True
+
+        await cache.mark_recovery_sent(query_id)
+        assert await cache.should_send_recovery(query_id) is False
 
     @pytest.mark.asyncio
     async def test_get_refresh_candidates_only_returns_active_entries_near_ttl(self, cache):
