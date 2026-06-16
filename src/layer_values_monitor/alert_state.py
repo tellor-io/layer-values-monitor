@@ -19,6 +19,7 @@ class AlertStateTracker:
     """
 
     def __init__(self) -> None:
+        """Initialize empty active alert tracking state."""
         self._active: dict[str, dict[str, Any]] = {}
         # {query_id: {"first_seen": float, "last_seen": float,
         #             "suppressed_count": int, "last_diff": float,

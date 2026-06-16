@@ -703,7 +703,12 @@ async def run_cache_refresh_loop(cache: PriceCache, logger_instance: logging.Log
         )
         semaphore = asyncio.Semaphore(max_concurrent)
 
-        async def refresh_candidate(query_id: str, feed: DataFeed, query_type: str | None) -> None:
+        async def refresh_candidate(
+            query_id: str,
+            feed: DataFeed,
+            query_type: str | None,
+            semaphore: asyncio.Semaphore = semaphore,
+        ) -> None:
             async with semaphore:
                 result = await _fetch_value_shared(
                     feed,

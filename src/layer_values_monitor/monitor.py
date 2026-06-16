@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from layer_values_monitor.alert_state import get_alert_state_tracker
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
@@ -22,7 +23,6 @@ from layer_values_monitor.custom_types import (
     Reporter,
     ReporterQueryResponse,
 )
-from layer_values_monitor.alert_state import get_alert_state_tracker
 from layer_values_monitor.discord import deprecated_query_type_alert, generic_alert
 from layer_values_monitor.dispute import (
     determine_dispute_category,
