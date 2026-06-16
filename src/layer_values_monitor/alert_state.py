@@ -77,6 +77,10 @@ class AlertStateTracker:
         """Return True if query_id currently has an active alert condition."""
         return query_id in self._active
 
+    def clear(self) -> None:
+        """Remove all active alert tracking state."""
+        self._active.clear()
+
 
 _alert_state_tracker = AlertStateTracker()
 
