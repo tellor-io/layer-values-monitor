@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from layer_values_monitor.alert_state import get_alert_state_tracker
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
@@ -738,8 +739,15 @@ async def inspect_spotprice_path(
             f"⚠️ STALE CACHE for {query_id[:16]}... - age: {cache_result.age_seconds:.1f}s "
             f"(threshold: {config_watcher.get_staleness_threshold(query_id, query_type):.1f}s)"
         )
-        # Send staleness alert
-        await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+        await cache.record_stale_seen(query_id)
+        if not await cache.is_stale_alerted(query_id):
+            await send_staleness_alert(query_id, query_type, asset_pair, cache_result, logger)
+            await cache.mark_stale_alerted(query_id)
+        else:
+            logger.warning(f"Stale cache repeat alert suppressed for {query_id[:16]}... (5-min cooldown active)")
+    elif await cache.should_send_recovery(query_id):
+        await send_cache_recovery_alert(query_id, query_type, asset_pair, logger)
+        await cache.mark_recovery_sent(query_id)
 
     # Use cached fetch to reduce API calls (e.g., CoinGecko)
     # Multiple reports for the same query_id will share the cached value
@@ -1422,13 +1430,38 @@ async def send_staleness_alert(
         alert_msg += f"**Cached Value:** {cache_result.value}\n"
         alert_msg += f"**Cache Age:** {cache_result.age_seconds:.1f} seconds\n"
         alert_msg += f"**Last Fetched:** {fetch_time_str}\n"
-        alert_msg += "**Status:** Cache is stale - API may be having issues"
+        alert_msg += "**Status:** Cache is stale - check telliot sources for errors"
 
         logger.warning(f"Staleness alert:\n{alert_msg}")
         generic_alert(alert_msg, description="⏰ **STALE CACHE WARNING**")
 
     except Exception as e:
         logger.error(f"Failed to send staleness alert: {e}")
+
+
+async def send_cache_recovery_alert(
+    query_id: str,
+    query_type: str,
+    asset_pair: str,
+    logger: logging.Logger,
+) -> None:
+    """Send Discord alert when a previously stale cache has recovered.
+
+    Fires once after the cache has been fresh for at least 5 minutes AND
+    the stale episode lasted at least 10 minutes total.
+    """
+    try:
+        alert_msg = f"**QueryId:** {query_id}\n"
+        alert_msg += f"**QueryType:** {query_type}\n"
+        if asset_pair != "Unknown":
+            alert_msg += f"**Asset pair:** {asset_pair}\n"
+        alert_msg += "**Status:** Telliot feed is returning fresh values again"
+
+        logger.info(f"Cache recovery alert:\n{alert_msg}")
+        generic_alert(alert_msg, description="✅ **CACHE FRESHNESS RECOVERED**")
+
+    except Exception as e:
+        logger.error(f"Failed to send cache recovery alert: {e}")
 
 
 async def send_zero_trusted_value_alert(
@@ -1458,6 +1491,40 @@ async def send_zero_trusted_value_alert(
         generic_alert(alert_msg, description="⚠️ **TRUSTED VALUE WAS 0**")
     except Exception as e:
         logger.error(f"Failed to send zero trusted value alert: {e}")
+
+
+async def send_condition_resolved_alert(
+    query_id: str,
+    query_type: str,
+    query_info: str,
+    active_state: dict,
+    logger: logging.Logger,
+) -> None:
+    """Send Discord alert when a previously alertable condition has resolved.
+
+    Called once when a query_id that was in an active alert state returns to
+    a value within acceptable thresholds.
+    """
+    try:
+        from datetime import datetime
+
+        first_seen_str = datetime.fromtimestamp(active_state["first_seen"]).strftime("%Y-%m-%d %H:%M:%S")
+        suppressed = active_state["suppressed_count"]
+
+        alert_msg = f"**QueryId:** {query_id}\n"
+        alert_msg += f"**QueryType:** {query_type}\n"
+        if query_info and query_info not in {query_type, "Unknown"}:
+            alert_msg += f"**Asset:** {query_info}\n"
+        alert_msg += f"**Alert first triggered:** {first_seen_str}\n"
+        if suppressed > 0:
+            alert_msg += f"**Suppressed repeat alerts:** {suppressed}\n"
+        alert_msg += "**Status:** Reported values are back within acceptable thresholds"
+
+        logger.info(f"Condition resolved alert:\n{alert_msg}")
+        generic_alert(alert_msg, description="✅ **ALERT CONDITION RESOLVED**")
+
+    except Exception as e:
+        logger.error(f"Failed to send condition resolved alert: {e}")
 
 
 async def send_unsupported_query_alert(
@@ -1874,6 +1941,21 @@ async def inspect(
     if alertable is None:
         return None
 
+    # Alert condition state tracking: detect new conditions and resolutions
+    alert_tracker = get_alert_state_tracker()
+
+    if not alertable:
+        # Value is within acceptable threshold - check if we had an active alert condition
+        if alert_tracker.check_resolved(report.query_id):
+            active_state = alert_tracker.get_active_state(report.query_id)
+            await send_condition_resolved_alert(
+                report.query_id, report.query_type, query_info, active_state, logger
+            )
+            alert_tracker.mark_resolved(report.query_id)
+        display["DISPUTABLE"] = disputable
+        add_to_table(display)
+        return None
+
     # Determine dispute level for Discord alert
     dispute_level = None
     is_disputable_flag = disputable  # Use the disputable value directly
@@ -1980,7 +2062,17 @@ async def inspect(
                         msg += f"**Disputer:** {key_name} improperly configured, no dispute sent\n"
 
             logger.info(f"Double-check alert:\n{description}\n{msg}")
-            generic_alert(msg, description=description)
+            if alert_tracker.should_alert(report.query_id):
+                alert_tracker.mark_active(report.query_id, diff, query_info)
+                generic_alert(msg, description=description)
+            else:
+                alert_tracker.record_suppressed(report.query_id, diff)
+                state = alert_tracker.get_active_state(report.query_id)
+                suppressed = state["suppressed_count"] if state else "?"
+                logger.info(
+                    f"Alert suppressed for {report.query_id[:16]}... - condition already active "
+                    f"(suppressed {suppressed} time(s) since {description})"
+                )
 
         else:
             # Standard single-check alert (no fetcher or not disputable)
@@ -2027,7 +2119,17 @@ async def inspect(
                 description = "❗**FOUND SOMETHING**❗"
 
             logger.info(f"Alertable value detected:\n{msg}")
-            generic_alert(msg, description=description)
+            if alert_tracker.should_alert(report.query_id):
+                alert_tracker.mark_active(report.query_id, diff, query_info)
+                generic_alert(msg, description=description)
+            else:
+                alert_tracker.record_suppressed(report.query_id, diff)
+                state = alert_tracker.get_active_state(report.query_id)
+                suppressed = state["suppressed_count"] if state else "?"
+                logger.info(
+                    f"Alert suppressed for {report.query_id[:16]}... - condition already active "
+                    f"(suppressed {suppressed} time(s))"
+                )
 
     display["DISPUTABLE"] = disputable
 

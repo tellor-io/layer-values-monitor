@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Default check interval (3 minutes) - can be overridden by config
 DEFAULT_CHECK_INTERVAL = 180.0
+DEFAULT_REFRESH_THRESHOLD = 0.8
+DEFAULT_ACTIVE_WINDOW_MULTIPLIER = 3.0
+DEFAULT_MAX_CONCURRENT_REFRESHES = 3
+REFRESH_POLL_INTERVAL_SECONDS = 30.0
+
+# Stale cache alert rate-limiting constants
+STALE_ALERT_COOLDOWN = 300.0  # 5 minutes between stale alerts
+STALE_RECOVERY_WINDOW = 600.0  # 10 min since first alert + 5 min of freshness = recovery
 
 
 # =============================================================================
@@ -81,6 +89,12 @@ class PriceCache:
         self._in_flight: dict[str, asyncio.Task[OptionalDataPoint]] = {}
         self._config_watcher: ConfigWatcher | None = None
         self._ttl_override: float | None = None
+        self._stale_state: dict[str, dict[str, Any]] = {}
+        # Per-query stale tracking: {query_id: {"first_alert_time", "last_alert_time", "last_stale_seen", "recovery_sent"}}
+        self._feeds: dict[str, DataFeed] = {}
+        self._query_types: dict[str, str | None] = {}
+        self._last_report_time: dict[str, float] = {}
+        self._last_fetch_time: dict[str, float] = {}
 
     def set_config_watcher(self, config_watcher: ConfigWatcher) -> None:
         """Set the config watcher for per-query TTL lookups.
@@ -127,6 +141,25 @@ class PriceCache:
                 return self._config_watcher.get_staleness_threshold()
         # Default: 3x the TTL
         return self._ttl * 3
+
+    def _get_refresh_threshold(self) -> float:
+        """Get the refresh threshold ratio for proactive refreshes."""
+        if self._config_watcher:
+            return self._config_watcher.get_refresh_threshold()
+        return DEFAULT_REFRESH_THRESHOLD
+
+    def _get_active_window(self, query_id: str, query_type: str | None = None) -> float:
+        """Get the active window for proactive refreshes."""
+        multiplier = DEFAULT_ACTIVE_WINDOW_MULTIPLIER
+        if self._config_watcher:
+            multiplier = self._config_watcher.get_active_window_multiplier()
+        return self._get_ttl_for_query(query_id, query_type) * multiplier
+
+    def _get_max_concurrent_refreshes(self) -> int:
+        """Get the proactive refresh concurrency limit."""
+        if self._config_watcher:
+            return self._config_watcher.get_max_concurrent_refreshes()
+        return DEFAULT_MAX_CONCURRENT_REFRESHES
 
     def _is_valid(self, entry: CachedValue, ttl: float) -> bool:
         """Check if a cached entry is still valid (within TTL)."""
@@ -216,6 +249,8 @@ class PriceCache:
             timestamp: The timestamp associated with the value
 
         """
+        now = time.time()
+
         async with self._lock:
             # Evict oldest entries if at capacity
             if len(self._cache) >= self._max_size:
@@ -224,8 +259,120 @@ class PriceCache:
                 entries_to_remove = max(1, len(sorted_entries) // 10)
                 for key, _ in sorted_entries[:entries_to_remove]:
                     del self._cache[key]
+                    self._last_fetch_time.pop(key, None)
+                    self._last_report_time.pop(key, None)
+                    self._feeds.pop(key, None)
+                    self._query_types.pop(key, None)
+                    self._stale_state.pop(key, None)
 
-            self._cache[query_id] = CachedValue(value=value, timestamp=timestamp, fetch_time=time.time())
+            self._cache[query_id] = CachedValue(value=value, timestamp=timestamp, fetch_time=now)
+            self._last_fetch_time[query_id] = now
+
+    async def register_feed(self, query_id: str, feed: DataFeed, query_type: str | None = None) -> None:
+        """Store the latest feed metadata for proactive refreshes."""
+        async with self._lock:
+            self._feeds[query_id] = feed
+            if query_type is not None:
+                self._query_types[query_id] = query_type
+
+    async def record_report_activity(self, query_id: str, query_type: str | None = None) -> None:
+        """Record that a query was active due to an incoming report."""
+        async with self._lock:
+            self._last_report_time[query_id] = time.time()
+            if query_type is not None:
+                self._query_types[query_id] = query_type
+
+    async def record_stale_seen(self, query_id: str) -> None:
+        """Record that staleness was detected (called on every stale check, even if alert is suppressed)."""
+        async with self._lock:
+            state = self._stale_state.get(query_id)
+            now = time.time()
+            if state is None:
+                self._stale_state[query_id] = {
+                    "first_alert_time": 0.0,
+                    "last_alert_time": 0.0,
+                    "last_stale_seen": now,
+                    "recovery_sent": False,
+                }
+            else:
+                state["last_stale_seen"] = now
+                state["recovery_sent"] = False  # Reset: stale episode is still ongoing
+
+    async def mark_stale_alerted(self, query_id: str) -> None:
+        """Record that a stale-cache alert was sent for query_id."""
+        async with self._lock:
+            now = time.time()
+            state = self._stale_state.get(query_id)
+            if state is None:
+                self._stale_state[query_id] = {
+                    "first_alert_time": now,
+                    "last_alert_time": now,
+                    "last_stale_seen": now,
+                    "recovery_sent": False,
+                }
+            else:
+                if state["first_alert_time"] == 0.0:
+                    state["first_alert_time"] = now
+                state["last_alert_time"] = now
+                state["last_stale_seen"] = now
+                state["recovery_sent"] = False
+
+    async def is_stale_alerted(self, query_id: str) -> bool:
+        """Return True if a stale alert was sent within the 5-minute cooldown window."""
+        async with self._lock:
+            state = self._stale_state.get(query_id)
+            if state is None:
+                return False
+            return (time.time() - state["last_alert_time"]) < STALE_ALERT_COOLDOWN
+
+    async def should_send_recovery(self, query_id: str) -> bool:
+        """Return True if it's time to send a 'Cache Freshness Recovered' alert.
+
+        Criteria: stale episode lasted >= 10 min (first_alert_time set) AND
+        no staleness detected in the last 5 min AND recovery not yet sent.
+        """
+        async with self._lock:
+            state = self._stale_state.get(query_id)
+            if state is None or state["recovery_sent"]:
+                return False
+            if state["first_alert_time"] == 0.0:
+                return False
+            now = time.time()
+            episode_long_enough = (now - state["first_alert_time"]) >= STALE_RECOVERY_WINDOW
+            fresh_long_enough = (now - state["last_stale_seen"]) >= (STALE_ALERT_COOLDOWN)
+            return episode_long_enough and fresh_long_enough
+
+    async def mark_recovery_sent(self, query_id: str) -> None:
+        """Record that a cache-freshness recovery alert was sent. Resets the stale episode."""
+        async with self._lock:
+            state = self._stale_state.get(query_id)
+            if state:
+                state["recovery_sent"] = True
+                state["first_alert_time"] = 0.0  # Reset so a future episode starts fresh
+
+    async def get_refresh_candidates(self, ttl_ratio: float) -> list[tuple[str, DataFeed, str | None]]:
+        """Return active queries that are approaching TTL expiry."""
+        now = time.time()
+
+        async with self._lock:
+            candidates: list[tuple[str, DataFeed, str | None]] = []
+            for query_id, feed in self._feeds.items():
+                last_fetch_time = self._last_fetch_time.get(query_id)
+                last_report_time = self._last_report_time.get(query_id)
+                query_type = self._query_types.get(query_id)
+                if last_fetch_time is None or last_report_time is None:
+                    continue
+
+                ttl = self._get_ttl_for_query(query_id, query_type)
+                active_window = self._get_active_window(query_id, query_type)
+                age = now - last_fetch_time
+                report_age = now - last_report_time
+                if age < ttl * ttl_ratio or report_age >= active_window or query_id in self._in_flight:
+                    continue
+
+                candidates.append((query_id, feed, query_type))
+
+            return candidates
 
     async def invalidate(self, query_id: str) -> None:
         """Invalidate (remove) a cached entry.
@@ -236,11 +383,22 @@ class PriceCache:
         """
         async with self._lock:
             self._cache.pop(query_id, None)
+            self._last_fetch_time.pop(query_id, None)
+            self._last_report_time.pop(query_id, None)
+            self._feeds.pop(query_id, None)
+            self._query_types.pop(query_id, None)
+            self._stale_state.pop(query_id, None)
 
     async def clear(self) -> None:
         """Clear all cached entries."""
         async with self._lock:
             self._cache.clear()
+            self._feeds.clear()
+            self._query_types.clear()
+            self._last_report_time.clear()
+            self._last_fetch_time.clear()
+            self._stale_state.clear()
+            self._in_flight.clear()
             self._hits = 0
             self._misses = 0
 
@@ -444,6 +602,50 @@ async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
         return None
 
 
+async def _fetch_value_shared(
+    feed: DataFeed,
+    query_id: str,
+    logger_instance: logging.Logger | None = None,
+    *,
+    allow_cached: bool,
+    query_type: str | None = None,
+) -> OptionalDataPoint:
+    """Fetch a value while sharing in-flight work across concurrent callers."""
+    cache = get_price_cache()
+    log = logger_instance or logger
+
+    async def fetch_and_cache() -> OptionalDataPoint:
+        log.debug(f"🌐 Cache MISS for {query_id[:16]}... - fetching from API")
+        result = await fetch_value(feed)
+
+        if result is not None:
+            value, timestamp = result
+            await cache.set(query_id, value, timestamp)
+            ttl = cache._get_ttl_for_query(query_id, query_type)
+            log.debug(f"💾 Cached value for {query_id[:16]}... (TTL: {ttl}s)")
+
+        return result
+
+    cached_after_wait, in_flight_task, is_owner = await cache.get_cached_or_in_flight(
+        query_id,
+        query_type,
+        fetch_and_cache,
+        allow_cached=allow_cached,
+    )
+    if cached_after_wait is not None:
+        log.debug(f"💾 Cache FILLED for {query_id[:16]}... while waiting for shared fetch")
+        return cached_after_wait
+
+    if in_flight_task is None:
+        return None
+
+    try:
+        return await asyncio.shield(in_flight_task)
+    finally:
+        if is_owner:
+            await cache.clear_in_flight(query_id, in_flight_task)
+
+
 async def fetch_value_cached(
     feed: DataFeed,
     query_id: str,
@@ -470,43 +672,55 @@ async def fetch_value_cached(
     cache = get_price_cache()
     log = logger_instance or logger
 
-    # Check cache first (unless force_refresh)
-    if not force_refresh:
-        cached = await cache.get(query_id, query_type)
-        if cached is not None:
-            log.debug(f"💾 Cache HIT for {query_id[:16]}... (value: {cached[0]})")
-            return cached
+    await cache.register_feed(query_id, feed, query_type)
+    await cache.record_report_activity(query_id, query_type)
 
-    async def fetch_and_cache() -> OptionalDataPoint:
-        log.debug(f"🌐 Cache MISS for {query_id[:16]}... - fetching from API")
-        result = await fetch_value(feed)
-
-        if result is not None:
-            value, timestamp = result
-            await cache.set(query_id, value, timestamp)
-            ttl = cache._get_ttl_for_query(query_id, query_type)
-            log.debug(f"💾 Cached value for {query_id[:16]}... (TTL: {ttl}s)")
-
-        return result
-
-    cached_after_wait, in_flight_task, is_owner = await cache.get_cached_or_in_flight(
+    return await _fetch_value_shared(
+        feed,
         query_id,
-        query_type,
-        fetch_and_cache,
+        log,
         allow_cached=not force_refresh,
+        query_type=query_type,
     )
-    if cached_after_wait is not None:
-        log.debug(f"💾 Cache FILLED for {query_id[:16]}... while waiting for shared fetch")
-        return cached_after_wait
 
-    if in_flight_task is None:
-        return None
 
-    try:
-        return await asyncio.shield(in_flight_task)
-    finally:
-        if is_owner:
-            await cache.clear_in_flight(query_id, in_flight_task)
+async def run_cache_refresh_loop(cache: PriceCache, logger_instance: logging.Logger | None = None) -> None:
+    """Keep active query caches warm before they cross their TTL."""
+    log = logger_instance or logger
+
+    while True:
+        await asyncio.sleep(REFRESH_POLL_INTERVAL_SECONDS)
+
+        refresh_threshold = cache._get_refresh_threshold()
+        max_concurrent = max(1, cache._get_max_concurrent_refreshes())
+        candidates = await cache.get_refresh_candidates(refresh_threshold)
+        if not candidates:
+            continue
+
+        log.info(
+            f"Refreshing {len(candidates)} active cache entr"
+            f"{'y' if len(candidates) == 1 else 'ies'} approaching TTL"
+        )
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def refresh_candidate(
+            query_id: str,
+            feed: DataFeed,
+            query_type: str | None,
+            semaphore: asyncio.Semaphore = semaphore,
+        ) -> None:
+            async with semaphore:
+                result = await _fetch_value_shared(
+                    feed,
+                    query_id,
+                    log,
+                    allow_cached=False,
+                    query_type=query_type,
+                )
+                if result is not None:
+                    log.debug(f"🔄 Proactively refreshed cache for {query_id[:16]}...")
+
+        await asyncio.gather(*(refresh_candidate(query_id, feed, query_type) for query_id, feed, query_type in candidates))
 
 
 def extract_query_info(query: AbiQuery | JsonQuery | None, query_type: str | None = None) -> str:

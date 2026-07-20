@@ -57,6 +57,17 @@ def load_env():
     load_dotenv(".env", override=True)
 
 
+@pytest.fixture(autouse=True)
+def clear_alert_state():
+    """Keep global alert suppression state from leaking between tests."""
+    from layer_values_monitor.alert_state import get_alert_state_tracker
+
+    tracker = get_alert_state_tracker()
+    tracker.clear()
+    yield
+    tracker.clear()
+
+
 @pytest.fixture
 def config_file():
     """Create a temporary config file for testing."""

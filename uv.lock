@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 prerelease-mode = "allow"
 
 [manifest]
-overrides = [{ name = "aiohttp", specifier = ">=3.11.15,<4.0.0" }]
+overrides = [{ name = "aiohttp", specifier = "==3.12.13" }]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -605,20 +605,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "discordwebhook", specifier = ">=1.0.3" },
+    { name = "aiohttp", specifier = "==3.12.13" },
+    { name = "discordwebhook", specifier = "==1.0.3" },
     { name = "eth-abi", specifier = "==5.2.0" },
-    { name = "pandas", specifier = ">=2.2.3" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "ruff", specifier = ">=0.13.3" },
-    { name = "telliot-feeds", specifier = ">=0.4.15" },
+    { name = "pandas", specifier = "==2.2.3" },
+    { name = "python-dotenv", specifier = "==1.0.1" },
+    { name = "ruff", specifier = "==0.13.3" },
+    { name = "telliot-feeds", specifier = "==0.4.15" },
     { name = "websockets", specifier = "==13.1" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "pytest-asyncio", specifier = ">=0.25.3" },
+    { name = "pytest", specifier = "==8.3.5" },
+    { name = "pytest-asyncio", specifier = "==0.25.3" },
 ]
 
 [[package]]

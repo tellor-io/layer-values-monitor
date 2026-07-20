@@ -35,7 +35,7 @@ uv run layer-values-monitor
 
 ### Required
 - `URI` - Layer node endpoint (e.g., `localhost:26657`)
-- `CHAIN_ID` - Layer chain ID (e.g., `layertest-4`)
+- `CHAIN_ID` - Layer chain ID (e.g., `layertest-5`)
 - `MONITOR_NAME` - Monitor instance name
 - `DISCORD_WEBHOOK_URL_1` - Discord webhook for alerts
 - `MAX_TABLE_ROWS` - Max CSV rows before rotation (default: `1000000`)

@@ -104,6 +104,79 @@ async def test_inspect_spotprice_path_alerts_on_stale_cache_before_refresh():
 
 
 @pytest.mark.asyncio
+async def test_inspect_spotprice_path_only_alerts_once_until_refresh_succeeds():
+    """Repeated stale reads should suppress duplicate alerts until the cache refreshes."""
+    from layer_values_monitor.monitor import inspect_spotprice_path
+
+    report = make_spotprice_report()
+    metrics = Metrics(
+        metric="percentage",
+        alert_threshold=0.01,
+        warning_threshold=0.02,
+        minor_threshold=0.05,
+        major_threshold=0.10,
+        pause_threshold=0.0,
+    )
+    config_watcher = MagicMock()
+    config_watcher.has_query_config.return_value = True
+    config_watcher.get_staleness_threshold.return_value = 540.0
+
+    cache = get_price_cache()
+    original_ttl = cache._ttl
+    original_override = cache._ttl_override
+    original_config_watcher = cache._config_watcher
+
+    try:
+        await cache.clear()
+        cache._ttl = 180.0
+        cache._ttl_override = None
+        cache._config_watcher = None
+
+        await cache.set(report.query_id, 99.0, time.time())
+        cache._cache[report.query_id].fetch_time -= 600.0
+        cache._last_fetch_time[report.query_id] -= 600.0
+
+        mock_query = MagicMock()
+        mock_query.asset = "ETH"
+        mock_query.currency = "USD"
+
+        mock_feed = MagicMock()
+
+        with patch("telliot_feeds.queries.query_catalog.query_catalog.find", return_value=[MagicMock()]):
+            with patch("layer_values_monitor.monitor.get_query", return_value=mock_query):
+                with patch("layer_values_monitor.monitor.get_feed", new=AsyncMock(return_value=mock_feed)):
+                    with patch("layer_values_monitor.monitor.fetch_value_cached", new=AsyncMock(return_value=None)):
+                        with patch("layer_values_monitor.monitor.send_staleness_alert", new=AsyncMock()) as mock_alert:
+                            await inspect_spotprice_path(
+                                [report],
+                                asyncio.Queue(),
+                                config_watcher,
+                                report.query_id,
+                                report.query_data,
+                                report.query_type,
+                                metrics,
+                                MagicMock(),
+                            )
+                            await inspect_spotprice_path(
+                                [report],
+                                asyncio.Queue(),
+                                config_watcher,
+                                report.query_id,
+                                report.query_data,
+                                report.query_type,
+                                metrics,
+                                MagicMock(),
+                            )
+
+        mock_alert.assert_awaited_once()
+    finally:
+        await cache.clear()
+        cache._ttl = original_ttl
+        cache._ttl_override = original_override
+        cache._config_watcher = original_config_watcher
+
+
+@pytest.mark.asyncio
 async def test_new_reports_queue_handler_counts_actual_reports_for_cache_logging():
     """Cache stats logging should trigger based on total reports, not query IDs."""
     from layer_values_monitor.monitor import new_reports_queue_handler

@@ -13,6 +13,9 @@ from layer_values_monitor.logger import logger
 # Default cache settings
 DEFAULT_CHECK_INTERVAL = 180  # 3 minutes
 DEFAULT_STALENESS_MULTIPLIER = 3  # Alert if cache is 3x older than check_interval
+DEFAULT_REFRESH_THRESHOLD = 0.8  # Refresh when entry reaches 80% of TTL
+DEFAULT_ACTIVE_WINDOW_MULTIPLIER = 3  # Consider queries active for 3x their TTL
+DEFAULT_MAX_CONCURRENT_REFRESHES = 3
 
 
 class ConfigWatcher:
@@ -44,6 +47,13 @@ class ConfigWatcher:
             "staleness_alert_multiplier": float(
                 cache_config.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)
             ),
+            "refresh_threshold": float(cache_config.get("refresh_threshold", DEFAULT_REFRESH_THRESHOLD)),
+            "active_window_multiplier": float(
+                cache_config.get("active_window_multiplier", DEFAULT_ACTIVE_WINDOW_MULTIPLIER)
+            ),
+            "max_concurrent_refreshes": int(
+                cache_config.get("max_concurrent_refreshes", DEFAULT_MAX_CONCURRENT_REFRESHES)
+            ),
         }
 
         # Normalize all keys to lowercase once
@@ -64,7 +74,17 @@ class ConfigWatcher:
         logger.info(f"Configuration reloaded at {time.strftime('%H:%M:%S')}")
         check_iv = self.cache_settings["check_interval"]
         stale_mult = self.cache_settings["staleness_alert_multiplier"]
-        logger.info(f"Cache settings: check_interval={check_iv}s, staleness_multiplier={stale_mult}")
+        refresh_threshold = self.cache_settings["refresh_threshold"]
+        active_window = self.cache_settings["active_window_multiplier"]
+        max_refreshes = self.cache_settings["max_concurrent_refreshes"]
+        logger.info(
+            "Cache settings: "
+            f"check_interval={check_iv}s, "
+            f"staleness_multiplier={stale_mult}, "
+            f"refresh_threshold={refresh_threshold}, "
+            f"active_window_multiplier={active_window}, "
+            f"max_concurrent_refreshes={max_refreshes}"
+        )
         return True
 
     def get_query_type_info(self, query_type: str) -> dict | None:
@@ -138,6 +158,22 @@ class ConfigWatcher:
         check_interval = self.get_check_interval(query_id, query_type)
         multiplier = self.cache_settings.get("staleness_alert_multiplier", DEFAULT_STALENESS_MULTIPLIER)
         return check_interval * multiplier
+
+    def get_refresh_threshold(self) -> float:
+        """Get the TTL ratio at which proactive refreshes should start."""
+        return self.cache_settings.get("refresh_threshold", DEFAULT_REFRESH_THRESHOLD)
+
+    def get_active_window_multiplier(self) -> float:
+        """Get the multiplier used to decide whether a query is still active."""
+        return self.cache_settings.get("active_window_multiplier", DEFAULT_ACTIVE_WINDOW_MULTIPLIER)
+
+    def get_active_window(self, query_id: str | None = None, query_type: str | None = None) -> float:
+        """Get the activity window for a query."""
+        return self.get_check_interval(query_id, query_type) * self.get_active_window_multiplier()
+
+    def get_max_concurrent_refreshes(self) -> int:
+        """Get the max number of background refreshes allowed in parallel."""
+        return int(self.cache_settings.get("max_concurrent_refreshes", DEFAULT_MAX_CONCURRENT_REFRESHES))
 
     def find_query_config(self, query_id: str) -> dict:
         """Find query config by searching all query types (when query_type unknown).
