@@ -94,6 +94,11 @@ def _format_report_batch_summary(reports_collections: dict[str, list[NewReport]]
     return ", ".join(summaries)
 
 
+def _new_report_event_key(height: int, report: NewReport) -> tuple[int, str, str, str, str, str]:
+    """Return a stable key for suppressing duplicate websocket report events."""
+    return (height, report.tx_hash, report.meta_id, report.query_id, report.reporter, report.value)
+
+
 class OperationalSummary:
     """Collect normal-operation report counts and emit periodic summaries."""
 
@@ -427,6 +432,7 @@ async def raw_data_queue_handler(
     """
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
+    seen_new_report_events: set[tuple[int, str, str, str, str, str]] = set()
     # Smart batching configuration
     MAX_BATCH_SIZE = 25  # Process if we hit this many reports
     BATCH_TIMEOUT = 5.0  # Process after 5 seconds regardless
@@ -464,9 +470,6 @@ async def raw_data_queue_handler(
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
 
         if is_new_report:
-            logger.debug(
-                f"Detected new_report event with query_id: {events.get('new_report.query_id', ['unknown'])[0][:16]}"
-            )
             try:
                 # get current height from event
                 height = events["tx.height"][0]
@@ -496,6 +499,7 @@ async def raw_data_queue_handler(
                             logger,
                             reason="height advanced",
                         )
+                        seen_new_report_events.clear()
                         last_batch_time = time.time()
 
                     current_height = height
@@ -505,6 +509,13 @@ async def raw_data_queue_handler(
                 elif current_height is None:
                     current_height = height
                     height_tracker.update(height)
+
+                report_event_key = _new_report_event_key(height, report)
+                if report_event_key in seen_new_report_events:
+                    continue
+
+                seen_new_report_events.add(report_event_key)
+                logger.debug(f"Detected new_report event with query_id: {report.query_id[:16]}")
 
                 # add the current report to the collection (for current height only)
                 reports_collected = reports_collections.get(report.query_id, None)
@@ -535,6 +546,7 @@ async def raw_data_queue_handler(
                         logger,
                         reason="batch threshold",
                     )
+                    seen_new_report_events.clear()
                     last_batch_time = time.time()
 
             except (KeyError, IndexError) as e:
@@ -552,6 +564,7 @@ async def raw_data_queue_handler(
                     logger,
                     reason="aggregate report",
                 )
+                seen_new_report_events.clear()
 
             try:
                 height = current_height
@@ -587,6 +600,7 @@ async def raw_data_queue_handler(
             logger,
             reason="cleanup",
         )
+        seen_new_report_events.clear()
 
 
 async def inspect_reports(

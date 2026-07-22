@@ -172,6 +172,67 @@ async def test_raw_data_queue_handler_empty_queue(mock_logger):
 
 
 @pytest.mark.asyncio
+async def test_raw_data_queue_handler_skips_duplicate_new_report_events(mock_logger):
+    """Duplicate websocket report events should not be logged or batched twice."""
+    raw_data_q = asyncio.Queue()
+    new_reports_q = asyncio.Queue()
+
+    duplicate_report = {
+        "result": {
+            "events": {
+                "tx.height": ["100"],
+                "new_report.query_type": ["SpotPrice"],
+                "new_report.query_data": ["0x..."],
+                "new_report.query_id": ["query_id_1"],
+                "new_report.value": ["0x123"],
+                "new_report.aggregate_method": ["median"],
+                "new_report.cyclelist": ["cycle1"],
+                "new_report.reporter_power": ["1000"],
+                "new_report.reporter": ["reporter1"],
+                "new_report.timestamp": ["1625097600000"],
+                "new_report.meta_id": ["meta1"],
+                "tx.hash": ["hash1"],
+            }
+        }
+    }
+    trigger_report = {
+        "result": {
+            "events": {
+                "tx.height": ["101"],
+                "new_report.query_type": ["SpotPrice"],
+                "new_report.query_data": ["0x..."],
+                "new_report.query_id": ["trigger_query_id"],
+                "new_report.value": ["0x456"],
+                "new_report.aggregate_method": ["median"],
+                "new_report.cyclelist": ["cycle1"],
+                "new_report.reporter_power": ["1000"],
+                "new_report.reporter": ["reporter2"],
+                "new_report.timestamp": ["1625097600001"],
+                "new_report.meta_id": ["meta2"],
+                "tx.hash": ["hash2"],
+            }
+        }
+    }
+
+    await raw_data_q.put(duplicate_report)
+    await raw_data_q.put(duplicate_report)
+    await raw_data_q.put(trigger_report)
+
+    height_tracker = HeightTracker()
+    await raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, height_tracker, max_iterations=3)
+
+    first_collection = await new_reports_q.get()
+    assert len(first_collection["query_id_1"]) == 1
+
+    duplicate_detection_calls = [
+        str(call)
+        for call in mock_logger.debug.call_args_list
+        if "Detected new_report event with query_id: query_id_1" in str(call)
+    ]
+    assert len(duplicate_detection_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_raw_data_queue_handler_sequential_same_height(mock_logger):
     """Test handling multiple reports with the same block height.
 
