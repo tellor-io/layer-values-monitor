@@ -172,9 +172,9 @@ async def start() -> None:
 
     # Initialize config watcher
     config_path = Path(__file__).resolve().parents[2] / "config.toml"
-    logger.info(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
+    logger.debug(f"CONFIG DEBUG: Initializing ConfigWatcher with path: {config_path}")
     config_watcher = ConfigWatcher(config_path)
-    logger.info("CONFIG DEBUG: Config watcher initialized")
+    logger.debug("CONFIG DEBUG: Config watcher initialized")
 
     # Initialize price cache with config (for per-query TTL support)
     initialize_cache_with_config(config_watcher)
@@ -189,20 +189,20 @@ async def start() -> None:
         console_logger.info(f"✅ Check interval: {config_watcher.get_check_interval()}s (from config)")
 
     # Log config summary (debug only)
-    logger.info("CONFIG DEBUG: Config summary:")
-    logger.info(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
-    logger.info(f"CONFIG DEBUG: - Query types: {list(config_watcher.query_types.keys())}")
-    logger.info(f"CONFIG DEBUG: - Query configs: {list(config_watcher.query_configs.keys())}")
+    logger.debug("CONFIG DEBUG: Config summary:")
+    logger.debug(f"CONFIG DEBUG: - Global defaults: {len(config_watcher.global_defaults)} metric types")
+    logger.debug(f"CONFIG DEBUG: - Query types: {list(config_watcher.query_types.keys())}")
+    logger.debug(f"CONFIG DEBUG: - Query configs: {list(config_watcher.query_configs.keys())}")
 
     # Test config methods (debug only)
-    logger.info("CONFIG DEBUG: Testing config methods...")
+    logger.debug("CONFIG DEBUG: Testing config methods...")
     test_query_types = ["SpotPrice", "TRBBridge", "TRBBridgeV2", "EVMCall", "UnknownType"]
     for query_type in test_query_types:
         is_supported = config_watcher.is_supported_query_type(query_type)
-        logger.info(f"CONFIG DEBUG: - is_supported_query_type('{query_type}'): {is_supported}")
+        logger.debug(f"CONFIG DEBUG: - is_supported_query_type('{query_type}'): {is_supported}")
         if is_supported:
             query_type_info = config_watcher.get_query_type_info(query_type)
-            logger.info(f"CONFIG DEBUG:   - get_query_type_info('{query_type}'): {query_type_info}")
+            logger.debug(f"CONFIG DEBUG:   - get_query_type_info('{query_type}'): {query_type_info}")
 
     # Terminal summary of config
     supported_types = list(config_watcher.query_types.keys())

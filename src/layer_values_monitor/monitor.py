@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -44,6 +45,117 @@ from layer_values_monitor.utils import add_to_table, decode_hex_value
 
 import aiohttp
 import websockets
+
+DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS = 300.0
+
+
+def _get_float_env(env_var: str, default: float) -> float:
+    """Read a float from the environment."""
+    configured_value = os.getenv(env_var)
+    if configured_value is None:
+        return default
+
+    try:
+        return float(configured_value)
+    except ValueError:
+        return default
+
+
+OPERATIONAL_SUMMARY_INTERVAL_SECONDS = _get_float_env(
+    "LVM_OPERATIONAL_SUMMARY_INTERVAL_SECONDS",
+    DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS,
+)
+
+
+def _format_report_group_label(report: NewReport) -> str:
+    """Return a compact label for operational report summaries."""
+    query_type = report.query_type
+    if query_type.lower() != "spotprice":
+        return query_type
+
+    try:
+        query_obj = get_query(report.query_data)
+        if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
+            return f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
+    except Exception:
+        pass
+
+    return query_type
+
+
+def _format_report_batch_summary(reports_collections: dict[str, list[NewReport]]) -> str:
+    """Format a detailed single-batch summary for debug logs."""
+    summaries = []
+    for reports in reports_collections.values():
+        if not reports:
+            continue
+        summaries.append(f"{len(reports)} {_format_report_group_label(reports[0])}")
+
+    return ", ".join(summaries)
+
+
+class OperationalSummary:
+    """Collect normal-operation report counts and emit periodic summaries."""
+
+    def __init__(self, interval_seconds: float = OPERATIONAL_SUMMARY_INTERVAL_SECONDS) -> None:
+        """Initialize summary counters."""
+        self.interval_seconds = interval_seconds
+        self.last_logged_at = time.time()
+        self.report_count = 0
+        self.heights: set[int | str] = set()
+        self.query_counts: Counter[str] = Counter()
+
+    def record_report_batch(self, height: int | str | None, reports_collections: dict[str, list[NewReport]]) -> None:
+        """Record a processed batch of new reports."""
+        if height is not None:
+            self.heights.add(height)
+
+        for reports in reports_collections.values():
+            if not reports:
+                continue
+            label = _format_report_group_label(reports[0])
+            count = len(reports)
+            self.query_counts[label] += count
+            self.report_count += count
+
+    def maybe_log(self, logger: logging.Logger, now: float | None = None) -> None:
+        """Log a compact operational summary once enough time has elapsed."""
+        now = now if now is not None else time.time()
+        if self.report_count == 0 or now - self.last_logged_at < self.interval_seconds:
+            return
+
+        query_summary = ", ".join(f"{label}={count}" for label, count in self.query_counts.most_common())
+        logger.info(
+            f"Processed {self.report_count} reports across {len(self.heights)} heights"
+            f"{f': {query_summary}' if query_summary else ''}"
+        )
+        self.report_count = 0
+        self.heights.clear()
+        self.query_counts.clear()
+        self.last_logged_at = now
+
+
+async def _flush_new_report_batch(
+    reports_collections: dict[str, list[NewReport]],
+    current_height: int | None,
+    new_reports_q: asyncio.Queue,
+    summary: OperationalSummary,
+    logger: logging.Logger,
+    *,
+    reason: str,
+) -> None:
+    """Queue a batch of new reports and record normal-operation summary stats."""
+    if not reports_collections:
+        return
+
+    collected_height = current_height if current_height is not None else "unknown"
+    batch_summary = _format_report_batch_summary(reports_collections)
+    logger.debug(f"Processing reports from height {collected_height} ({reason}): {batch_summary}")
+    summary.record_report_batch(collected_height, reports_collections)
+    summary.maybe_log(logger)
+
+    await new_reports_q.put(dict(reports_collections))
+    reports_collections.clear()
 
 
 def format_dict_value(d: dict) -> str:
@@ -248,8 +360,7 @@ async def listen_to_websocket_events(
                     response = await websocket.recv()
                     parsed_response = json.loads(response)
 
-                    # Log EVERYTHING to see what we're getting
-                    logger.info(f"🔵 Raw WebSocket response: {json.dumps(parsed_response)[:500]}")
+                    logger.debug(f"Raw WebSocket response: {json.dumps(parsed_response)[:500]}")
 
                     await q.put(parsed_response)
 
@@ -322,6 +433,7 @@ async def raw_data_queue_handler(
     # current height being collected for - start as None to detect first height
     current_height = None
     last_batch_time = time.time()
+    operational_summary = OperationalSummary()
     while iterations < max_iterations:
         iterations += 1
         raw_data: dict[str, Any] = await raw_data_q.get()
@@ -352,8 +464,8 @@ async def raw_data_queue_handler(
         is_agg_report = "aggregate_report.query_id" in events or "aggregate_report.aggregate_power" in events
 
         if is_new_report:
-            logger.info(
-                f"✅ Detected new_report event with query_id: {events.get('new_report.query_id', ['unknown'])[0][:16]}"
+            logger.debug(
+                f"Detected new_report event with query_id: {events.get('new_report.query_id', ['unknown'])[0][:16]}"
             )
             try:
                 # get current height from event
@@ -376,32 +488,14 @@ async def raw_data_queue_handler(
                 # Process previous height's reports
                 if current_height is not None and height > current_height:
                     if len(reports_collections) > 0:
-                        # query type summary for logging
-                        query_type_summaries = []
-                        for _query_id, reports in reports_collections.items():
-                            query_type = reports[0].query_type
-                            count = len(reports)
-
-                            # if spot price, extract asset pair for logging
-                            if query_type.lower() == "spotprice":
-                                try:
-                                    query_obj = get_query(reports[0].query_data)
-                                    if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
-                                        asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
-                                        query_type_summaries.append(f"{count} {asset_pair}")
-                                    else:
-                                        query_type_summaries.append(f"{count} {query_type}")
-                                except Exception:
-                                    query_type_summaries.append(f"{count} {query_type}")
-                            else:
-                                query_type_summaries.append(f"{count} {query_type}")
-
-                        console_logger.info(
-                            f"Processing reports from height {current_height}: {', '.join(query_type_summaries)}"
+                        await _flush_new_report_batch(
+                            reports_collections,
+                            current_height,
+                            new_reports_q,
+                            operational_summary,
+                            logger,
+                            reason="height advanced",
                         )
-
-                        await new_reports_q.put(dict(reports_collections))
-                        reports_collections.clear()
                         last_batch_time = time.time()
 
                     current_height = height
@@ -433,32 +527,14 @@ async def raw_data_queue_handler(
                     logger.debug(f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)")
 
                 if should_process and len(reports_collections) > 0:
-                    # Build query type summary with asset pairs for spot prices
-                    query_type_summaries = []
-                    for _query_id, reports in reports_collections.items():
-                        query_type = reports[0].query_type
-                        count = len(reports)
-
-                        # For SpotPrice, try to extract asset pair
-                        if query_type.lower() == "spotprice":
-                            try:
-                                query_obj = get_query(reports[0].query_data)
-                                if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
-                                    asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
-                                    query_type_summaries.append(f"{count} {asset_pair}")
-                                else:
-                                    query_type_summaries.append(f"{count} {query_type}")
-                            except Exception:
-                                query_type_summaries.append(f"{count} {query_type}")
-                        else:
-                            query_type_summaries.append(f"{count} {query_type}")
-
-                    console_logger.info(
-                        f"Processing reports from height {current_height}: {', '.join(query_type_summaries)}"
+                    await _flush_new_report_batch(
+                        reports_collections,
+                        current_height,
+                        new_reports_q,
+                        operational_summary,
+                        logger,
+                        reason="batch threshold",
                     )
-
-                    await new_reports_q.put(dict(reports_collections))
-                    reports_collections.clear()
                     last_batch_time = time.time()
 
             except (KeyError, IndexError) as e:
@@ -468,27 +544,14 @@ async def raw_data_queue_handler(
         elif is_agg_report and agg_reports_q is not None:
             # This ensures new reports are processed for disputes even when aggregate arrives at same height
             if len(reports_collections) > 0:
-                # Build query type summary with asset pairs for spot prices
-                query_type_summaries = []
-                for _query_id, reports in reports_collections.items():
-                    query_type = reports[0].query_type
-                    count = len(reports)
-
-                    # For SpotPrice, try to extract asset pair
-                    if query_type.lower() == "spotprice":
-                        try:
-                            query_obj = get_query(reports[0].query_data)
-                            if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
-                                asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
-                                query_type_summaries.append(f"{count} {asset_pair}")
-                            else:
-                                query_type_summaries.append(f"{count} {query_type}")
-                        except Exception:
-                            query_type_summaries.append(f"{count} {query_type}")
-                    else:
-                        query_type_summaries.append(f"{count} {query_type}")
-
-                console_logger.info(f"Processing reports from height {current_height}: {', '.join(query_type_summaries)}")
+                await _flush_new_report_batch(
+                    reports_collections,
+                    current_height,
+                    new_reports_q,
+                    operational_summary,
+                    logger,
+                    reason="aggregate report",
+                )
 
             try:
                 height = current_height
@@ -516,33 +579,14 @@ async def raw_data_queue_handler(
 
     # Cleanup: Process any remaining reports before function exits
     if len(reports_collections) > 0:
-        # Build query type summary with asset pairs for spot prices
-        query_type_summaries = []
-        for _query_id, reports in reports_collections.items():
-            query_type = reports[0].query_type
-            count = len(reports)
-
-            # For SpotPrice, try to extract asset pair
-            if query_type.lower() == "spotprice":
-                try:
-                    query_obj = get_query(reports[0].query_data)
-                    if query_obj and hasattr(query_obj, "asset") and hasattr(query_obj, "currency"):
-                        asset_pair = f"{query_obj.asset.lower()}/{query_obj.currency.lower()}"
-                        query_type_summaries.append(f"{count} {asset_pair}")
-                    else:
-                        query_type_summaries.append(f"{count} {query_type}")
-                except Exception:
-                    query_type_summaries.append(f"{count} {query_type}")
-            else:
-                query_type_summaries.append(f"{count} {query_type}")
-
-        collected_height = current_height if current_height is not None else "unknown"
-        console_logger.info(
-            f"Processing remaining reports from height {collected_height} (cleanup): {', '.join(query_type_summaries)}"
+        await _flush_new_report_batch(
+            reports_collections,
+            current_height,
+            new_reports_q,
+            operational_summary,
+            logger,
+            reason="cleanup",
         )
-
-        await new_reports_q.put(dict(reports_collections))
-        reports_collections.clear()
 
 
 async def inspect_reports(
@@ -606,7 +650,7 @@ async def inspect_reports(
         return None
 
     # Branch based on query type - each type has its own inspection path
-    logger.info(f"🔀 Routing to {query_type} inspection path...")
+    logger.debug(f"Routing to {query_type} inspection path")
 
     if query_type.lower() == "spotprice":
         return await inspect_spotprice_path(
@@ -677,7 +721,7 @@ async def inspect_spotprice_path(
 
     # Scenario 3: NOT in config AND NOT in telliot → Foreign query (SKIP)
     if not has_specific_config and not in_telliot:
-        logger.info(f"Foreign query - NOT in config AND NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
+        logger.warning(f"Foreign query - NOT in config AND NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
         description = f"⚠️ **QUERY NOT FOUND IN TELLIOT OR CONFIGS{f' ({asset_pair})' if asset_pair != 'Unknown' else ''}**"
         await send_unsupported_query_alert(
             query_id, query_type, asset_pair, reports[0], logger, description=description, try_decode=True
@@ -686,7 +730,7 @@ async def inspect_spotprice_path(
 
     # Scenario 4: IN config but NOT in telliot → NEW ALERT (SKIP - can't get trusted value)
     elif has_specific_config and not in_telliot:
-        logger.info(f"Query in config but NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
+        logger.warning(f"Query in config but NOT in telliot (query: {query_id[:16]}..., asset: {asset_pair})")
         alert_msg = f"**QueryId:** {query_id}\n"
         alert_msg += f"**QueryType:** {query_type}\n"
         if asset_pair != "Unknown":
@@ -696,20 +740,20 @@ async def inspect_spotprice_path(
         alert_msg += f"**Tx Hash:** {reports[0].tx_hash}\n"
         alert_msg += "**Status:** Cannot inspect - telliot unavailable for trusted value"
 
-        logger.info(f"Config-but-not-telliot alert:\n{alert_msg}")
+        logger.warning(f"Config-but-not-telliot alert:\n{alert_msg}")
         generic_alert(alert_msg, description="🆕 **QUERY IN CONFIG, BUT NOT TELLIOT**")
         return None  # Can't get trusted value from telliot
 
     # Scenario 2: NOT in config but IN telliot → Unconfigured query (PROCEED with global defaults)
     elif not has_specific_config and in_telliot:
-        logger.info(
+        logger.warning(
             f"Query in telliot but NOT in config - proceeding with global defaults "
             f"(query: {query_id[:16]}..., asset: {asset_pair})"
         )
         # Check if this query type typically has per-query configs
         if config_watcher.has_specific_query_configs(query_type):
             # Log info message (don't send Discord alert - we'll alert on value discrepancy if needed)
-            logger.info(
+            logger.warning(
                 f"⚠️ Query found in telliot but not in config file - "
                 f"QueryId: {query_id}, Asset: {asset_pair}, "
                 f"Using global defaults (alert={metrics.alert_threshold}, warning={metrics.warning_threshold})"
@@ -717,7 +761,7 @@ async def inspect_spotprice_path(
         # Fall through to proceed with inspection using global defaults
     else:
         # Scenario 1: IN config AND IN telliot → Normal path (PROCEED)
-        logger.info(f"Normal path - query in config AND telliot (query: {query_id[:16]}..., asset: {asset_pair})")
+        logger.debug(f"Normal path - query in config AND telliot (query: {query_id[:16]}..., asset: {asset_pair})")
 
     # Step 5: Proceed with telliot inspection (for scenarios 1 and 2)
     logger.debug(f"Getting query object and feed for {query_id[:16]}...")
@@ -794,7 +838,7 @@ async def inspect_evmcall_path(
     logger: logging,
 ) -> None:
     """EVMCall inspection path using telliot trusted lookup."""
-    logger.info(f"⚙️ EVMCall inspection - QueryID: {query_id[:16]}...")
+    logger.debug(f"EVMCall inspection - QueryID: {query_id[:16]}...")
     query_type = "evmcall"
 
     # Get query object
@@ -895,8 +939,8 @@ async def inspect_trbbridge_path(
 ) -> None:
     """TRBBridge/TRBBridgeV2 inspection path."""
     label = query_type if query_type else "TRBBridge"
-    logger.info(f"🌉 {label} inspection - QueryID: {query_id[:16]}...")
-    logger.info(f"🔎 Inspecting {len(reports)} {label} report(s)...")
+    logger.debug(f"{label} inspection - QueryID: {query_id[:16]}...")
+    logger.debug(f"Inspecting {len(reports)} {label} report(s)...")
 
     env_var = "TRBBRIDGEV2_CONTRACT_ADDRESS" if query_type.lower() == "trbbridgev2" else "TRBBRIDGE_CONTRACT_ADDRESS"
     return await inspect_trbbridge_reports(reports, disputes_q, query_id, metrics, logger, contract_address_env=env_var)
@@ -927,7 +971,7 @@ async def new_reports_queue_handler(
         reports_processed += sum(len(reports) for reports in new_reports.values())
         if reports_processed >= cache_log_interval:
             cache_stats = await get_price_cache().get_stats()
-            logger.info(
+            logger.debug(
                 f"💾 Price cache stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
                 f"{cache_stats['hit_rate']} hit rate, {cache_stats['size']} entries cached"
             )
@@ -970,7 +1014,7 @@ async def inspect_aggregate_report(
 
     # Get query type from the query object
     query_type = query.__class__.__name__
-    logger.info(f"CONFIG DEBUG: Aggregate report query type determined: {query_type}")
+    logger.debug(f"CONFIG DEBUG: Aggregate report query type determined: {query_type}")
 
     # Check if query type is supported
     if not config_watcher.is_supported_query_type(query_type):

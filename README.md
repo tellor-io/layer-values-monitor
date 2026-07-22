@@ -191,9 +191,11 @@ uv run ruff format
 
 ### Logs
 Runtime logs are written to standard output so service managers such as journald can capture them.
-- **stdout/journald**: full application logs, including debug records
+- **stdout/journald**: operational logs at `LVM_JOURNAL_LOG_LEVEL` and above (default: `INFO`)
+- **Normal operation summaries**: per-block report details are debug-only; journald gets compact summaries every `LVM_OPERATIONAL_SUMMARY_INTERVAL_SECONDS` seconds (default: `300`)
+- **Warnings/errors/failures**: alerts, stale cache warnings, unsupported queries, dispute failures, and exceptions continue to appear in journald
 - **Local text logs**: disabled by default
-- **LVM_ENABLE_FILE_LOGS=true**: also writes `terminal_log.log` (INFO and above) and `debug_log.log` (DEBUG and above) in the project folder
+- **LVM_ENABLE_FILE_LOGS=true**: also writes `terminal_log.log` (INFO and above) and `debug_log.log` (`LVM_DEBUG_FILE_LOG_LEVEL`, default `DEBUG`) in the project folder
 - **Rotation**: optional text logs rotate at 10 MB and keep 5 backups per log type
 - **CSV Data**: `logs/table_*.csv`
 

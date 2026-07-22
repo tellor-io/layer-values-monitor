@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 LOG_MAX_BYTES = 10 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
 ENABLE_FILE_LOGS_ENV = "LVM_ENABLE_FILE_LOGS"
+JOURNAL_LOG_LEVEL_ENV = "LVM_JOURNAL_LOG_LEVEL"
+DEBUG_FILE_LOG_LEVEL_ENV = "LVM_DEBUG_FILE_LOG_LEVEL"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEBUG_LOG_FILE = PROJECT_ROOT / "debug_log.log"
 TERMINAL_LOG_FILE = PROJECT_ROOT / "terminal_log.log"
@@ -21,6 +23,23 @@ load_dotenv()
 def _file_logs_enabled() -> bool:
     """Return whether local rotating text logs should be written."""
     return os.getenv(ENABLE_FILE_LOGS_ENV, "").lower() in ("true", "1", "yes")
+
+
+def _get_log_level(env_var: str, default: int) -> int:
+    """Read a logging level from the environment."""
+    configured_level = os.getenv(env_var)
+    if not configured_level:
+        return default
+
+    normalized_level = configured_level.upper()
+    if normalized_level.isdigit():
+        return int(normalized_level)
+
+    level = logging.getLevelName(normalized_level)
+    if isinstance(level, int):
+        return level
+
+    return default
 
 
 def _cleanup_stale_rotated_logs(log_file: Path) -> None:
@@ -45,15 +64,17 @@ def _reset_handlers(configured_logger: logging.Logger) -> None:
 debug_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 terminal_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_logs_enabled = _file_logs_enabled()
+journal_log_level = _get_log_level(JOURNAL_LOG_LEVEL_ENV, logging.INFO)
+debug_file_log_level = _get_log_level(DEBUG_FILE_LOG_LEVEL_ENV, logging.DEBUG)
 
-# Package logger: captures all layer_values_monitor.* records and sends them to stdout.
+# Package logger: captures all layer_values_monitor.* records.
 package_logger = logging.getLogger("layer_values_monitor")
 _reset_handlers(package_logger)
 package_logger.setLevel(logging.DEBUG)
 package_logger.propagate = False
 
 stdout_handler = logging.StreamHandler(sys.stdout)
-stdout_handler.setLevel(logging.DEBUG)
+stdout_handler.setLevel(journal_log_level)
 stdout_handler.setFormatter(debug_formatter)
 
 package_logger.addHandler(stdout_handler)
@@ -65,7 +86,7 @@ if file_logs_enabled:
         maxBytes=LOG_MAX_BYTES,
         backupCount=LOG_BACKUP_COUNT,
     )
-    debug_file_handler.setLevel(logging.DEBUG)
+    debug_file_handler.setLevel(debug_file_log_level)
     debug_file_handler.setFormatter(debug_formatter)
     package_logger.addHandler(debug_file_handler)
 
@@ -75,11 +96,11 @@ logger.setLevel(logging.DEBUG)
 # Create a separate console logger for clean terminal output.
 console_logger = logging.getLogger("console")
 _reset_handlers(console_logger)
-console_logger.setLevel(logging.INFO)
+console_logger.setLevel(logging.DEBUG)
 console_logger.propagate = False
 
 console_only_handler = logging.StreamHandler(sys.stdout)
-console_only_handler.setLevel(logging.INFO)
+console_only_handler.setLevel(journal_log_level)
 console_only_handler.setFormatter(terminal_formatter)
 console_logger.addHandler(console_only_handler)
 
