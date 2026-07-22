@@ -39,7 +39,7 @@ def async_run(f: Any) -> Any:
         try:
             return asyncio.run(f(*args, **kwargs))
         except KeyboardInterrupt:
-            print("Exiting...")
+            console_logger.info("Exiting...")
 
     return wrapper
 
@@ -278,7 +278,7 @@ async def start() -> None:
 
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
-        print("shutting down running tasks")
+        console_logger.info("Shutting down running tasks")
         raise
 
 

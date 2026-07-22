@@ -1,52 +1,81 @@
 """Logger."""
 
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
+DEBUG_LOG_FILE = "debug_log.log"
+TERMINAL_LOG_FILE = "terminal_log.log"
 
-# Debug file handler - captures everything
-debug_file_handler = RotatingFileHandler(
-    "debug_log.log",
-    maxBytes=50 * 1024 * 1024,  # 50MB
-    backupCount=20,
-)
-debug_file_handler.setLevel(logging.DEBUG)
 
-# Full file handler - captures INFO and above (what would go to terminal)
-full_file_handler = RotatingFileHandler(
-    "terminal_log.log",
-    maxBytes=50 * 1024 * 1024,  # 50MB
-    backupCount=20,
-)
-full_file_handler.setLevel(logging.INFO)
+def _cleanup_stale_rotated_logs(log_file: str) -> None:
+    """Remove rotated log backups beyond the configured retention count."""
+    log_path = Path(log_file)
+    parent = log_path.parent if log_path.parent != Path("") else Path(".")
+    prefix = f"{log_path.name}."
 
-# Console handler - only shows CRITICAL by default (we'll use custom console logs)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.CRITICAL)
+    for rotated_log in parent.glob(f"{log_path.name}.*"):
+        suffix = rotated_log.name.removeprefix(prefix)
+        if suffix.isdigit() and int(suffix) > LOG_BACKUP_COUNT:
+            rotated_log.unlink(missing_ok=True)
+
+
+def _reset_handlers(configured_logger: logging.Logger) -> None:
+    """Close existing handlers before configuring this module's loggers."""
+    for handler in configured_logger.handlers[:]:
+        configured_logger.removeHandler(handler)
+        handler.close()
+
+
+for log_file in (DEBUG_LOG_FILE, TERMINAL_LOG_FILE):
+    _cleanup_stale_rotated_logs(log_file)
 
 debug_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 terminal_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
+# Package logger: captures all layer_values_monitor.* records and sends them to stdout + debug file.
+package_logger = logging.getLogger("layer_values_monitor")
+_reset_handlers(package_logger)
+package_logger.setLevel(logging.DEBUG)
+package_logger.propagate = False
+
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setLevel(logging.DEBUG)
+stdout_handler.setFormatter(debug_formatter)
+
+debug_file_handler = RotatingFileHandler(
+    DEBUG_LOG_FILE,
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
+)
+debug_file_handler.setLevel(logging.DEBUG)
 debug_file_handler.setFormatter(debug_formatter)
-full_file_handler.setFormatter(terminal_formatter)
-console_handler.setFormatter(debug_formatter)
 
-logger.addHandler(debug_file_handler)
-logger.addHandler(console_handler)
+package_logger.addHandler(stdout_handler)
+package_logger.addHandler(debug_file_handler)
 
-# Create a separate console-only logger for clean terminal output
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Create a separate console logger for clean terminal output and terminal_log.log.
 console_logger = logging.getLogger("console")
+_reset_handlers(console_logger)
 console_logger.setLevel(logging.INFO)
-console_logger.propagate = False  # Don't propagate to root logger
+console_logger.propagate = False
 
-console_only_handler = logging.StreamHandler()
+console_only_handler = logging.StreamHandler(sys.stdout)
 console_only_handler.setLevel(logging.INFO)
-# Format: timestamp - level - message (no module name)
-console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-console_only_handler.setFormatter(console_formatter)
+console_only_handler.setFormatter(terminal_formatter)
 console_logger.addHandler(console_only_handler)
 
-# Also add terminal_log.log to console_logger so it matches terminal output exactly
+full_file_handler = RotatingFileHandler(
+    TERMINAL_LOG_FILE,
+    maxBytes=LOG_MAX_BYTES,
+    backupCount=LOG_BACKUP_COUNT,
+)
+full_file_handler.setLevel(logging.INFO)
+full_file_handler.setFormatter(terminal_formatter)
 console_logger.addHandler(full_file_handler)

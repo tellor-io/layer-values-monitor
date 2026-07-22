@@ -593,12 +593,10 @@ async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
     except TimeoutError:
         error_msg = "Timeout fetching trusted value from telliot-feeds (15s)"
         logger.warning(error_msg)
-        print(f"Error fetching trusted value from telliot-feeds: {error_msg}")  # print to terminal_log
         return None
     except Exception as e:
         error_msg = f"Error fetching trusted value from telliot-feeds: {e}"
         logger.warning(error_msg)
-        print(error_msg)  # print to terminal_log
         return None
 
 

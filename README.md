@@ -33,18 +33,25 @@ uv run layer-values-monitor
 
 ## Environment Variables
 
-### Required
+### Required: Layer Node
 - `URI` - Layer node endpoint (e.g., `localhost:26657`)
 - `CHAIN_ID` - Layer chain ID (e.g., `layertest-5`)
-- `MONITOR_NAME` - Monitor instance name
-- `DISCORD_WEBHOOK_URL_1` - Discord webhook for alerts
-- `MAX_TABLE_ROWS` - Max CSV rows before rotation (default: `1000000`)
 
-### Dispute Configuration
-- `LAYER_BINARY_PATH` - Path to layerd binary
+### Required: Dispute Transactions
+These can be set in `.env` or passed as positional CLI arguments.
+- `LAYER_BINARY_PATH` - Path to `layerd` binary
 - `LAYER_KEY_NAME` - Keyring key name
 - `LAYER_KEYRING_BACKEND` - Keyring backend (e.g., `test`)
-- `LAYER_KEYRING_DIR` - Keyring directory (e.g., `~/.layer`)
+- `LAYER_KEYRING_DIR` - Keyring directory (e.g., `/home/<USERNAME>/.layer`)
+
+### Alerts
+- `DISCORD_WEBHOOK_URL_1` - Primary Discord webhook for alerts
+- `DISCORD_WEBHOOK_URL_2`, `DISCORD_WEBHOOK_URL_3` - Optional additional webhooks
+- `MONITOR_NAME` - Monitor instance name shown in alerts (default: `LVM`)
+
+### Optional Runtime Settings
+- `MAX_TABLE_ROWS` - Max CSV rows before rotation (default: `100000`)
+- `MAX_CATCHUP_BLOCKS` - Max blocks to process on reconnect (default: `15`)
 - `PAYFROM_BOND` - Pay from bond vs balance (default: `false`)
 
 ### EVM RPC Configuration
@@ -54,22 +61,20 @@ uv run layer-values-monitor
 **Advanced (Custom/Backup):**
 - `EVM_RPC_URLS_<CHAIN_ID>` - Comma-separated RPC URLs per chain
   - Example: `EVM_RPC_URLS_1="https://ethrpc1.com,https://ethrpc2.com"`
-  - Example: `EVM_RPC_URLS_137="https://polygonrpc1.com"`
+  - Example: `EVM_RPC_URLS_11155111="https://sepolia1.com,https://sepolia2.com"`
 
 ### TRB Bridge Monitoring
-- `TRBBRIDGE_CONTRACT_ADDRESS` - Bridge contract address (TRBBridge)
-- `TRBBRIDGEV2_CONTRACT_ADDRESS` - Bridge contract address (TRBBridgeV2)
-- `TRBBRIDGE_CHAIN_ID` - Bridge chain ID, shared by both versions (default: `11155111`)
+Required only when monitoring TRBBridge/TRBBridgeV2 query types.
+- `TRBBRIDGE_CONTRACT_ADDRESS` - Bridge contract address for TRBBridge
+- `TRBBRIDGEV2_CONTRACT_ADDRESS` - Bridge contract address for TRBBridgeV2
+- `TRBBRIDGE_CHAIN_ID` - Bridge chain ID, shared by both versions (code default: `1`; set `11155111` for Sepolia)
 
 ### Saga Guardian (Contract Pausing)
+Required only when starting with `--enable-saga-guard`.
 - `SAGA_RPC_URLS` - Comma-separated Saga RPC URLs
 - `SAGA_PRIVATE_KEY` - Guardian wallet private key
-- `SAGA_IMMEDIATE_PAUSE_THRESHOLD` - Power % for immediate pause (default: `0.66`)
-- `SAGA_DELAYED_PAUSE_THRESHOLD` - Power % for delayed pause (default: `0.33`)
-
-### Other
-- `MAX_CATCHUP_BLOCKS` - Max blocks to process on reconnect (default: `15`)
-- `DISCORD_WEBHOOK_URL_2`, `DISCORD_WEBHOOK_URL_3` - Additional webhooks
+- `SAGA_IMMEDIATE_PAUSE_THRESHOLD` - Power % for immediate pause (default: `0.66666666666`)
+- `SAGA_DELAYED_PAUSE_THRESHOLD` - Power % for delayed pause (default: `0.3333333333`)
 
 ## Configuration (config.toml)
 
@@ -125,8 +130,14 @@ uv run layer-values-monitor
 uv run layer-values-monitor [OPTIONS]
 ```
 
+You can provide dispute transaction settings through `.env`, or pass them positionally:
+```sh
+uv run layer-values-monitor /home/<USERNAME>/layerd <KEY_NAME> <KEYRING_BACKEND> /home/<USERNAME>/.layer
+```
+
 ### Flags
 - `--enable-saga-guard` - Enable contract pausing for aggregate reports
+- `--check-interval <SECONDS>` - Override the trusted value cache/check interval from `config.toml`
 
 ## Common Configurations
 
@@ -159,8 +170,8 @@ Pauses datafeed contracts when aggregate reports are incorrect.
 - `datafeed_ca` configured for each query in config.toml
 
 ### Power-Based Logic
-- **Immediate pause**: Triggered when bad aggregate report power > `SAGA_IMMEDIATE_PAUSE_THRESHOLD` (default 66%)
-- **Delayed pause**: Triggered when bad aggregate report power > `SAGA_DELAYED_PAUSE_THRESHOLD` (default 33%)
+- **Immediate pause**: Triggered when bad aggregate report power > `SAGA_IMMEDIATE_PAUSE_THRESHOLD` (default `0.66666666666`)
+- **Delayed pause**: Triggered when bad aggregate report power > `SAGA_DELAYED_PAUSE_THRESHOLD` (default `0.3333333333`)
 
 Power calculated as % of total non-jailed reporter power.
 
@@ -178,7 +189,11 @@ uv run ruff format
 ```
 
 ### Logs
-All log files will rotate to new file after they recach 52mb
-- **Console**: INFO and above, captured in terminal_log.log
-- **File**: full logs are in debug_log.log
+Runtime logs are written to standard output so service managers such as journald can capture them.
+- **stdout/journald**: full application logs, including debug records
+- **terminal_log.log**: local rotating backup of INFO and above
+- **debug_log.log**: local rotating backup of DEBUG and above
+- **Rotation**: text logs rotate at 10 MB and keep 5 backups per log type
 - **CSV Data**: `logs/table_*.csv`
+
+For systemd deployments, use `StandardOutput=journal` and `StandardError=journal` so logs can be managed with `journalctl`.
