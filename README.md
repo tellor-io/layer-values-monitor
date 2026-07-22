@@ -53,6 +53,7 @@ These can be set in `.env` or passed as positional CLI arguments.
 - `MAX_TABLE_ROWS` - Max CSV rows before rotation (default: `100000`)
 - `MAX_CATCHUP_BLOCKS` - Max blocks to process on reconnect (default: `15`)
 - `PAYFROM_BOND` - Pay from bond vs balance (default: `false`)
+- `LVM_ENABLE_FILE_LOGS` - Also write local `.log` files in the project folder when set to `true`, `1`, or `yes` (default: disabled)
 
 ### EVM RPC Configuration
 **Simple (Infura):**
@@ -191,9 +192,9 @@ uv run ruff format
 ### Logs
 Runtime logs are written to standard output so service managers such as journald can capture them.
 - **stdout/journald**: full application logs, including debug records
-- **terminal_log.log**: local rotating backup of INFO and above
-- **debug_log.log**: local rotating backup of DEBUG and above
-- **Rotation**: text logs rotate at 10 MB and keep 5 backups per log type
+- **Local text logs**: disabled by default
+- **LVM_ENABLE_FILE_LOGS=true**: also writes `terminal_log.log` (INFO and above) and `debug_log.log` (DEBUG and above) in the project folder
+- **Rotation**: optional text logs rotate at 10 MB and keep 5 backups per log type
 - **CSV Data**: `logs/table_*.csv`
 
 For systemd deployments, use `StandardOutput=journal` and `StandardError=journal` so logs can be managed with `journalctl`.
