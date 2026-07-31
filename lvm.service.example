@@ -10,6 +10,8 @@ WorkingDirectory=/home/<USERNAME>/layer-values-monitor
 Environment=PATH=/home/<USERNAME>/.local/bin
 Environment=PYTHONPATH=/home/<USERNAME>/layer-values-monitor/.venv
 ExecStart=/bin/bash -c "uv run layer-values-monitor /home/<USERNAME>/layerd <ACCOUNT_NAME> <KEYRING_BACKEND> /home/<USERNAME>/.layer --global-percentage-alert-threshold 0.10" ...
+StandardOutput=journal
+StandardError=journal
 Restart=always
 RestartSec=60
 

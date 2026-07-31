@@ -39,6 +39,22 @@ def make_spotprice_report() -> NewReport:
     )
 
 
+def test_operational_summary_logs_periodic_report_counts():
+    """Normal report processing should be summarized periodically instead of logged per block."""
+    from layer_values_monitor.monitor import OperationalSummary
+
+    summary = OperationalSummary(interval_seconds=60.0)
+    logger = MagicMock()
+    report = make_spotprice_report()
+
+    summary.last_logged_at = 100.0
+    summary.record_report_batch(123, {report.query_id: [report, report]})
+    summary.maybe_log(logger, now=161.0)
+
+    assert any("Processed 2 reports across 1 heights" in str(call) for call in logger.info.call_args_list)
+    assert summary.report_count == 0
+
+
 @pytest.mark.asyncio
 async def test_inspect_spotprice_path_alerts_on_stale_cache_before_refresh():
     """A stale cached value should still trigger the staleness alert before refresh."""
@@ -204,4 +220,4 @@ async def test_new_reports_queue_handler_counts_actual_reports_for_cache_logging
             except asyncio.CancelledError:
                 pass
 
-    assert any("Price cache stats" in str(call) for call in logger.info.call_args_list)
+    assert any("Price cache stats" in str(call) for call in logger.debug.call_args_list)

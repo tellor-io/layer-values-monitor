@@ -151,7 +151,7 @@ async def propose_msg(
         signed_tx = json.loads(stdout.decode())
         code = signed_tx["code"]
         if code != 0:
-            print(signed_tx)
+            logger.debug(f"failed dispute signed tx: {signed_tx}")
             logger.error(f"failed to execute dispute msg: {signed_tx['raw_log']}")
             return None
         logger.info(f"dispute msg executed successfully: {signed_tx['txhash']}")
