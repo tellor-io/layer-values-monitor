@@ -1,10 +1,14 @@
 import asyncio
 import json
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from layer_values_monitor.catchup import HeightTracker
-from layer_values_monitor.monitor import listen_to_websocket_events
+from layer_values_monitor.monitor import (
+    WebSocketSubscriptionError,
+    _subscribe_to_queries,
+    listen_to_websocket_events,
+)
 
 import pytest
 import websockets
@@ -67,9 +71,10 @@ async def test_message_processing(mock_websockets_connect, mock_websocket, event
     except asyncio.CancelledError:
         pass
 
-    assert event_queue.qsize() == len(test_messages)
+    expected_events = test_messages[1:]
+    assert event_queue.qsize() == len(expected_events)
 
-    for expected_message in test_messages:
+    for expected_message in expected_events:
         message = await event_queue.get()
         assert message == json.loads(expected_message)
 
@@ -114,8 +119,56 @@ async def test_multiple_messages_before_close(mock_websockets_connect, mock_webs
         await listener_task
     except asyncio.CancelledError:
         pass
-    assert event_queue.qsize() == len(test_messages)
+    expected_events = test_messages[1:]
+    assert event_queue.qsize() == len(expected_events)
 
-    for expected_message in test_messages:
+    for expected_message in expected_events:
         message = await event_queue.get()
         assert message == json.loads(expected_message)
+
+
+@pytest.mark.asyncio
+async def test_subscription_retries_after_rejection(event_queue):
+    websocket = AsyncMock()
+    websocket.recv.side_effect = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "invalid query"}}),
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+    ]
+    logger = MagicMock(spec=logging.Logger)
+    query = "new_report.reporter_power > 0"
+
+    await _subscribe_to_queries(
+        websocket,
+        [query],
+        event_queue,
+        logger,
+        max_attempts=3,
+        ack_timeout=0.1,
+        retry_delay=0,
+    )
+
+    assert websocket.send.await_count == 2
+    logger.error.assert_called_once()
+    logger.info.assert_called_once_with(f"WebSocket subscription confirmed: {query}")
+
+
+@pytest.mark.asyncio
+async def test_subscription_errors_after_retry_limit(event_queue):
+    websocket = AsyncMock()
+    rejection = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "invalid query"}})
+    websocket.recv.side_effect = [rejection, rejection, rejection]
+    logger = MagicMock(spec=logging.Logger)
+
+    with pytest.raises(WebSocketSubscriptionError, match="after 3 attempts"):
+        await _subscribe_to_queries(
+            websocket,
+            ["invalid query"],
+            event_queue,
+            logger,
+            max_attempts=3,
+            ack_timeout=0.1,
+            retry_delay=0,
+        )
+
+    assert websocket.send.await_count == 3
+    assert logger.error.call_count == 3

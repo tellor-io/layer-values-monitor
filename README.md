@@ -196,7 +196,7 @@ Runtime logs are written to standard output so service managers such as journald
 - **Warnings/errors/failures**: alerts, stale cache warnings, unsupported queries, dispute failures, and exceptions continue to appear in journald
 - **Local text logs**: disabled by default
 - **LVM_ENABLE_FILE_LOGS=true**: also writes `terminal_log.log` (INFO and above) and `debug_log.log` (`LVM_DEBUG_FILE_LOG_LEVEL`, default `DEBUG`) in the project folder
-- **Rotation**: optional text logs rotate at 10 MB and keep 5 backups per log type
+- **Rotation**: optional text logs rotate hourly and keep 24 hourly backups per log type, plus the active log
 - **CSV Data**: `logs/table_*.csv`
 
 For systemd deployments, use `StandardOutput=journal` and `StandardError=journal` so logs can be managed with `journalctl`.
