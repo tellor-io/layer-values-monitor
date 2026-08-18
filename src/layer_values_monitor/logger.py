@@ -3,13 +3,12 @@
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-LOG_MAX_BYTES = 10 * 1024 * 1024
-LOG_BACKUP_COUNT = 5
+LOG_RETENTION_HOURS = 24
 ENABLE_FILE_LOGS_ENV = "LVM_ENABLE_FILE_LOGS"
 JOURNAL_LOG_LEVEL_ENV = "LVM_JOURNAL_LOG_LEVEL"
 DEBUG_FILE_LOG_LEVEL_ENV = "LVM_DEBUG_FILE_LOG_LEVEL"
@@ -42,18 +41,6 @@ def _get_log_level(env_var: str, default: int) -> int:
     return default
 
 
-def _cleanup_stale_rotated_logs(log_file: Path) -> None:
-    """Remove rotated log backups beyond the configured retention count."""
-    log_path = log_file
-    parent = log_path.parent if log_path.parent != Path("") else Path(".")
-    prefix = f"{log_path.name}."
-
-    for rotated_log in parent.glob(f"{log_path.name}.*"):
-        suffix = rotated_log.name.removeprefix(prefix)
-        if suffix.isdigit() and int(suffix) > LOG_BACKUP_COUNT:
-            rotated_log.unlink(missing_ok=True)
-
-
 def _reset_handlers(configured_logger: logging.Logger) -> None:
     """Close existing handlers before configuring this module's loggers."""
     for handler in configured_logger.handlers[:]:
@@ -80,11 +67,12 @@ stdout_handler.setFormatter(debug_formatter)
 package_logger.addHandler(stdout_handler)
 
 if file_logs_enabled:
-    _cleanup_stale_rotated_logs(DEBUG_LOG_FILE)
-    debug_file_handler = RotatingFileHandler(
+    debug_file_handler = TimedRotatingFileHandler(
         DEBUG_LOG_FILE,
-        maxBytes=LOG_MAX_BYTES,
-        backupCount=LOG_BACKUP_COUNT,
+        when="h",
+        interval=1,
+        backupCount=LOG_RETENTION_HOURS,
+        utc=True,
     )
     debug_file_handler.setLevel(debug_file_log_level)
     debug_file_handler.setFormatter(debug_formatter)
@@ -105,11 +93,12 @@ console_only_handler.setFormatter(terminal_formatter)
 console_logger.addHandler(console_only_handler)
 
 if file_logs_enabled:
-    _cleanup_stale_rotated_logs(TERMINAL_LOG_FILE)
-    full_file_handler = RotatingFileHandler(
+    full_file_handler = TimedRotatingFileHandler(
         TERMINAL_LOG_FILE,
-        maxBytes=LOG_MAX_BYTES,
-        backupCount=LOG_BACKUP_COUNT,
+        when="h",
+        interval=1,
+        backupCount=LOG_RETENTION_HOURS,
+        utc=True,
     )
     full_file_handler.setLevel(logging.INFO)
     full_file_handler.setFormatter(terminal_formatter)

@@ -47,6 +47,13 @@ import aiohttp
 import websockets
 
 DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS = 300.0
+SUBSCRIPTION_MAX_ATTEMPTS = 3
+SUBSCRIPTION_ACK_TIMEOUT_SECONDS = 10.0
+SUBSCRIPTION_RETRY_DELAY_SECONDS = 1.0
+
+
+class WebSocketSubscriptionError(RuntimeError):
+    """Raised when WebSocket subscriptions cannot be established."""
 
 
 def _get_float_env(env_var: str, default: float) -> float:
@@ -97,6 +104,80 @@ def _format_report_batch_summary(reports_collections: dict[str, list[NewReport]]
 def _new_report_event_key(height: int, report: NewReport) -> tuple[int, str, str, str, str, str]:
     """Return a stable key for suppressing duplicate websocket report events."""
     return (height, report.tx_hash, report.meta_id, report.query_id, report.reporter, report.value)
+
+
+async def _subscribe_to_queries(
+    websocket: Any,
+    queries: list[str],
+    q: asyncio.Queue,
+    logger: logging.Logger,
+    *,
+    max_attempts: int = SUBSCRIPTION_MAX_ATTEMPTS,
+    ack_timeout: float = SUBSCRIPTION_ACK_TIMEOUT_SECONDS,
+    retry_delay: float = SUBSCRIPTION_RETRY_DELAY_SECONDS,
+) -> None:
+    """Subscribe to all queries and require a successful response for each."""
+    pending_queries = dict(enumerate(queries, 1))
+    last_errors: dict[int, str] = {}
+
+    for attempt in range(1, max_attempts + 1):
+        awaiting_response = set(pending_queries)
+        attempt_errors: dict[int, str] = {}
+
+        for query_id, query in pending_queries.items():
+            message = json.dumps({"jsonrpc": "2.0", "method": "subscribe", "id": query_id, "params": {"query": query}})
+            await websocket.send(message)
+            logger.debug(f"Sent subscription {query_id} (attempt {attempt}/{max_attempts}): {query}")
+
+        try:
+            async with asyncio.timeout(ack_timeout):
+                while awaiting_response:
+                    response = await websocket.recv()
+                    try:
+                        parsed_response = json.loads(response)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"Invalid WebSocket response while subscribing: {e}")
+                        continue
+
+                    response_id = parsed_response.get("id")
+                    if response_id not in awaiting_response:
+                        await q.put(parsed_response)
+                        continue
+
+                    awaiting_response.remove(response_id)
+                    error = parsed_response.get("error")
+                    if error is not None:
+                        attempt_errors[response_id] = str(error)
+                        continue
+
+                    if "result" not in parsed_response:
+                        attempt_errors[response_id] = f"missing result: {parsed_response}"
+                        continue
+
+                    # Some servers may deliver the first event instead of a separate
+                    # empty acknowledgement. Preserve that event for normal processing.
+                    if parsed_response["result"] not in ({}, None):
+                        await q.put(parsed_response)
+                    logger.info(f"WebSocket subscription confirmed: {pending_queries[response_id]}")
+        except TimeoutError:
+            for query_id in awaiting_response:
+                attempt_errors[query_id] = f"no acknowledgement within {ack_timeout:g}s"
+
+        if not attempt_errors:
+            return
+
+        last_errors = attempt_errors
+        pending_queries = {query_id: pending_queries[query_id] for query_id in attempt_errors}
+        failure_summary = "; ".join(f"{pending_queries[query_id]}: {error}" for query_id, error in attempt_errors.items())
+        logger.error(f"WebSocket subscription attempt {attempt}/{max_attempts} failed: {failure_summary}")
+
+        if attempt < max_attempts:
+            await asyncio.sleep(retry_delay)
+
+    final_summary = "; ".join(f"{pending_queries[query_id]}: {error}" for query_id, error in last_errors.items())
+    raise WebSocketSubscriptionError(
+        f"Failed to establish WebSocket subscriptions after {max_attempts} attempts: {final_summary}"
+    )
 
 
 class OperationalSummary:
@@ -336,13 +417,6 @@ async def listen_to_websocket_events(
     """
     console_logger.info(f"🔌 Connecting to WebSocket at ws://{uri}/websocket...")
 
-    # Prepare subscription messages
-    subscription_messages = []
-    for i, query_string in enumerate(queries, 1):
-        subscription_messages.append(
-            json.dumps({"jsonrpc": "2.0", "method": "subscribe", "id": i, "params": {"query": query_string}})
-        )
-
     ws_uri = f"ws://{uri}/websocket"
     retry_count = 0
     base_delay = 1
@@ -353,12 +427,9 @@ async def listen_to_websocket_events(
             if retry_count > 0:
                 logger.info(f"WebSocket reconnection attempt {retry_count + 1}...")
             async with websockets.connect(ws_uri) as websocket:
-                # Send all subscription messages
-                for i, msg in enumerate(subscription_messages):
-                    await websocket.send(msg)
-                    logger.debug(f"Sent subscription {i + 1}: {queries[i]}")
+                await _subscribe_to_queries(websocket, queries, q, logger)
 
-                # Reset retry count on successful connection
+                # Only report success after every subscription is confirmed.
                 retry_count = 0
                 console_logger.info("✅ Monitoring active")
                 while True:
@@ -369,6 +440,9 @@ async def listen_to_websocket_events(
 
                     await q.put(parsed_response)
 
+        except WebSocketSubscriptionError as e:
+            logger.critical(f"Fatal WebSocket subscription failure: {e}", exc_info=True)
+            raise
         except websockets.ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed: {e}")
         except websockets.WebSocketException as e:
@@ -2006,9 +2080,7 @@ async def inspect(
         # Value is within acceptable threshold - check if we had an active alert condition
         if alert_tracker.check_resolved(report.query_id):
             active_state = alert_tracker.get_active_state(report.query_id)
-            await send_condition_resolved_alert(
-                report.query_id, report.query_type, query_info, active_state, logger
-            )
+            await send_condition_resolved_alert(report.query_id, report.query_type, query_info, active_state, logger)
             alert_tracker.mark_resolved(report.query_id)
         display["DISPUTABLE"] = disputable
         add_to_table(display)
