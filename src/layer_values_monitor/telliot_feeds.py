@@ -581,6 +581,17 @@ async def get_feed(query_id: str, query: AbiQuery | JsonQuery | None, logger: lo
         return get_feed_from_catalog(catalog_entry[0].tag)
 
 
+def _fetch_datapoint_in_thread(feed: DataFeed) -> OptionalDataPoint:
+    """Run telliot's async fetch on a private loop.
+
+    telliot-feeds exposes `async def fetch_new_datapoint` but the price
+    services call blocking `requests` inside that coroutine. Running it on
+    the monitor event loop stalls WebSocket ping/pong. A worker thread keeps
+    the listener responsive at both <2s and ~10s block times.
+    """
+    return asyncio.run(feed.source.fetch_new_datapoint())
+
+
 async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
     """Fetch the value from the data source in telliot-feeds.
 
@@ -589,7 +600,7 @@ async def fetch_value(feed: DataFeed) -> OptionalDataPoint:
     """
     try:
         # Add timeout to prevent hanging on rate-limited APIs
-        return await asyncio.wait_for(feed.source.fetch_new_datapoint(), timeout=15.0)
+        return await asyncio.wait_for(asyncio.to_thread(_fetch_datapoint_in_thread, feed), timeout=15.0)
     except TimeoutError:
         error_msg = "Timeout fetching trusted value from telliot-feeds (15s)"
         logger.warning(error_msg)
