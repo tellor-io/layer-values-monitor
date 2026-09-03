@@ -11,6 +11,8 @@ wheels/
 
 # logs
 *.log
+debug_log.log*
+terminal_log.log*
 *.csv
 
 # configs 

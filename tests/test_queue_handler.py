@@ -1,10 +1,32 @@
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from layer_values_monitor.catchup import HeightTracker
-from layer_values_monitor.monitor import raw_data_queue_handler
+from layer_values_monitor.monitor import BATCH_TIMEOUT_SECONDS, raw_data_queue_handler
 
 import pytest
+
+
+def _report_event(height: int, query_id: str, value: str, reporter: str, tx_hash: str) -> dict:
+    """Build a minimal new_report websocket payload."""
+    return {
+        "result": {
+            "events": {
+                "tx.height": [str(height)],
+                "new_report.query_type": ["SpotPrice"],
+                "new_report.query_data": ["0x..."],
+                "new_report.query_id": [query_id],
+                "new_report.value": [value],
+                "new_report.aggregate_method": ["median"],
+                "new_report.cyclelist": ["cycle1"],
+                "new_report.reporter_power": ["1000"],
+                "new_report.reporter": [reporter],
+                "new_report.timestamp": ["1625097600000"],
+                "new_report.meta_id": ["meta"],
+                "tx.hash": [tx_hash],
+            }
+        }
+    }
 
 
 @pytest.fixture
@@ -536,3 +558,102 @@ async def test_two_block_reporting_windows(mock_logger):
     assert "eth_query_id" not in collection_105
     assert "btc_query_id" not in collection_105
     assert len(collection_105["trb_query_id"]) == 8, "Height 105 should have 8 trb reports"
+
+
+@pytest.mark.asyncio
+async def test_fast_block_height_advance_flushes_immediately(mock_logger):
+    """A <2s reporting cycle must still flush on height-advance, not wait for BATCH_TIMEOUT.
+
+    Reports arrive ~3.2s apart at 1.6s blocks. That gap is far below
+    BATCH_TIMEOUT_SECONDS, so the previous height must be queued as soon as
+    the next height's first report is seen.
+    """
+    raw_data_q = asyncio.Queue()
+    new_reports_q = asyncio.Queue()
+    clock = {"now": 1_000.0}
+
+    with patch("layer_values_monitor.monitor.time.time", side_effect=lambda: clock["now"]):
+        handler = asyncio.create_task(
+            raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, HeightTracker(), max_iterations=4)
+        )
+        await raw_data_q.put(_report_event(100, "eth_usd", "0x1", "reporter1", "hash1"))
+        await raw_data_q.put(_report_event(100, "eth_usd", "0x2", "reporter2", "hash2"))
+        await raw_data_q.join()
+        assert new_reports_q.empty(), "Same-height reports should wait for the next height"
+
+        clock["now"] += 3.2  # two ~1.6s blocks
+        await raw_data_q.put(_report_event(102, "btc_usd", "0x3", "reporter1", "hash3"))
+        await raw_data_q.put(_report_event(104, "trb_usd", "0x4", "reporter1", "hash4"))
+        await handler
+
+    assert new_reports_q.qsize() == 3
+    height_100 = await new_reports_q.get()
+    assert len(height_100["eth_usd"]) == 2
+    height_102 = await new_reports_q.get()
+    assert len(height_102["btc_usd"]) == 1
+    height_104 = await new_reports_q.get()
+    assert len(height_104["trb_usd"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_block_gap_does_not_split_new_height(mock_logger):
+    """A ~21s gap (two ~10.4s blocks) must not flush via BATCH_TIMEOUT.
+
+    The 5s timeout used to fire on the first report of a new height after an
+    idle gap, splitting that height's burst. Height-advance remains the flush
+    trigger at both fast and slow block times.
+    """
+    raw_data_q = asyncio.Queue()
+    new_reports_q = asyncio.Queue()
+    clock = {"now": 1_000.0}
+
+    with patch("layer_values_monitor.monitor.time.time", side_effect=lambda: clock["now"]):
+        handler = asyncio.create_task(
+            raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, HeightTracker(), max_iterations=6)
+        )
+        await raw_data_q.put(_report_event(100, "eth_usd", "0x1", "reporter1", "hash1"))
+        await raw_data_q.put(_report_event(102, "btc_usd", "0x2", "reporter1", "hash2"))
+        await raw_data_q.join()
+        assert new_reports_q.qsize() == 1
+        await new_reports_q.get()  # flushed height 100
+
+        clock["now"] += 20.8  # two ~10.4s blocks
+        await raw_data_q.put(_report_event(104, "trb_usd", "0x3", "reporter1", "hash3"))
+        await raw_data_q.put(_report_event(104, "trb_usd", "0x4", "reporter2", "hash4"))
+        await raw_data_q.put(_report_event(104, "trb_usd", "0x5", "reporter3", "hash5"))
+        await raw_data_q.put(_report_event(106, "usdc_usd", "0x6", "reporter1", "hash6"))
+        await handler
+
+    assert new_reports_q.qsize() == 3
+    height_102 = await new_reports_q.get()
+    assert len(height_102["btc_usd"]) == 1
+    height_104 = await new_reports_q.get()
+    assert len(height_104["trb_usd"]) == 3, "All reports from height 104 must stay in one batch"
+    height_106 = await new_reports_q.get()
+    assert len(height_106["usdc_usd"]) == 1
+    timeout_logs = [str(call) for call in mock_logger.debug.call_args_list if "timeout (" in str(call)]
+    assert timeout_logs == []
+
+
+@pytest.mark.asyncio
+async def test_batch_timeout_still_splits_after_long_same_height_stall(mock_logger):
+    """BATCH_TIMEOUT remains a safety valve if the same height is collected too long."""
+    raw_data_q = asyncio.Queue()
+    new_reports_q = asyncio.Queue()
+    clock = {"now": 1_000.0}
+
+    with patch("layer_values_monitor.monitor.time.time", side_effect=lambda: clock["now"]):
+        handler = asyncio.create_task(
+            raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, HeightTracker(), max_iterations=2)
+        )
+        await raw_data_q.put(_report_event(100, "eth_usd", "0x1", "reporter1", "hash1"))
+        await raw_data_q.join()
+        assert new_reports_q.empty()
+
+        clock["now"] += BATCH_TIMEOUT_SECONDS + 0.1
+        await raw_data_q.put(_report_event(100, "eth_usd", "0x2", "reporter2", "hash2"))
+        await handler
+
+    assert new_reports_q.qsize() == 1
+    flushed = await new_reports_q.get()
+    assert len(flushed["eth_usd"]) == 2
