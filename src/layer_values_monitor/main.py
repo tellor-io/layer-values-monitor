@@ -8,6 +8,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from layer_values_monitor.bridge_reconciler import bridge_reconcile_loop
 from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
@@ -266,6 +267,7 @@ async def start() -> None:
             ),
             watch_config(config_watcher),
             run_cache_refresh_loop(get_price_cache(), logger),
+            bridge_reconcile_loop(disputes_queue, config_watcher, logger),
         ]
 
         # Only add Saga-related tasks if enabled

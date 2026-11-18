@@ -176,7 +176,7 @@ async def test_inspect_trbbridge_reports_defaults_to_chain_id_one(monkeypatch):
 
     report = NewReport(
         query_type="TRBBridge",
-        query_data="0xabc",
+        query_data="0xabcd",
         query_id="0x123",
         value="0xdeadbeef",
         aggregate_method="weighted-median",
@@ -197,15 +197,24 @@ async def test_inspect_trbbridge_reports_defaults_to_chain_id_one(monkeypatch):
     )
     logger = MagicMock()
 
-    with patch(
-        "layer_values_monitor.monitor.decode_report_value",
-        return_value=("0xsender", "layer1recipient", 1, 0),
-    ):
-        with patch(
-            "layer_values_monitor.monitor.get_trb_bridge_trusted_value",
-            new=AsyncMock(return_value=("0xsender", "layer1recipient", 1, 0)),
-        ) as mock_get_trusted_value:
-            with patch("layer_values_monitor.monitor.inspect", new=AsyncMock()):
-                await inspect_trbbridge_reports([report], asyncio.Queue(), report.query_id, metrics, logger)
+    ledger = MagicMock()
+    ledger.upsert_report = MagicMock(return_value=True)
 
-    assert mock_get_trusted_value.await_args.args[2] == 1
+    with patch("layer_values_monitor.monitor.get_bridge_ledger", return_value=ledger):
+        with patch(
+            "layer_values_monitor.monitor.decode_report_value",
+            return_value=("0xsender", "layer1recipient", 1, 0),
+        ):
+            with patch(
+                "layer_values_monitor.monitor.make_provider_builder",
+                return_value=MagicMock(),
+            ) as mock_builder:
+                with patch(
+                    "layer_values_monitor.monitor.fetch_deposit",
+                    new=AsyncMock(return_value=(("0xsender", "layer1recipient", 1, 0), "ok")),
+                ) as mock_fetch:
+                    with patch("layer_values_monitor.monitor.inspect", new=AsyncMock()):
+                        await inspect_trbbridge_reports([report], asyncio.Queue(), report.query_id, metrics, logger)
+
+    mock_builder.assert_called_once_with(1, rpc_url=None, logger=logger)
+    assert mock_fetch.await_args.args[2] == 0xABCD

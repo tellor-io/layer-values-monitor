@@ -11,6 +11,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from layer_values_monitor.alert_state import get_alert_state_tracker
+from layer_values_monitor.bridge_ledger import (
+    STATUS_MISMATCH_PENDING,
+    STATUS_UNVERIFIED,
+    STATUS_VERIFIED_OK,
+    get_bridge_ledger,
+)
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
@@ -24,7 +30,7 @@ from layer_values_monitor.custom_types import (
     Reporter,
     ReporterQueryResponse,
 )
-from layer_values_monitor.discord import deprecated_query_type_alert, generic_alert
+from layer_values_monitor.discord import bridge_ledger_alert, deprecated_query_type_alert, generic_alert
 from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
@@ -40,7 +46,7 @@ from layer_values_monitor.telliot_feeds import (
     get_price_cache,
     get_query,
 )
-from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
+from layer_values_monitor.trb_bridge import decode_query_data, decode_report_value, fetch_deposit, make_provider_builder
 from layer_values_monitor.utils import add_to_table, decode_hex_value
 
 import aiohttp
@@ -1765,6 +1771,9 @@ async def inspect_trbbridge_reports(
     logger.info(f"TRBBridge contract address: {contract_address}")
     logger.info(f"chain ID: {chain_id}")
 
+    ledger = get_bridge_ledger()
+    provider_builder = make_provider_builder(chain_id, rpc_url=rpc_url, logger=logger)
+
     for r in reports:
         # Decode the reported value
         reported_details = decode_report_value(r.value)
@@ -1774,22 +1783,56 @@ async def inspect_trbbridge_reports(
 
         reported_eth_addr, reported_layer_addr, reported_amount, reported_tip = reported_details
 
-        # Get trusted value from contract
-        trusted_details = await get_trb_bridge_trusted_value(r.query_data, contract_address, chain_id, rpc_url, logger)
-
-        if trusted_details is None:
-            logger.error(f"Unable to fetch trusted value for TRBBridge query {query_id}")
+        # Deposit ID drives both the eth read and the persistent ledger row
+        deposit_id = decode_query_data(r.query_data)
+        if deposit_id is None:
+            logger.error(f"Failed to decode deposit ID for TRBBridge query {query_id}")
             continue
 
-        trusted_eth_addr, trusted_layer_addr, trusted_amount, trusted_tip = trusted_details
-
-        # Create comparison structures for inspection
         reported_value = {
             "eth_address": reported_eth_addr,
             "layer_address": reported_layer_addr,
             "amount": reported_amount,
             "tip": reported_tip,
         }
+        report_ts = (int(r.timestamp) / 1000.0) if r.timestamp else time.time()
+
+        # Hardened read (retries, provider rotation, zero-struct sanity). Tier 1 only
+        # records and alerts — disputes are deferred to the reconciler (double-confirmation).
+        deposit, error_kind = await fetch_deposit(provider_builder, contract_address, deposit_id, sanity=True, logger=logger)
+
+        if deposit is None:
+            # G1 closed: a failed eth read becomes a persisted `unverified` row + alert,
+            # never a silent skip indistinguishable from a verified-good report.
+            newly_recorded = ledger.upsert_report(
+                tx_hash=r.tx_hash,
+                query_id=query_id,
+                query_type=r.query_type,
+                contract_address=contract_address,
+                deposit_id=deposit_id,
+                reported_value=reported_value,
+                status=STATUS_UNVERIFIED,
+                report_ts=report_ts,
+                reporter=r.reporter,
+                power=r.power,
+                meta_id=r.meta_id,
+                last_error=error_kind,
+            )
+            if newly_recorded:  # catch-up replays must not re-alert
+                bridge_ledger_alert(
+                    "🌉 **BRIDGE REPORT UNVERIFIED**",
+                    {
+                        "QueryId": query_id,
+                        "QueryType": r.query_type,
+                        "Deposit ID": deposit_id,
+                        "Reporter": r.reporter,
+                        "Tx Hash": r.tx_hash,
+                        "Reason": error_kind,
+                    },
+                )
+            continue
+
+        trusted_eth_addr, trusted_layer_addr, trusted_amount, trusted_tip = deposit
 
         trusted_value = {
             "eth_address": trusted_eth_addr,
@@ -1801,13 +1844,35 @@ async def inspect_trbbridge_reports(
         logger.info(f"TRBBridge Reported: {reported_value}")
         logger.info(f"TRBBridge Trusted: {trusted_value}")
 
-        # Use string comparison for equality check (addresses and layer address)
-        # and exact value comparison for amounts
-        # Note: We don't need to store the matches result since we use exact equality for TRBBridge
-
         # For TRBBridge, we expect exact equality
         # Note: TRBBridge doesn't have a standard query object, pass None
-        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=None)
+        matched = reported_value == trusted_value
+        ledger.upsert_report(
+            tx_hash=r.tx_hash,
+            query_id=query_id,
+            query_type=r.query_type,
+            contract_address=contract_address,
+            deposit_id=deposit_id,
+            reported_value=reported_value,
+            status=STATUS_VERIFIED_OK if matched else STATUS_MISMATCH_PENDING,
+            report_ts=report_ts,
+            reporter=r.reporter,
+            power=r.power,
+            meta_id=r.meta_id,
+            last_error=None if matched else "tier1_mismatch",
+        )
+
+        await inspect(
+            r,
+            reported_value,
+            trusted_value,
+            disputes_q,
+            metrics,
+            logger,
+            query=None,
+            defer_dispute=True,
+            alert_prefix=None if matched else "⏳ **PENDING RECONFIRM** — ",
+        )
 
     return None
 
@@ -2034,6 +2099,8 @@ async def inspect(
     logger: logging,
     query: Any = None,
     trusted_value_fetcher: Any = None,
+    defer_dispute: bool = False,
+    alert_prefix: str | None = None,
 ) -> None:
     """Inspect a new report and check if it is disputable.
 
@@ -2046,6 +2113,9 @@ async def inspect(
         logger: Logger instance
         query: Optional query object from telliot-feeds
         trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
+        defer_dispute: If True, alert as usual but never enqueue a dispute — the bridge
+            reconciler (Tier 2) disputes only after a second provider confirms the mismatch.
+        alert_prefix: Optional string prepended to the Discord alert description.
 
     """
     # Per-report logging removed - now using batch summaries at height changes
@@ -2218,7 +2288,7 @@ async def inspect(
             logger.info(f"Double-check alert:\n{description}\n{msg}")
             if alert_tracker.should_alert(report.query_id):
                 alert_tracker.mark_active(report.query_id, diff, query_info)
-                generic_alert(msg, description=description)
+                generic_alert(msg, description=alert_prefix + description if alert_prefix else description)
             else:
                 alert_tracker.record_suppressed(report.query_id, diff)
                 state = alert_tracker.get_active_state(report.query_id)
@@ -2275,7 +2345,7 @@ async def inspect(
             logger.info(f"Alertable value detected:\n{msg}")
             if alert_tracker.should_alert(report.query_id):
                 alert_tracker.mark_active(report.query_id, diff, query_info)
-                generic_alert(msg, description=description)
+                generic_alert(msg, description=alert_prefix + description if alert_prefix else description)
             else:
                 alert_tracker.record_suppressed(report.query_id, diff)
                 state = alert_tracker.get_active_state(report.query_id)
@@ -2287,8 +2357,8 @@ async def inspect(
 
     display["DISPUTABLE"] = disputable
 
-    # Submit dispute if needed
-    if should_dispute and dispute_category is not None:
+    # Submit dispute if needed (deferred disputes are queued later by the bridge reconciler)
+    if should_dispute and dispute_category is not None and not defer_dispute:
         logger.info(f"Getting ready to send dispute tx... reported value: {reported_value}")
         fee = determine_dispute_fee(dispute_category, int(report.power))
         logger.info(f"Fee: {fee.__str__() + DENOM}")

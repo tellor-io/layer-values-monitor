@@ -89,6 +89,10 @@ staleness_alert_multiplier = 3  # Alert if cache is older than check_interval * 
     [queries.trbbridgev2.defaults]
     # Uses equality defaults from global_defaults
     # Configure specific TRB bridge v2 query overrides here if needed
+    # NOTE: the bridge reconciler auto-disputes double-confirmed mismatches only when an
+    # equality dispute threshold is enabled, e.g. warning_threshold = 1.0.
+    # With the equality defaults above (all dispute thresholds 0.0) bridge is alert-only:
+    # rollout order = run alert-only while the ledger fills, then set warning_threshold = 1.0.
 
 [queries.evmcall]
 

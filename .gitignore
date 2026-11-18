@@ -18,3 +18,9 @@ terminal_log.log*
 # configs 
 .env
 config.toml
+
+# agent workspace
+.hermes/
+
+# bridge ledger
+data/
