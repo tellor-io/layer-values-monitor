@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.monitor import (
+    WS_PING_INTERVAL_SECONDS,
+    WS_PING_TIMEOUT_SECONDS,
     WebSocketSubscriptionError,
     _subscribe_to_queries,
     listen_to_websocket_events,
@@ -34,7 +36,11 @@ async def test_websocket_connection(mock_websockets_connect, mock_websocket, eve
     listener_task = asyncio.create_task(listen_to_websocket_events(uri, queries, event_queue, mock_logger, HeightTracker()))
     await asyncio.sleep(0.1)
 
-    mock_websockets_connect.assert_called_once_with("ws://test-server.com/websocket")
+    mock_websockets_connect.assert_called_once_with(
+        "ws://test-server.com/websocket",
+        ping_interval=WS_PING_INTERVAL_SECONDS,
+        ping_timeout=WS_PING_TIMEOUT_SECONDS,
+    )
     mock_websocket.send.assert_called_once_with(expected_query)
 
     listener_task.cancel()

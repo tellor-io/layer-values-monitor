@@ -48,8 +48,25 @@ import websockets
 
 DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS = 300.0
 SUBSCRIPTION_MAX_ATTEMPTS = 3
-SUBSCRIPTION_ACK_TIMEOUT_SECONDS = 10.0
+# Empty ACKs return in milliseconds at any block time. 30s only matters when a
+# node confirms the subscription with the first matching event instead of an
+# empty ACK (up to one report cycle at ~10s blocks). Fast <2s blocks still ACK
+# immediately, so this does not delay startup.
+SUBSCRIPTION_ACK_TIMEOUT_SECONDS = 30.0
 SUBSCRIPTION_RETRY_DELAY_SECONDS = 1.0
+# CometBFT websocket defaults: readWait=30s, pingPeriod=27s, writeWait=10s.
+# ping_timeout must exceed pingPeriod so a delayed pong cannot kill the socket.
+# These values are independent of Layer block time.
+WS_PING_INTERVAL_SECONDS = 20.0
+WS_PING_TIMEOUT_SECONDS = 60.0
+# Height-advance is the real flush trigger. This timeout only splits a
+# same-height burst if wall-clock processing is delayed. It must be greater
+# than one reporting cycle at slow block times (~2 * 10.4s) so a 20s idle gap
+# does not flush the first reports of a new height. At <2s blocks, the next
+# reporting height still arrives in ~3.2s and flushes via height-advance, so
+# this timeout never delays those batches.
+BATCH_TIMEOUT_SECONDS = 30.0
+MAX_BATCH_SIZE = 25
 
 
 class WebSocketSubscriptionError(RuntimeError):
@@ -426,7 +443,11 @@ async def listen_to_websocket_events(
         try:
             if retry_count > 0:
                 logger.info(f"WebSocket reconnection attempt {retry_count + 1}...")
-            async with websockets.connect(ws_uri) as websocket:
+            async with websockets.connect(
+                ws_uri,
+                ping_interval=WS_PING_INTERVAL_SECONDS,
+                ping_timeout=WS_PING_TIMEOUT_SECONDS,
+            ) as websocket:
                 await _subscribe_to_queries(websocket, queries, q, logger)
 
                 # Only report success after every subscription is confirmed.
@@ -507,9 +528,6 @@ async def raw_data_queue_handler(
     iterations = 0
     reports_collections: dict[str, list[NewReport]] = {}
     seen_new_report_events: set[tuple[int, str, str, str, str, str]] = set()
-    # Smart batching configuration
-    MAX_BATCH_SIZE = 25  # Process if we hit this many reports
-    BATCH_TIMEOUT = 5.0  # Process after 5 seconds regardless
     # current height being collected for - start as None to detect first height
     current_height = None
     last_batch_time = time.time()
@@ -574,15 +592,21 @@ async def raw_data_queue_handler(
                             reason="height advanced",
                         )
                         seen_new_report_events.clear()
-                        last_batch_time = time.time()
 
                     current_height = height
                     height_tracker.update(height)
+                    # Timeout measures time spent collecting *this* height, not the
+                    # idle gap since the last flush. Resetting here keeps <2s and
+                    # ~10s block times on the same path: height-advance flushes,
+                    # BATCH_TIMEOUT does not fire just because the next reports
+                    # arrived after a longer block interval.
+                    last_batch_time = time.time()
 
                 # if first report, set current height
                 elif current_height is None:
                     current_height = height
                     height_tracker.update(height)
+                    last_batch_time = time.time()
 
                 report_event_key = _new_report_event_key(height, report)
                 if report_event_key in seen_new_report_events:
@@ -607,9 +631,9 @@ async def raw_data_queue_handler(
                     logger.debug(f"batch size limit ({len(reports_collections)} >= {MAX_BATCH_SIZE})")
 
                 # Timeout reached
-                elif time.time() - last_batch_time > BATCH_TIMEOUT:
+                elif time.time() - last_batch_time > BATCH_TIMEOUT_SECONDS:
                     should_process = True
-                    logger.debug(f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT}s)")
+                    logger.debug(f"timeout ({time.time() - last_batch_time:.1f}s > {BATCH_TIMEOUT_SECONDS}s)")
 
                 if should_process and len(reports_collections) > 0:
                     await _flush_new_report_batch(
