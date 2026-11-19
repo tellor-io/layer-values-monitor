@@ -270,9 +270,20 @@ class TestLogSweep:
         add_row(ledger, status=STATUS_UNVERIFIED, deposit_id=77)
         ledger.set_meta(f"sweep_start_ts_{CONTRACT.lower()}", "0")  # sweep covers everything
         with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_orphans_and_missing(ledger, MagicMock())
+            await check_orphans_and_missing(ledger, MagicMock(), now=time.time() + 7200)
         assert ledger.get("0xtx1")["status"] == STATUS_UNVERIFIABLE
         assert "never emitted" in alert.call_args.args[1]["Detail"]
+
+    @pytest.mark.asyncio
+    async def test_fresh_report_without_log_waits_out_grace(self, ledger):
+        """A report minutes after its deposit outruns the finalized-anchored sweep:
+        a missing Deposit log must NOT declare it unverifiable yet."""
+        add_row(ledger, status=STATUS_MISMATCH_PENDING, deposit_id=170)
+        ledger.set_meta(f"sweep_start_ts_{CONTRACT.lower()}", "0")
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_orphans_and_missing(ledger, MagicMock())  # report_ts == now
+        assert ledger.get("0xtx1")["status"] == STATUS_MISMATCH_PENDING
+        alert.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_report_with_log_left_alone(self, ledger):

@@ -45,6 +45,9 @@ DISPUTE_WINDOW_HOURS = 12
 DEFAULT_RECONCILE_INTERVAL = 600  # seconds between reconciler cycles
 DEFAULT_UNVERIFIABLE_RETRIES = 6  # recheck cycles before flagging a row unverifiable
 DEFAULT_MISSING_REPORT_AGE = 3600  # eth deposit age before "no Layer report" is suspicious
+DEFAULT_NO_LOG_GRACE = 1800  # min report age before declaring "no Deposit event" ever happened
+#   ^ a report minutes after its deposit can legitimately have no swept log yet: the sweep
+#     only covers up to `finalized`, which lags the Sepolia head by several minutes.
 DEFAULT_SWEEP_LOOKBACK_HOURS = 24
 DEFAULT_SWEEP_CHUNK_BLOCKS = 2000
 
@@ -236,12 +239,19 @@ class BridgeLedger:
         return [dict(r) for r in rows]
 
     def rows_without_log(
-        self, contract_address: str, sweep_covered_from_ts: float, now: float | None = None
+        self,
+        contract_address: str,
+        sweep_covered_from_ts: float,
+        now: float | None = None,
+        grace_s: float = DEFAULT_NO_LOG_GRACE,
     ) -> list[dict]:
         """Non-terminal rows for a contract whose deposit_id has no eth_deposits entry.
 
-        Restricted to reports made after the log sweep started covering events.
+        Restricted to reports made after the log sweep started covering events, and
+        older than `grace_s`: a report on a very recent deposit outruns the sweep
+        (which only follows `finalized`), so a missing log proves nothing yet.
         """
+        now = time.time() if now is None else now
         rows = self.conn.execute(
             f"""
             SELECT b.* FROM bridge_deposits b
@@ -249,12 +259,13 @@ class BridgeLedger:
               AND b.contract_address = ?
               AND b.deposit_id IS NOT NULL
               AND b.report_ts >= ?
+              AND b.report_ts <= ?
               AND NOT EXISTS (
                   SELECT 1 FROM eth_deposits e
                   WHERE e.contract_address = b.contract_address AND e.deposit_id = b.deposit_id
               )
             """,
-            (*RECHECK_STATUSES, contract_address, sweep_covered_from_ts),
+            (*RECHECK_STATUSES, contract_address, sweep_covered_from_ts, now - grace_s),
         ).fetchall()
         return [dict(r) for r in rows]
 

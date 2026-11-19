@@ -21,6 +21,7 @@ import time
 
 from layer_values_monitor.bridge_ledger import (
     DEFAULT_MISSING_REPORT_AGE,
+    DEFAULT_NO_LOG_GRACE,
     DEFAULT_RECONCILE_INTERVAL,
     DEFAULT_SWEEP_CHUNK_BLOCKS,
     DEFAULT_SWEEP_LOOKBACK_HOURS,
@@ -300,6 +301,7 @@ async def check_orphans_and_missing(ledger: BridgeLedger, logger: logging.Logger
     """Alert on eth deposits with no Layer report, and reports with no Deposit log (one-time alerts)."""
     now = time.time() if now is None else now
     min_age = float(os.getenv("BRIDGE_MISSING_REPORT_AGE", str(DEFAULT_MISSING_REPORT_AGE)))
+    no_log_grace = float(os.getenv("BRIDGE_NO_LOG_GRACE", str(DEFAULT_NO_LOG_GRACE)))
 
     for row in ledger.pending_missing_reports(now=now, min_age_s=min_age):
         if ledger.mark_missing_report(row["contract_address"], row["deposit_id"]):
@@ -322,7 +324,7 @@ async def check_orphans_and_missing(ledger: BridgeLedger, logger: logging.Logger
         start_ts = ledger.get_meta(f"sweep_start_ts_{contract.lower()}")
         if start_ts is None:
             continue  # sweep hasn't run; it doesn't cover this range yet
-        for row in ledger.rows_without_log(contract, float(start_ts), now=now):
+        for row in ledger.rows_without_log(contract, float(start_ts), now=now, grace_s=no_log_grace):
             ledger.set_status(row["tx_hash"], STATUS_UNVERIFIABLE, error="no Deposit event within sweep window")
             bridge_ledger_alert(
                 DESC_UNVERIFIABLE,

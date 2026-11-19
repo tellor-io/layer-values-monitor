@@ -140,12 +140,15 @@ class TestEthDeposits:
         insert(ledger, tx_hash="0xtx2", status=STATUS_MISMATCH_PENDING, deposit_id=8)
         ledger.record_eth_deposit(CONTRACT, 7, "0xethA", 100)
 
-        # Sweep covers everything from 'start_ts' (0) onward
-        rows = ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=0)
+        # Sweep covers everything from 'start_ts' (0) onward; reports are past the grace
+        rows = ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=0, now=time.time() + 7200)
         assert [r["tx_hash"] for r in rows] == ["0xtx2"]
 
+        # Within the no-log grace (sweep lags finalized), a missing log proves nothing yet
+        assert ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=0) == []
+
         # A sweep that started AFTER the report covers nothing relevant
-        assert ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=time.time() + 10) == []
+        assert ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=time.time() + 10, now=time.time() + 7200) == []
 
 
 class TestMeta:
