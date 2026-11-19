@@ -91,7 +91,7 @@ def is_zero_struct(deposit_details: tuple) -> bool:
 
 
 def deposit_query_id(deposit_id: int) -> str:
-    """queryId for a TRBBridgeV2 deposit: keccak(abi.encode('TRBBridgeV2', abi.encode(toLayer, depositId)))."""
+    """QueryId for a TRBBridgeV2 deposit: keccak(abi.encode('TRBBridgeV2', abi.encode(toLayer, depositId)))."""
     query_data = abi_encode(
         ["string", "bytes"],
         ["TRBBridgeV2", abi_encode(["bool", "uint256"], [True, deposit_id])],
