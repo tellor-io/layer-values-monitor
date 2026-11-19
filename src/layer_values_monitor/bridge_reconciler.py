@@ -20,9 +20,10 @@ import os
 import time
 
 from layer_values_monitor.bridge_ledger import (
-    DEFAULT_MISSING_REPORT_AGE,
+    DEFAULT_LAYER_BLOCK_SECONDS,
     DEFAULT_NO_LOG_GRACE,
     DEFAULT_RECONCILE_INTERVAL,
+    DEFAULT_REPORT_WINDOW_BLOCKS,
     DEFAULT_SWEEP_CHUNK_BLOCKS,
     DEFAULT_SWEEP_LOOKBACK_HOURS,
     DEFAULT_UNVERIFIABLE_RETRIES,
@@ -40,7 +41,13 @@ from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_types import DisputeCategory, Metrics, Msg
 from layer_values_monitor.discord import bridge_ledger_alert
 from layer_values_monitor.evm_connections import get_secondary_connection, get_web3_connection
-from layer_values_monitor.trb_bridge import decode_deposit_log, deposit_event_topic, fetch_deposit, make_provider_builder
+from layer_values_monitor.trb_bridge import (
+    decode_deposit_log,
+    deposit_event_topic,
+    deposit_query_id,
+    fetch_deposit,
+    make_provider_builder,
+)
 
 from web3 import Web3
 
@@ -288,7 +295,13 @@ async def sweep_deposit_logs(
                 "tip": decoded["tip"],
             }
             block_number = log["blockNumber"] if isinstance(log, dict) else log.blockNumber
-            if ledger.record_eth_deposit(contract, decoded["deposit_id"], eth_tx, int(block_number), reported):
+            try:  # deposit block timestamp anchors the Layer reporting window
+                block_ts: float | None = float(w3.eth.get_block(int(block_number))["timestamp"])
+            except Exception:
+                block_ts = None
+            if ledger.record_eth_deposit(
+                contract, decoded["deposit_id"], eth_tx, int(block_number), reported, block_ts
+            ):
                 recorded += 1
 
         ledger.set_meta(cursor_key, str(last_block))
@@ -297,13 +310,38 @@ async def sweep_deposit_logs(
         )
 
 
+async def _layer_has_report(rest_url: str, query_id: str) -> bool:
+    """Ask the Layer oracle module whether any micro-report exists for this queryId."""
+    import aiohttp
+
+    url = f"{rest_url.rstrip('/')}/layer/oracle/get_reportsby_qid/{query_id}"
+    async with aiohttp.ClientSession() as sess:
+        async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            data = await resp.json(content_type=None)
+    return bool(isinstance(data, dict) and data.get("microReports"))
+
+
 async def check_orphans_and_missing(ledger: BridgeLedger, logger: logging.Logger, now: float | None = None) -> None:
     """Alert on eth deposits with no Layer report, and reports with no Deposit log (one-time alerts)."""
     now = time.time() if now is None else now
-    min_age = float(os.getenv("BRIDGE_MISSING_REPORT_AGE", str(DEFAULT_MISSING_REPORT_AGE)))
+    window_blocks = float(os.getenv("BRIDGE_REPORT_WINDOW_BLOCKS", str(DEFAULT_REPORT_WINDOW_BLOCKS)))
+    window_s = window_blocks * float(os.getenv("BRIDGE_LAYER_BLOCK_SECONDS", str(DEFAULT_LAYER_BLOCK_SECONDS)))
     no_log_grace = float(os.getenv("BRIDGE_NO_LOG_GRACE", str(DEFAULT_NO_LOG_GRACE)))
+    rest_url = os.getenv("LAYER_REST_URL") or ""
 
-    for row in ledger.pending_missing_reports(now=now, min_age_s=min_age):
+    # A deposit is only actionable once the on-chain reporting window (registry dataspec
+    # ReportBlockWindow) has closed: before that, a report can still legally land.
+    for row in ledger.pending_missing_reports(now=now, window_s=window_s):
+        qid = deposit_query_id(row["deposit_id"])
+        detail = f"no Layer report within {int(window_blocks)}-block reporting window"
+        if rest_url:
+            try:
+                if await _layer_has_report(rest_url, qid):
+                    ledger.resolve_missing_report(row["contract_address"], row["deposit_id"])
+                    logger.info(f"bridge deposit {row['deposit_id']}: late report found on oracle; no missing alert")
+                    continue
+            except Exception as e:
+                detail += f"; oracle REST unconfirmed ({e})"
         if ledger.mark_missing_report(row["contract_address"], row["deposit_id"]):
             bridge_ledger_alert(
                 DESC_MISSING,
@@ -311,7 +349,8 @@ async def check_orphans_and_missing(ledger: BridgeLedger, logger: logging.Logger
                     "Deposit ID": row["deposit_id"],
                     "Contract": row["contract_address"],
                     "Eth Tx": row["eth_tx_hash"] or "?",
-                    "Detail": "deposit on eth, no Layer report",
+                    "QueryId": qid,
+                    "Detail": detail,
                 },
             )
 

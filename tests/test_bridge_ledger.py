@@ -124,16 +124,27 @@ class TestEthDeposits:
         ledger.record_eth_deposit(CONTRACT, 8, "0xethB", 200)
 
         now = time.time()
-        # first_seen is fresh; nothing pending yet
-        assert ledger.pending_missing_reports(now=now, min_age_s=3600) == []
+        # reporting window still open; nothing pending yet
+        assert ledger.pending_missing_reports(now=now, window_s=3600) == []
 
         # Two hours later, deposit 8 (no Layer report) is pending; deposit 7 is covered
-        pending = ledger.pending_missing_reports(now=now + 7200, min_age_s=3600)
+        pending = ledger.pending_missing_reports(now=now + 7200, window_s=3600)
         assert [r["deposit_id"] for r in pending] == [8]
 
         assert ledger.mark_missing_report(CONTRACT, 8) is True
         assert ledger.mark_missing_report(CONTRACT, 8) is False  # alert-once
-        assert ledger.pending_missing_reports(now=now + 7200, min_age_s=3600) == []
+        assert ledger.pending_missing_reports(now=now + 7200, window_s=3600) == []
+
+    def test_missing_window_anchored_on_block_ts(self, ledger):
+        """A deposit swept long after it happened must not be 'pending' until ITS window closes."""
+        now = time.time()
+        ledger.record_eth_deposit(CONTRACT, 9, "0xethC", 300, block_ts=now)
+        ledger.conn.execute("UPDATE eth_deposits SET first_seen_ts=? WHERE deposit_id=9", (now - 86_400,))
+        ledger.conn.commit()
+        # first_seen is a day old, but the deposit itself just happened: window open
+        assert ledger.pending_missing_reports(now=now + 1800, window_s=3600) == []
+        pending = ledger.pending_missing_reports(now=now + 7200, window_s=3600)
+        assert [r["deposit_id"] for r in pending] == [9]
 
     def test_rows_without_log(self, ledger):
         insert(ledger, tx_hash="0xtx1", status=STATUS_MISMATCH_PENDING, deposit_id=7)

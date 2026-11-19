@@ -44,7 +44,8 @@ RECHECK_STATUSES = (STATUS_UNVERIFIED, STATUS_MISMATCH_PENDING)
 DISPUTE_WINDOW_HOURS = 12
 DEFAULT_RECONCILE_INTERVAL = 600  # seconds between reconciler cycles
 DEFAULT_UNVERIFIABLE_RETRIES = 6  # recheck cycles before flagging a row unverifiable
-DEFAULT_MISSING_REPORT_AGE = 3600  # eth deposit age before "no Layer report" is suspicious
+DEFAULT_REPORT_WINDOW_BLOCKS = 2000  # TRBBridgeV2 registry dataspec ReportBlockWindow (x/registry, v6.1.4 upgrade)
+DEFAULT_LAYER_BLOCK_SECONDS = 12.0  # block-time estimate to turn the window into seconds
 DEFAULT_NO_LOG_GRACE = 1800  # min report age before declaring "no Deposit event" ever happened
 #   ^ a report minutes after its deposit can legitimately have no swept log yet: the sweep
 #     only covers up to `finalized`, which lags the Sepolia head by several minutes.
@@ -100,6 +101,7 @@ class BridgeLedger:
                 deposit_id       INTEGER NOT NULL,
                 eth_tx_hash      TEXT,
                 log_block        INTEGER,
+                block_ts         REAL,
                 reported_json    TEXT,
                 first_seen_ts    REAL NOT NULL,
                 missing_report   INTEGER NOT NULL DEFAULT 0,
@@ -113,6 +115,10 @@ class BridgeLedger:
             );
             """
         )
+        # additive migrations for ledgers created before a column existed
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(eth_deposits)")}
+        if "block_ts" not in cols:
+            self.conn.execute("ALTER TABLE eth_deposits ADD COLUMN block_ts REAL")
         self.conn.commit()
 
     def close(self) -> None:
@@ -280,14 +286,15 @@ class BridgeLedger:
         eth_tx_hash: str | None,
         log_block: int | None,
         reported_value: dict | None = None,
+        block_ts: float | None = None,
     ) -> bool:
         """Record a Deposit event observed on eth. Returns True when newly recorded."""
         cur = self.conn.execute(
             """
             INSERT INTO eth_deposits
-                (contract_address, deposit_id, eth_tx_hash, log_block, reported_json, first_seen_ts,
-                 missing_report, missing_alerted)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0)
+                (contract_address, deposit_id, eth_tx_hash, log_block, block_ts, reported_json,
+                 first_seen_ts, missing_report, missing_alerted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)
             ON CONFLICT(contract_address, deposit_id) DO NOTHING
             """,
             (
@@ -295,6 +302,7 @@ class BridgeLedger:
                 deposit_id,
                 eth_tx_hash,
                 log_block,
+                block_ts,
                 json.dumps(reported_value) if reported_value is not None else None,
                 time.time(),
             ),
@@ -310,22 +318,34 @@ class BridgeLedger:
         ).fetchone()
         return row is not None
 
-    def pending_missing_reports(self, now: float | None = None, min_age_s: float = DEFAULT_MISSING_REPORT_AGE) -> list[dict]:
-        """Return Eth deposits older than min_age_s with no Layer report row yet (not yet alerted)."""
+    def pending_missing_reports(self, now: float | None = None, window_s: float = 24_000) -> list[dict]:
+        """Eth deposits whose Layer reporting window has CLOSED with no report row yet (not alerted).
+
+        Anchored on the deposit's block timestamp when known (the window is defined on-chain
+        relative to the deposit), falling back to first-seen time for rows predating block_ts.
+        """
         now = time.time() if now is None else now
         rows = self.conn.execute(
             """
             SELECT e.* FROM eth_deposits e
             WHERE e.missing_alerted = 0
-              AND e.first_seen_ts <= ?
+              AND COALESCE(e.block_ts, e.first_seen_ts) + ? <= ?
               AND NOT EXISTS (
                   SELECT 1 FROM bridge_deposits b
                   WHERE b.contract_address = e.contract_address AND b.deposit_id = e.deposit_id
               )
             """,
-            (now - min_age_s,),
+            (window_s, now),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def resolve_missing_report(self, contract_address: str, deposit_id: int) -> None:
+        """Quietly retire a pending missing-report deposit (e.g. late report found on oracle)."""
+        self.conn.execute(
+            "UPDATE eth_deposits SET missing_alerted = 1 WHERE contract_address = ? AND deposit_id = ?",
+            (contract_address, deposit_id),
+        )
+        self.conn.commit()
 
     def mark_missing_report(self, contract_address: str, deposit_id: int) -> bool:
         """Flag an eth deposit as missing its Layer report. Returns True on the first flag (alert-once)."""

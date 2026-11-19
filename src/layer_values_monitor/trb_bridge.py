@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from layer_values_monitor.evm_connections import get_web3_connection, invalidate_web3_connection
 
+from eth_abi.abi import encode as abi_encode
 from telliot_core.apps.telliot_config import TelliotConfig
 from web3 import Web3
 from web3.contract import Contract
@@ -87,6 +88,15 @@ def is_zero_struct(deposit_details: tuple) -> bool:
     """
     sender, layer_recipient, amount, tip, block_number = deposit_details
     return str(sender).lower() == ZERO_ADDRESS and layer_recipient == "" and amount == 0 and tip == 0 and block_number == 0
+
+
+def deposit_query_id(deposit_id: int) -> str:
+    """queryId for a TRBBridgeV2 deposit: keccak(abi.encode('TRBBridgeV2', abi.encode(toLayer, depositId)))."""
+    query_data = abi_encode(
+        ["string", "bytes"],
+        ["TRBBridgeV2", abi_encode(["bool", "uint256"], [True, deposit_id])],
+    )
+    return "0x" + Web3.keccak(query_data).hex()
 
 
 def decode_query_data(query_data: str) -> int | None:

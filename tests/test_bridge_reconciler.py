@@ -256,14 +256,46 @@ class TestLogSweep:
         assert ledger.record_eth_deposit(CONTRACT, 7, "0x", 121) is False
 
     @pytest.mark.asyncio
-    async def test_missing_report_alerts_once(self, ledger):
+    async def test_missing_report_alerts_once(self, ledger, monkeypatch):
+        monkeypatch.setenv("BRIDGE_REPORT_WINDOW_BLOCKS", "300")  # 3600s window
+        monkeypatch.setenv("BRIDGE_LAYER_BLOCK_SECONDS", "12")
         ledger.record_eth_deposit(CONTRACT, 8, "0xeth", 100, REPORTED)  # no Layer report
-        now = time.time() + 7200  # deposit is now 2h old
+        now = time.time() + 7200  # deposit is now well past its window
         with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
             await check_orphans_and_missing(ledger, MagicMock(), now=now)
             await check_orphans_and_missing(ledger, MagicMock(), now=now)
         assert alert.call_count == 1
         assert "no Layer report" in alert.call_args.args[1]["Detail"]
+
+    @pytest.mark.asyncio
+    async def test_missing_report_waits_for_window_close(self, ledger, monkeypatch):
+        monkeypatch.setenv("BRIDGE_REPORT_WINDOW_BLOCKS", "300")  # 3600s window
+        monkeypatch.setenv("BRIDGE_LAYER_BLOCK_SECONDS", "12")
+        now = time.time()
+        ledger.record_eth_deposit(CONTRACT, 8, "0xeth", 100, REPORTED, block_ts=now)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_orphans_and_missing(ledger, MagicMock(), now=now + 1800)  # window open
+            alert.assert_not_called()
+            await check_orphans_and_missing(ledger, MagicMock(), now=now + 7200)  # closed
+        assert alert.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_late_oracle_report_suppresses_missing_alert(self, ledger, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("BRIDGE_REPORT_WINDOW_BLOCKS", "300")
+        monkeypatch.setenv("BRIDGE_LAYER_BLOCK_SECONDS", "12")
+        monkeypatch.setenv("LAYER_REST_URL", "http://rest.invalid")
+        now = time.time()
+        ledger.record_eth_deposit(CONTRACT, 8, "0xeth", 100, REPORTED, block_ts=now - 7200)
+        with (
+            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
+            patch("layer_values_monitor.bridge_reconciler._layer_has_report", new=AsyncMock(return_value=True)),
+        ):
+            await check_orphans_and_missing(ledger, MagicMock(), now=now)
+        alert.assert_not_called()
+        row = next(r for r in ledger.conn.execute("SELECT missing_alerted, missing_report FROM eth_deposits"))
+        assert (row["missing_alerted"], row["missing_report"]) == (1, 0)  # resolved quietly
 
     @pytest.mark.asyncio
     async def test_report_without_log_flagged_unverifiable(self, ledger):
