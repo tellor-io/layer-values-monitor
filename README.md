@@ -73,13 +73,17 @@ Required only when monitoring TRBBridge/TRBBridgeV2 query types.
 ### TRB Bridge Verification Ledger (two-tier)
 Every bridge report is journaled to a SQLite ledger (`data/bridge_ledger.db` by default) and
 re-verified by an in-process reconciler task. Tier 1 (stream) records and alerts but never
-disputes; the reconciler auto-disputes only mismatches a **second, different RPC provider**
-confirms against a finalized-anchored read.
+disputes; the reconciler disputes a mismatch after a second check — a **second, different RPC
+provider** when configured, otherwise a same-endpoint re-read — against a finalized-anchored read.
+If no re-check read is possible at all (RPC loss), a mismatch older than
+`BRIDGE_NO_RPC_DISPUTE_HOURS` (default 2) disputes on its aged anchored evidence rather than
+expiring undisputed.
 - `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
 - `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
 - `BRIDGE_SWEEP_LOOKBACK_HOURS` - Deposit-event sweep window on cold start (default: `24`)
 - `BRIDGE_SECONDARY_RPC_URL` - Explicit second provider for mismatch double-confirmation
   (unset = rotate to a different entry in `EVM_RPC_URLS_<chain>`; ops should pick a different vendor)
+- `BRIDGE_NO_RPC_DISPUTE_HOURS` - Aged-mismatch dispute threshold when re-checks are impossible (default: `2`)
 
 Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
 (`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —

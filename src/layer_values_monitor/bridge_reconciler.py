@@ -4,7 +4,9 @@ Tier 1 (inspect_trbbridge_reports in monitor.py) records verdicts but never disp
 This task periodically sweeps the ledger and:
 
   a) re-verifies `unverified` / `mismatch_pending` rows anchored at `finalized`,
-  b) auto-disputes only mismatches a SECOND, different RPC provider confirms,
+  b) disputes mismatches a second check confirms — a SECOND, different RPC provider when one
+     is configured, otherwise a same-endpoint re-read; a mismatch aged past
+     BRIDGE_NO_RPC_DISPUTE_HOURS disputes on its last anchored read if no re-check is possible,
   c) sweeps the bridge's Deposit event logs to detect orphans (eth deposit with no
      Layer report) and reports referencing a deposit the log never emitted,
   d) escalates anything still unresolved near the 12-hour dispute deadline.
@@ -18,10 +20,12 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 
 from layer_values_monitor.bridge_ledger import (
     DEFAULT_LAYER_BLOCK_SECONDS,
     DEFAULT_NO_LOG_GRACE,
+    DEFAULT_NO_RPC_DISPUTE_HOURS,
     DEFAULT_RECONCILE_INTERVAL,
     DEFAULT_REPORT_WINDOW_BLOCKS,
     DEFAULT_SWEEP_CHUNK_BLOCKS,
@@ -30,6 +34,7 @@ from layer_values_monitor.bridge_ledger import (
     DISPUTE_WINDOW_HOURS,
     STATUS_DISPUTED,
     STATUS_EXPIRED_UNRESOLVED,
+    STATUS_MISMATCH_PENDING,
     STATUS_RESOLVED_LAG,
     STATUS_UNVERIFIABLE,
     STATUS_VERIFIED_OK,
@@ -52,6 +57,7 @@ from layer_values_monitor.trb_bridge import (
 from web3 import Web3
 
 BRIDGE_CONTRACT_ENVS = ("TRBBRIDGE_CONTRACT_ADDRESS", "TRBBRIDGEV2_CONTRACT_ADDRESS")
+BRIDGE_QUERY_TYPES = {"TRBBRIDGE_CONTRACT_ADDRESS": "TRBBridge", "TRBBRIDGEV2_CONTRACT_ADDRESS": "TRBBridgeV2"}
 
 DESC_UNRESOLVED = "🌉 **BRIDGE REPORT UNRESOLVED**"
 DESC_RESOLVED = "🌉 **BRIDGE REPORT RESOLVED**"
@@ -89,6 +95,24 @@ def _equality_dispute_category(metrics: Metrics | None) -> DisputeCategory | Non
     return None
 
 
+def _fixed_provider(w3: Web3) -> Callable[[int], Web3]:
+    """Return a provider builder that always yields the same Web3 connection (ignores attempt)."""
+
+    def builder(_attempt: int) -> Web3:
+        return w3
+
+    return builder
+
+
+def _query_type_for_contract(contract_address: str) -> str:
+    """Map a bridge contract address (checksummed) back to its query type string."""
+    for env_name, qtype in BRIDGE_QUERY_TYPES.items():
+        addr = os.getenv(env_name)
+        if addr and Web3.to_checksum_address(addr) == contract_address:
+            return qtype
+    return "TRBBridgeV2"
+
+
 async def _recheck_row(
     row: dict,
     ledger: BridgeLedger,
@@ -118,44 +142,55 @@ async def _recheck_row(
         if trusted == reported:
             prev_status = row["status"]
             ledger.set_status(tx_hash, STATUS_VERIFIED_OK)
-            if prev_status == "mismatch_pending":
+            if prev_status == STATUS_MISMATCH_PENDING:
                 bridge_ledger_alert(
                     DESC_RESOLVED,
                     {"Tx Hash": tx_hash, "Deposit ID": deposit_id, "Status": "mismatch cleared on anchored recheck"},
                 )
             return
 
-        # Primary still says mismatch — confirm on a DIFFERENT provider before disputing.
+        # Primary still says mismatch — second check before disputing: different provider if
+        # configured, otherwise same-endpoint re-read (single-RPC deployments still dispute).
         secondary_w3 = get_secondary_connection(chain_id)
-        if secondary_w3 is None:
-            logger.warning(f"bridge recheck {tx_hash[:16]}: mismatch, no secondary provider; deferring")
-            ledger.set_status(tx_hash, row["status"], error="no secondary provider", bump_retries=True)
-            return
+        if secondary_w3 is not None:
+            secondary_builder = _fixed_provider(secondary_w3)
+        else:
+            logger.warning(f"bridge recheck {tx_hash[:16]}: no secondary provider; second check on same endpoint")
+            secondary_builder = primary_builder
 
         dep2, kind2 = await fetch_deposit(
-            lambda attempt, w=secondary_w3: w, contract, deposit_id, anchor="finalized", sanity=True, logger=logger
+            secondary_builder, contract, deposit_id, anchor="finalized", sanity=True, logger=logger
         )
         if kind2 != "ok" or dep2 is None:
-            logger.warning(f"bridge recheck {tx_hash[:16]}: secondary provider read failed ({kind2}); no dispute")
-            ledger.set_status(tx_hash, row["status"], error=f"secondary {kind2}", bump_retries=True)
+            # Second read unavailable: aged mismatches dispute on the anchored primary confirmation.
+            if await _aged_dispute(row, ledger, disputes_q, config_watcher, logger, f"second read unavailable ({kind2})"):
+                return
+            logger.warning(f"bridge recheck {tx_hash[:16]}: second read failed ({kind2}); deferring")
+            ledger.set_status(tx_hash, row["status"], error=f"second read {kind2}", bump_retries=True)
             return
 
         sec = _trusted_dict(dep2)
         if sec == reported:
-            # Secondary agrees with the report: primary was lagging. Log-only per design.
+            # Second read agrees with the report: the earlier read was lagging.
             logger.info(f"bridge recheck {tx_hash[:16]}: secondary matched report — resolved as provider lag")
             ledger.set_status(tx_hash, STATUS_RESOLVED_LAG, error="secondary matched report (lag cleared)")
             return
         if sec == trusted:
-            # Both independent providers agree on the same non-reported value: dispute.
+            # Second check agrees on the same non-reported value: dispute.
             await _queue_dispute(row, ledger, disputes_q, config_watcher, logger)
             return
-        # Providers disagree with each other — inconclusive, try again next cycle.
+        # The two reads disagree with each other — inconclusive, try again next cycle.
         logger.warning(f"bridge recheck {tx_hash[:16]}: providers disagree; no dispute this cycle")
         ledger.set_status(tx_hash, row["status"], error="providers disagree", bump_retries=True)
         return
 
-    # Fetch failed again (zero_struct / rpc_error): count the cycle, flag humans after N.
+    # Re-read failed (zero_struct / rpc_error)
+    if row["status"] == STATUS_MISMATCH_PENDING and kind == "rpc_error":
+        # Mismatch seen once, no readable RPC since: age out to a dispute, not to unverifiable.
+        if await _aged_dispute(row, ledger, disputes_q, config_watcher, logger, "no RPC available for recheck"):
+            return
+        ledger.set_status(tx_hash, row["status"], error=kind, bump_retries=True)
+        return
     new_retries = (row["retries"] or 0) + 1
     if new_retries >= max_retries:
         ledger.set_status(tx_hash, STATUS_UNVERIFIABLE, error=kind, bump_retries=True)
@@ -180,8 +215,9 @@ async def _queue_dispute(
     disputes_q: asyncio.Queue,
     config_watcher: ConfigWatcher | None,
     logger: logging.Logger,
+    note: str = "double-confirmed mismatch",
 ) -> None:
-    """Queue the double-confirmed dispute using the existing category/fee logic."""
+    """Queue the confirmed dispute using the existing category/fee logic."""
     from layer_values_monitor.dispute import determine_dispute_fee
 
     metrics = None
@@ -193,15 +229,38 @@ async def _queue_dispute(
 
     category = _equality_dispute_category(metrics)
     if category is None:
-        # Alert-only rollout config (equality dispute thresholds 0.0): keep the row pending,
-        # it will re-confirm each cycle until it disputes (config change) or expires.
-        logger.info(f"bridge dispute {row['tx_hash'][:16]}: mismatch double-confirmed but disputes disabled (threshold 0.0)")
+        # Alert-only config (thresholds 0.0): row stays pending until a config change or expiry.
+        logger.info(f"bridge dispute {row['tx_hash'][:16]}: mismatch confirmed but disputes disabled (threshold 0.0)")
         return
 
     fee = determine_dispute_fee(category, int(row["power"] or 0))
     await disputes_q.put(Msg(row["reporter"], row["query_id"], row["meta_id"], category, fee.__str__() + DENOM))
-    ledger.set_status(row["tx_hash"], STATUS_DISPUTED, error=f"double-confirmed mismatch ({category} dispute queued)")
+    ledger.set_status(row["tx_hash"], STATUS_DISPUTED, error=f"{note} ({category} dispute queued)")
     logger.info(f"🌉 Bridge reconciler queued {category} dispute for {row['tx_hash'][:16]}... (fee {fee}{DENOM})")
+
+
+async def _aged_dispute(
+    row: dict,
+    ledger: BridgeLedger,
+    disputes_q: asyncio.Queue,
+    config_watcher: ConfigWatcher | None,
+    logger: logging.Logger,
+    note: str,
+) -> bool:
+    """Return True (and queue the dispute) when a detected mismatch aged out without re-confirmation.
+
+    Only for mismatch_pending rows older than BRIDGE_NO_RPC_DISPUTE_HOURS: when no second read
+    is possible anymore (RPC loss / secondary dead), dispute on the aged evidence instead of
+    letting a fake deposit expire undisputed at the end of the dispute window.
+    """
+    hours = float(os.getenv("BRIDGE_NO_RPC_DISPUTE_HOURS", str(DEFAULT_NO_RPC_DISPUTE_HOURS)))
+    if row["status"] != STATUS_MISMATCH_PENDING or hours <= 0:
+        return False
+    if (time.time() - float(row["report_ts"])) < hours * 3600:
+        return False
+    logger.warning(f"bridge recheck {row['tx_hash'][:16]}: {note}; disputing on evidence aged >{hours:.0f}h")
+    await _queue_dispute(row, ledger, disputes_q, config_watcher, logger, note=note)
+    return True
 
 
 def _block_at_or_after(w3: Web3, target_ts: int, logger: logging.Logger) -> int:
@@ -246,8 +305,7 @@ async def sweep_deposit_logs(
     try:
         target_block = w3.eth.get_block("finalized")["number"]
     except Exception:
-        # Providers without a finalized tag (or per the finalized-rejection guard): plain latest.
-        target_block = w3.eth.block_number
+        target_block = w3.eth.block_number  # providers without a finalized tag
 
     topic0 = deposit_event_topic()
 
@@ -277,7 +335,7 @@ async def sweep_deposit_logs(
                 {"address": contract, "topics": [topic0], "fromBlock": first_block, "toBlock": last_block}
             )
         except Exception as e:
-            # get_logs block-range caps vary by provider — shrink the chunk and retry next cycle.
+            # Provider get_logs range cap hit — cursor stays, same range retried next cycle.
             logger.warning(f"bridge log sweep {contract[:10]}..: get_logs({first_block}, {last_block}) failed ({e})")
             continue
 
@@ -332,7 +390,8 @@ async def check_orphans_and_missing(ledger: BridgeLedger, logger: logging.Logger
     # A deposit is only actionable once the on-chain reporting window (registry dataspec
     # ReportBlockWindow) has closed: before that, a report can still legally land.
     for row in ledger.pending_missing_reports(now=now, window_s=window_s):
-        qid = deposit_query_id(row["deposit_id"])
+        qtype = _query_type_for_contract(row["contract_address"])
+        qid = deposit_query_id(row["deposit_id"], qtype)
         detail = f"no Layer report within {int(window_blocks)}-block reporting window"
         if rest_url:
             try:

@@ -146,7 +146,8 @@ class TestRecheckLogic:
         assert q.empty()
 
     @pytest.mark.asyncio
-    async def test_missing_secondary_never_disputes(self, ledger):
+    async def test_no_secondary_disputes_on_same_endpoint_recheck(self, ledger):
+        """Single-RPC deployment: second check on the same endpoint still confirms → dispute."""
         add_row(ledger)
         q = asyncio.Queue()
         with patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()):
@@ -157,9 +158,57 @@ class TestRecheckLogic:
                     with patch("layer_values_monitor.bridge_reconciler.sweep_deposit_logs", new=AsyncMock()):
                         await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
         row = ledger.get("0xtx1")
+        assert row["status"] == STATUS_DISPUTED
+        msg = q.get_nowait()
+        assert msg.category == "warning"
+
+    @pytest.mark.asyncio
+    async def test_aged_mismatch_disputes_when_no_rpc(self, ledger):
+        """Mismatch detected, then all re-check RPCs fail >2h: dispute on aged evidence."""
+        add_row(ledger, report_ts=time.time() - 3 * 3600)
+        q = asyncio.Queue()
+        with patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()):
+            with patch(
+                "layer_values_monitor.bridge_reconciler.fetch_deposit", new=AsyncMock(return_value=(None, "rpc_error"))
+            ):
+                with patch("layer_values_monitor.bridge_reconciler.sweep_deposit_logs", new=AsyncMock()):
+                    await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
+        row = ledger.get("0xtx1")
+        assert row["status"] == STATUS_DISPUTED
+        assert "no RPC" in row["last_error"]
+        assert q.get_nowait().category == "warning"
+
+    @pytest.mark.asyncio
+    async def test_fresh_mismatch_defers_while_rpc_down(self, ledger):
+        """Same RPC failure inside the aging window: stay pending, no dispute yet."""
+        add_row(ledger, report_ts=time.time() - 1 * 3600)
+        q = asyncio.Queue()
+        with patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()):
+            with patch(
+                "layer_values_monitor.bridge_reconciler.fetch_deposit", new=AsyncMock(return_value=(None, "rpc_error"))
+            ):
+                with patch("layer_values_monitor.bridge_reconciler.sweep_deposit_logs", new=AsyncMock()):
+                    await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
+        row = ledger.get("0xtx1")
         assert row["status"] == STATUS_MISMATCH_PENDING
-        assert row["retries"] == 1  # deferred, retried next cycle
+        assert row["retries"] == 1  # keeps trying; never goes unverifiable while a mismatch stands
         assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_aged_mismatch_disputes_when_second_read_fails(self, ledger):
+        """Primary confirms, second check dead >2h: dispute on the anchored primary read."""
+        add_row(ledger, report_ts=time.time() - 3 * 3600)
+        q = asyncio.Queue()
+        calls = [(WRONG_TUPLE, "ok"), (None, "rpc_error")]
+        with patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()):
+            with patch("layer_values_monitor.bridge_reconciler.fetch_deposit", new=AsyncMock(side_effect=calls)):
+                with patch("layer_values_monitor.bridge_reconciler.get_secondary_connection", return_value=MagicMock()):
+                    with patch("layer_values_monitor.bridge_reconciler.sweep_deposit_logs", new=AsyncMock()):
+                        await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
+        row = ledger.get("0xtx1")
+        assert row["status"] == STATUS_DISPUTED
+        assert "second read unavailable" in row["last_error"]
+        assert q.get_nowait().category == "warning"
 
     @pytest.mark.asyncio
     async def test_zero_struct_read_never_confirms_mismatch(self, ledger):

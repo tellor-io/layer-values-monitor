@@ -46,9 +46,12 @@ DEFAULT_RECONCILE_INTERVAL = 120  # seconds between reconciler cycles
 DEFAULT_UNVERIFIABLE_RETRIES = 6  # recheck cycles before flagging a row unverifiable
 DEFAULT_REPORT_WINDOW_BLOCKS = 2000  # TRBBridgeV2 registry dataspec ReportBlockWindow (x/registry, v6.1.4 upgrade)
 DEFAULT_LAYER_BLOCK_SECONDS = 12.0  # block-time estimate to turn the window into seconds
-DEFAULT_NO_LOG_GRACE = 1800  # min report age before declaring "no Deposit event" ever happened
-#   ^ a report minutes after its deposit can legitimately have no swept log yet: the sweep
-#     only covers up to `finalized`, which lags the Sepolia head by several minutes.
+# min report age before declaring "no Deposit event" ever happened; the sweep only follows
+# `finalized`, so a report on a very recent deposit legitimately outruns it for a few minutes
+DEFAULT_NO_LOG_GRACE = 1800
+# a detected mismatch older than this disputes on its last anchored read when no re-check
+# is possible at all (RPC loss / secondary dead), instead of expiring undisputed
+DEFAULT_NO_RPC_DISPUTE_HOURS = 2.0
 DEFAULT_SWEEP_LOOKBACK_HOURS = 24
 DEFAULT_SWEEP_CHUNK_BLOCKS = 2000
 

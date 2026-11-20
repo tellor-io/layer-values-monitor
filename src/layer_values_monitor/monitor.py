@@ -1798,12 +1798,12 @@ async def inspect_trbbridge_reports(
         report_ts = (int(r.timestamp) / 1000.0) if r.timestamp else time.time()
 
         # Hardened read (retries, provider rotation, zero-struct sanity). Tier 1 only
-        # records and alerts — disputes are deferred to the reconciler (double-confirmation).
+        # records and alerts — disputes are deferred to the reconciler's second check.
         deposit, error_kind = await fetch_deposit(provider_builder, contract_address, deposit_id, sanity=True, logger=logger)
 
         if deposit is None:
-            # G1 closed: a failed eth read becomes a persisted `unverified` row + alert,
-            # never a silent skip indistinguishable from a verified-good report.
+            # A failed eth read becomes a persisted `unverified` row + alert, never a silent
+            # skip indistinguishable from a verified-good report.
             newly_recorded = ledger.upsert_report(
                 tx_hash=r.tx_hash,
                 query_id=query_id,
@@ -2114,7 +2114,7 @@ async def inspect(
         query: Optional query object from telliot-feeds
         trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
         defer_dispute: If True, alert as usual but never enqueue a dispute — the bridge
-            reconciler (Tier 2) disputes only after a second provider confirms the mismatch.
+            reconciler (Tier 2) disputes only after its second check confirms the mismatch.
         alert_prefix: Optional string prepended to the Discord alert description.
 
     """

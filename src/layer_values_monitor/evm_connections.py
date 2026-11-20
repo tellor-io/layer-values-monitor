@@ -311,8 +311,8 @@ def get_secondary_connection(chain_id: int) -> Web3 | None:
     2. Rotation: the first entry in EVM_RPC_URLS_{chain_id} that differs from the URL
        backing the currently cached primary connection.
 
-    Returns None when no distinct provider is configured — callers must treat a
-    missing secondary as "cannot double-confirm", never as confirmation.
+    Returns None when no distinct provider is configured — the bridge reconciler then runs its
+    second check on the same endpoint (single-RPC deployments still auto-dispute).
     """
     secondary_url = os.getenv("BRIDGE_SECONDARY_RPC_URL")
     if secondary_url:

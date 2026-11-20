@@ -90,11 +90,11 @@ def is_zero_struct(deposit_details: tuple) -> bool:
     return str(sender).lower() == ZERO_ADDRESS and layer_recipient == "" and amount == 0 and tip == 0 and block_number == 0
 
 
-def deposit_query_id(deposit_id: int) -> str:
-    """QueryId for a TRBBridgeV2 deposit: keccak(abi.encode('TRBBridgeV2', abi.encode(toLayer, depositId)))."""
+def deposit_query_id(deposit_id: int, query_string: str = "TRBBridgeV2") -> str:
+    """QueryId for a bridge deposit: keccak(abi.encode(typeString, abi.encode(toLayer, depositId)))."""
     query_data = abi_encode(
         ["string", "bytes"],
-        ["TRBBridgeV2", abi_encode(["bool", "uint256"], [True, deposit_id])],
+        [query_string, abi_encode(["bool", "uint256"], [True, deposit_id])],
     )
     return "0x" + Web3.keccak(query_data).hex()
 
