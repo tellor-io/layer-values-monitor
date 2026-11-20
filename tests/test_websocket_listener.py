@@ -178,3 +178,120 @@ async def test_subscription_errors_after_retry_limit(event_queue):
 
     assert websocket.send.await_count == 3
     assert logger.error.call_count == 3
+
+
+def _heartbeat_message(height: int) -> str:
+    """Build a tm.event='NewBlock' heartbeat payload."""
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "events": {"block.height": [str(height)], "tm.event": ["NewBlock"]},
+                "data": {"type": "tendermint/event/NewBlock"},
+            },
+        }
+    )
+
+
+def _drain_then_hang(messages: list):
+    """recv() that replays messages once, then blocks forever (healthy silent socket)."""
+
+    async def mock_recv():
+        if messages:
+            return messages.pop(0)
+        await asyncio.sleep(3600)
+
+    return mock_recv
+
+
+@pytest.mark.asyncio
+async def test_newblock_heartbeat_updates_tracker_without_queueing(
+    mock_websockets_connect, mock_websocket, event_queue
+):
+    """Heartbeats feed the height tracker but stay out of the raw queue."""
+    uri = "test-server.com"
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+    messages = [ack, _heartbeat_message(101)]
+    mock_websocket.recv.side_effect = _drain_then_hang(messages)
+
+    height_tracker = HeightTracker()
+    listener_task = asyncio.create_task(
+        listen_to_websocket_events(uri, ["tm.event='NewBlock'"], event_queue, mock_logger, height_tracker)
+    )
+    await asyncio.sleep(0.1)
+
+    assert height_tracker.last_height == 101, "Heartbeat block height must update the tracker"
+    assert event_queue.empty(), "Heartbeats must not reach the queue handler"
+
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_stall_watchdog_forces_reconnect_when_silent_chain_advances(
+    mock_websockets_connect, mock_websocket, event_queue
+):
+    """Silence + advancing height = wedged subscription: the watchdog must close the socket."""
+    uri = "test-server.com"
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+    messages = [ack, _heartbeat_message(101)]
+    mock_websocket.recv.side_effect = _drain_then_hang(messages)
+
+    closed = asyncio.Event()
+
+    async def fake_close(*args, **kwargs):
+        closed.set()
+
+    mock_websocket.close.side_effect = fake_close
+    logger = MagicMock(spec=logging.Logger)
+    height_tracker = HeightTracker()
+
+    with (
+        patch("layer_values_monitor.monitor.WS_STALL_TIMEOUT_SECONDS", 0.5),
+        patch("layer_values_monitor.monitor.get_current_height", AsyncMock(return_value=120)),
+    ):
+        listener_task = asyncio.create_task(
+            listen_to_websocket_events(uri, ["tm.event='NewBlock'"], event_queue, logger, height_tracker)
+        )
+        await asyncio.wait_for(closed.wait(), timeout=10)
+
+    assert any("forcing reconnect" in str(call) for call in logger.warning.call_args_list)
+
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_stall_watchdog_holds_when_chain_height_not_advancing(
+    mock_websockets_connect, mock_websocket, event_queue
+):
+    """A halted chain (height not advancing) must not trigger reconnect churn."""
+    uri = "test-server.com"
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+    messages = [ack, _heartbeat_message(101)]
+    mock_websocket.recv.side_effect = _drain_then_hang(messages)
+
+    mock_websocket.close = AsyncMock()
+    height_tracker = HeightTracker()
+
+    with (
+        patch("layer_values_monitor.monitor.WS_STALL_TIMEOUT_SECONDS", 0.5),
+        patch("layer_values_monitor.monitor.get_current_height", AsyncMock(return_value=101)),
+    ):
+        listener_task = asyncio.create_task(
+            listen_to_websocket_events(uri, ["tm.event='NewBlock'"], event_queue, mock_logger, height_tracker)
+        )
+        await asyncio.sleep(2.0)  # several probe cycles with silence
+        mock_websocket.close.assert_not_awaited()
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass

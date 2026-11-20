@@ -657,3 +657,32 @@ async def test_batch_timeout_still_splits_after_long_same_height_stall(mock_logg
     assert new_reports_q.qsize() == 1
     flushed = await new_reports_q.get()
     assert len(flushed["eth_usd"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_flushes_last_batch_without_next_event(mock_logger):
+    """The last batch of a quiet period must flush on the timer, not on the next event.
+
+    Previously the drain loop only re-checked the timeout when a new message
+    arrived, so a lone report could sit uninspected until unrelated chain
+    traffic triggered a drain.
+    """
+    raw_data_q = asyncio.Queue()
+    new_reports_q = asyncio.Queue()
+
+    with patch("layer_values_monitor.monitor.BATCH_TIMEOUT_SECONDS", 0.2):
+        handler = asyncio.create_task(
+            raw_data_queue_handler(raw_data_q, new_reports_q, None, mock_logger, HeightTracker())
+        )
+        await raw_data_q.put(_report_event(100, "eth_usd", "0x1", "reporter1", "hash1"))
+
+        batch = await asyncio.wait_for(new_reports_q.get(), timeout=5)
+        assert len(batch["eth_usd"]) == 1
+        idle_flush_logs = [str(call) for call in mock_logger.debug.call_args_list if "idle timeout" in str(call)]
+        assert idle_flush_logs, "Flush must be attributed to the idle timeout"
+
+        handler.cancel()
+        try:
+            await handler
+        except asyncio.CancelledError:
+            pass

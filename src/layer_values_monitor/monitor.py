@@ -65,12 +65,13 @@ SUBSCRIPTION_RETRY_DELAY_SECONDS = 1.0
 # These values are independent of Layer block time.
 WS_PING_INTERVAL_SECONDS = 20.0
 WS_PING_TIMEOUT_SECONDS = 60.0
-# Height-advance is the real flush trigger. This timeout only splits a
-# same-height burst if wall-clock processing is delayed. It must be greater
-# than one reporting cycle at slow block times (~2 * 10.4s) so a 20s idle gap
-# does not flush the first reports of a new height. At <2s blocks, the next
-# reporting height still arrives in ~3.2s and flushes via height-advance, so
-# this timeout never delays those batches.
+# Height-advance is the primary flush trigger. This timeout has two jobs: it
+# splits a same-height burst if wall-clock processing is delayed, and it bounds
+# how long the last batch of a quiet period waits without a next event to
+# trigger the flush. It must be greater than one reporting cycle at slow block
+# times (~2 * 10.4s) so a 20s idle gap does not flush the first reports of a
+# new height. At <2s blocks, the next reporting height still arrives in ~3.2s
+# and flushes via height-advance, so this timeout never delays those batches.
 BATCH_TIMEOUT_SECONDS = 30.0
 MAX_BATCH_SIZE = 25
 
@@ -95,6 +96,15 @@ OPERATIONAL_SUMMARY_INTERVAL_SECONDS = _get_float_env(
     "LVM_OPERATIONAL_SUMMARY_INTERVAL_SECONDS",
     DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS,
 )
+
+# CometBFT can stop delivering events to an established subscription while the
+# socket stays open and pings keep answering (observed as an event-bus wedge on
+# lab chains). The tm.event='NewBlock' heartbeat makes silence meaningful: if
+# no message of any kind arrives for this many seconds AND the chain height
+# advanced past the last block we actually delivered, the stream is wedged and
+# the socket is force-reconnected (catch-up replays the gap). A chain that
+# genuinely halted stays reconnected instead of churning. 0 disables.
+WS_STALL_TIMEOUT_SECONDS = _get_float_env("WS_STALL_TIMEOUT_SECONDS", 60.0)
 
 
 def _format_report_group_label(report: NewReport) -> str:
@@ -428,7 +438,7 @@ def parse_reporters_response(data: dict[str, Any], logger: logging.Logger) -> Re
 
 
 async def listen_to_websocket_events(
-    uri: str, queries: list[str], q: asyncio.Queue, logger: logging, height_tracker: HeightTracker
+    uri: str, queries: list[str], q: asyncio.Queue, logger: logging.Logger, height_tracker: HeightTracker
 ) -> None:
     """Connect to a layer websocket and fetch events, adding them to queue for monitoring.
 
@@ -459,13 +469,70 @@ async def listen_to_websocket_events(
                 # Only report success after every subscription is confirmed.
                 retry_count = 0
                 console_logger.info("✅ Monitoring active")
-                while True:
-                    response = await websocket.recv()
-                    parsed_response = json.loads(response)
 
-                    logger.debug(f"Raw WebSocket response: {json.dumps(parsed_response)[:500]}")
+                # Stall watchdog state. Any inbound message (including the
+                # per-block NewBlock heartbeat) proves the stream is alive.
+                last_message_time = time.monotonic()
 
-                    await q.put(parsed_response)
+                async def _stall_watchdog() -> None:
+                    """Force a reconnect when the stream goes silent while the chain advances.
+
+                    Silence alone is ambiguous (a quiet period has no reports, a
+                    halted chain has no blocks), so the silence is only judged a
+                    wedge when an RPC height probe shows blocks past the last one
+                    we actually delivered on this socket.
+                    """
+                    probe_interval = max(1.0, WS_STALL_TIMEOUT_SECONDS / 4)
+                    while True:
+                        await asyncio.sleep(probe_interval)
+                        idle_for = time.monotonic() - last_message_time
+                        if idle_for < WS_STALL_TIMEOUT_SECONDS:
+                            continue
+                        current_height = await get_current_height(uri)
+                        if current_height is None:
+                            logger.warning(
+                                f"WebSocket silent for {idle_for:.0f}s but height probe failed; keeping connection"
+                            )
+                            continue
+                        if current_height > height_tracker.last_height:
+                            logger.warning(
+                                f"⚠️ WebSocket silent for {idle_for:.0f}s while chain advanced to "
+                                f"{current_height} (last delivered block {height_tracker.last_height}); "
+                                "treating subscription as wedged and forcing reconnect"
+                            )
+                            await websocket.close()
+                            return
+
+                watchdog = asyncio.create_task(_stall_watchdog()) if WS_STALL_TIMEOUT_SECONDS > 0 else None
+                try:
+                    while True:
+                        response = await websocket.recv()
+                        parsed_response = json.loads(response)
+                        last_message_time = time.monotonic()
+
+                        result = parsed_response.get("result") or {}
+                        if (result.get("data") or {}).get("type") == "tendermint/event/NewBlock":
+                            # NewBlock copy of a matched event, or heartbeat-only message:
+                            # track the height for catch-up/stall checks, keep it out of the
+                            # queue (raw_data_queue_handler discards these events anyway).
+                            block_heights = (result.get("events") or {}).get("block.height")
+                            if block_heights:
+                                try:
+                                    height_tracker.update(int(block_heights[0]))
+                                except (ValueError, TypeError):
+                                    pass
+                            continue
+
+                        logger.debug(f"Raw WebSocket response: {json.dumps(parsed_response)[:500]}")
+
+                        await q.put(parsed_response)
+                finally:
+                    if watchdog is not None:
+                        watchdog.cancel()
+                        try:
+                            await watchdog
+                        except asyncio.CancelledError:
+                            pass
 
         except WebSocketSubscriptionError as e:
             logger.critical(f"Fatal WebSocket subscription failure: {e}", exc_info=True)
@@ -521,7 +588,7 @@ async def raw_data_queue_handler(
     raw_data_q: asyncio.Queue,
     new_reports_q: asyncio.Queue,
     agg_reports_q: asyncio.Queue | None,
-    logger: logging,
+    logger: logging.Logger,
     height_tracker: HeightTracker,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
 ) -> None:
@@ -539,8 +606,28 @@ async def raw_data_queue_handler(
     last_batch_time = time.time()
     operational_summary = OperationalSummary()
     while iterations < max_iterations:
+        # Bound the wait when a batch is pending: the timeout expiring is itself
+        # the flush trigger, so the last report of a quiet period is inspected
+        # within BATCH_TIMEOUT_SECONDS instead of waiting for the next event.
+        batch_deadline = None
+        if reports_collections:
+            batch_deadline = max(0.0, last_batch_time + BATCH_TIMEOUT_SECONDS - time.time())
+        try:
+            raw_data: dict[str, Any] = await asyncio.wait_for(raw_data_q.get(), timeout=batch_deadline)
+        except TimeoutError:
+            if reports_collections:
+                await _flush_new_report_batch(
+                    reports_collections,
+                    current_height,
+                    new_reports_q,
+                    operational_summary,
+                    logger,
+                    reason="idle timeout",
+                )
+                seen_new_report_events.clear()
+                last_batch_time = time.time()
+            continue
         iterations += 1
-        raw_data: dict[str, Any] = await raw_data_q.get()
         raw_data_q.task_done()
 
         result: dict[str, Any] = raw_data.get("result")

@@ -235,7 +235,10 @@ async def start() -> None:
     # TODO: validate user options to check if they conflict
     try:
         # Build list of queries to subscribe to
-        queries = ["new_report.reporter_power > 0"]
+        # The NewBlock subscription is a per-block heartbeat: the stall watchdog
+        # in listen_to_websocket_events uses message silence plus chain height
+        # to detect a wedged event bus that never closes the socket.
+        queries = ["new_report.reporter_power > 0", "tm.event='NewBlock'"]
 
         # Add aggregate report query if Saga guard is enabled
         if args.enable_saga_guard:
