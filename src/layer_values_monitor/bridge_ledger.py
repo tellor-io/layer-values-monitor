@@ -42,7 +42,7 @@ RECHECK_STATUSES = (STATUS_UNVERIFIED, STATUS_MISMATCH_PENDING)
 
 # Defaults (overridable via env in the callers)
 DISPUTE_WINDOW_HOURS = 12
-DEFAULT_RECONCILE_INTERVAL = 600  # seconds between reconciler cycles
+DEFAULT_RECONCILE_INTERVAL = 120  # seconds between reconciler cycles
 DEFAULT_UNVERIFIABLE_RETRIES = 6  # recheck cycles before flagging a row unverifiable
 DEFAULT_REPORT_WINDOW_BLOCKS = 2000  # TRBBridgeV2 registry dataspec ReportBlockWindow (x/registry, v6.1.4 upgrade)
 DEFAULT_LAYER_BLOCK_SECONDS = 12.0  # block-time estimate to turn the window into seconds

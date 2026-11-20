@@ -76,15 +76,15 @@ re-verified by an in-process reconciler task. Tier 1 (stream) records and alerts
 disputes; the reconciler auto-disputes only mismatches a **second, different RPC provider**
 confirms against a finalized-anchored read.
 - `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
-- `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `600`)
+- `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
 - `BRIDGE_SWEEP_LOOKBACK_HOURS` - Deposit-event sweep window on cold start (default: `24`)
 - `BRIDGE_SECONDARY_RPC_URL` - Explicit second provider for mismatch double-confirmation
   (unset = rotate to a different entry in `EVM_RPC_URLS_<chain>`; ops should pick a different vendor)
 
 Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
-(`warning_threshold > 0` in `[queries.trbbridge.defaults]`, per LVM threshold semantics —
-`0.0` disables disputes). With the example config, bridge verification is alert-only and the
-ledger fills silently; enable the threshold to activate reconciler disputes.
+(`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —
+`0.0` disables disputes). The example config ships with this enabled for trbbridgev2;
+trbbridge and evmcall stay alert-only.
 
 ### Saga Guardian (Contract Pausing)
 Required only when starting with `--enable-saga-guard`.
@@ -128,8 +128,11 @@ Required only when starting with `--enable-saga-guard`.
 
 [queries.trbbridge]
     [queries.trbbridge.defaults]
-    # Uses global equality defaults. To enable bridge auto-dispute (reconciler):
-    # warning_threshold = 1.0
+    # Uses global equality defaults (alert on mismatch, no disputes)
+
+[queries.trbbridgev2]
+    [queries.trbbridgev2.defaults]
+    warning_threshold = 1.0  # Auto-dispute double-confirmed mismatches (reconciler)
 
 [queries.evmcall]
     [queries.evmcall.defaults]
