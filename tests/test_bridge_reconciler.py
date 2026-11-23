@@ -12,6 +12,7 @@ from layer_values_monitor.bridge_ledger import (
     BridgeLedger,
 )
 from layer_values_monitor.bridge_reconciler import (
+    _deposit_block_ts,
     bridge_reconcile_loop,
     check_deadlines,
     check_missing_reports,
@@ -62,6 +63,7 @@ def bridge_env(monkeypatch):
     monkeypatch.delenv("LAYER_REST_URL", raising=False)
     monkeypatch.setenv("BRIDGE_REPORT_WINDOW_BLOCKS", "1000")
     monkeypatch.setenv("BRIDGE_LAYER_BLOCK_SECONDS", "3")
+    monkeypatch.delenv("BRIDGE_MISSING_REPORT_MAX_AGE_HOURS", raising=False)
 
 
 def add_row(ledger, tx_hash="0xtx1", status=STATUS_UNVERIFIED, retries=0, report_ts=None, deposit_id=7):
@@ -342,6 +344,60 @@ class TestMissingReports:
             await check_missing_reports(ledger, MagicMock())
             await check_missing_reports(ledger, MagicMock())
         alert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_deposit_older_than_max_age_retires_without_alert(self, ledger):
+        """Fresh-start backfill: an ancient unreported deposit retires silently (default 24h cutoff)."""
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 400_000)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_missing_reports(ledger, MagicMock())
+        alert.assert_not_called()
+        assert ledger.pending_missing_reports(window_s=1) == []
+
+    @pytest.mark.asyncio
+    async def test_max_age_env_override_lower_than_deposit_age_still_alerts(self, ledger, monkeypatch):
+        monkeypatch.setenv("BRIDGE_MISSING_REPORT_MAX_AGE_HOURS", "200")
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 400_000)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_missing_reports(ledger, MagicMock())
+        alert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_null_block_ts_ages_on_first_seen(self, ledger):
+        """Pruned-block rows (block_ts NULL) also honor the age cutoff via first_seen_ts."""
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=None)
+        ledger.conn.execute("UPDATE eth_deposits SET first_seen_ts = ?", (time.time() - 400_000,))
+        ledger.conn.commit()
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_missing_reports(ledger, MagicMock())
+        alert.assert_not_called()
+        assert ledger.pending_missing_reports(window_s=1) == []
+
+
+class TestDepositBlockTs:
+    def test_real_block_timestamp_preferred(self):
+        w3 = MagicMock()
+        w3.eth.get_block.return_value = {"timestamp": 1234}
+        assert _deposit_block_ts(w3, 100, MagicMock()) == 1234.0
+        w3.eth.get_block.assert_called_once_with(100)
+
+    def test_pruned_block_estimated_from_head(self):
+        head_ts = time.time()
+
+        def get_block(ref):
+            if ref == "latest":
+                return {"timestamp": head_ts, "number": 200}
+            raise Exception("pruned history unavailable")
+
+        w3 = MagicMock()
+        w3.eth.get_block.side_effect = get_block
+        ts = _deposit_block_ts(w3, 100, MagicMock())
+        assert ts == pytest.approx(head_ts - 100 * 12)
+
+    def test_head_read_failure_returns_none(self):
+        w3 = MagicMock()
+        w3.eth.get_block.side_effect = Exception("rpc down")
+        assert _deposit_block_ts(w3, 100, MagicMock()) is None
 
 
 class TestLoopStartup:

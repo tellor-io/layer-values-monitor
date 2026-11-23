@@ -35,6 +35,7 @@ DEFAULT_RECONCILE_INTERVAL = 120  # seconds between reconciler cycles
 DEFAULT_CONFIRM_SECONDS = 60  # delay before the confirm read that confirms a zero/mismatch
 DEFAULT_REPORT_WINDOW_BLOCKS = 2000  # TRBBridgeV2 registry dataspec ReportBlockWindow (x/registry, v6.1.4 upgrade)
 DEFAULT_LAYER_BLOCK_SECONDS = 12.0  # block-time estimate to turn the window into seconds
+DEFAULT_MISSING_MAX_AGE_HOURS = 24.0  # older deposits retire silently — the MISSING alert is a timeliness check
 
 DEFAULT_LEDGER_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "bridge_ledger.db"

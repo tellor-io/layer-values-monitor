@@ -23,6 +23,7 @@ import time
 
 from layer_values_monitor.bridge_ledger import (
     DEFAULT_LAYER_BLOCK_SECONDS,
+    DEFAULT_MISSING_MAX_AGE_HOURS,
     DEFAULT_RECONCILE_INTERVAL,
     DEFAULT_REPORT_WINDOW_BLOCKS,
     DISPUTE_WINDOW_HOURS,
@@ -54,6 +55,10 @@ DESC_DISPUTED = "🌉 **BRIDGE REPORT DISPUTED**"
 DESC_LATE_VERDICT = "🌉 **BRIDGE LATE VERDICT: BAD (dispute window missed)**"
 DESC_ESCALATION = "🚨 **RPCs DOWN — BRIDGE REPORT ABOUT TO BE UNDISPUTABLE**"
 DESC_MISSING = "🌉 **BRIDGE REPORT MISSING**"
+
+# Mainnet and Sepolia both produce ~12s PoS blocks — enough to age a deposit when its
+# deposit block itself was pruned from the provider.
+AVG_EVM_BLOCK_SECONDS = 12
 
 # Bridge contract env var -> query type string (used to recompute queryIds for orphan alerts)
 BRIDGE_QUERY_TYPES = {"TRBBRIDGE_CONTRACT_ADDRESS": "TRBBridge", "TRBBRIDGEV2_CONTRACT_ADDRESS": "TRBBridgeV2"}
@@ -209,6 +214,28 @@ def _probe_deposit_struct(w3: Web3, contract: str, deposit_id: int) -> tuple:
     return bridge.functions.deposits(deposit_id).call()
 
 
+def _deposit_block_ts(w3: Web3, block_number: int, logger: logging.Logger) -> float | None:
+    """Deposit-block timestamp, estimated from the latest header when the read fails.
+
+    A pruned provider raises (or omits the timestamp) for old blocks; the deposit's own
+    block number still dates it well enough for the coarse missing-report aging.
+    """
+    try:
+        raw_ts = w3.eth.get_block(block_number).get("timestamp")
+        if raw_ts is not None:
+            return float(raw_ts)
+    except Exception as e:
+        logger.debug(f"bridge deposit block {block_number} timestamp read failed ({e}); estimating from head")
+    try:  # ~12s PoS slots: fine for age classification, not for exact windows
+        head = w3.eth.get_block("latest")
+        head_ts, head_num = head.get("timestamp"), head.get("number")
+        if head_ts is None or head_num is None:
+            return None
+        return float(head_ts) - max(0, int(head_num) - block_number) * AVG_EVM_BLOCK_SECONDS
+    except Exception:
+        return None
+
+
 def _record_deposit_state(ledger: BridgeLedger, w3: Web3, contract: str, deposit_id: int, details: tuple) -> bool:
     """Journal one deposits() struct into eth_deposits. True when newly recorded."""
     sender, layer_recipient, amount, tip, block_number = details
@@ -219,11 +246,8 @@ def _record_deposit_state(ledger: BridgeLedger, w3: Web3, contract: str, deposit
         "tip": int(tip),
     }
     block_number = int(block_number)
-    try:  # deposit block timestamp anchors the missing-report window
-        raw_ts = w3.eth.get_block(block_number).get("timestamp")
-        block_ts: float | None = float(raw_ts) if raw_ts is not None else None
-    except (TypeError, ValueError):
-        block_ts = None
+    # deposit block timestamp anchors the missing-report window
+    block_ts = _deposit_block_ts(w3, block_number, logging.getLogger(__name__))
     # eth_tx_hash is unknown from a state read; the journal keeps "" for it
     return ledger.record_eth_deposit(contract, deposit_id, "", block_number, reported, block_ts)
 
@@ -338,14 +362,29 @@ async def check_missing_reports(ledger: BridgeLedger, logger: logging.Logger, no
 
     No alert before the on-chain reporting window (BRIDGE_REPORT_WINDOW_BLOCKS ×
     BRIDGE_LAYER_BLOCK_SECONDS) has closed — a report can still legally land — and the
-    oracle REST is consulted first to catch reports the ledger never saw.
+    oracle REST is consulted first to catch reports the ledger never saw. Deposits older
+    than BRIDGE_MISSING_REPORT_MAX_AGE_HOURS retire WITHOUT an alert: the check is about
+    timeliness, and a fresh ledger's first backfill would otherwise alert on every old
+    deposit whose report simply predates the ledger (e.g. V1 TRBBridge reports from
+    before the TRBBridgeV2 transition).
     """
     now = time.time() if now is None else now
     window_blocks = float(os.getenv("BRIDGE_REPORT_WINDOW_BLOCKS", str(DEFAULT_REPORT_WINDOW_BLOCKS)))
     window_s = window_blocks * float(os.getenv("BRIDGE_LAYER_BLOCK_SECONDS", str(DEFAULT_LAYER_BLOCK_SECONDS)))
+    max_age_h = float(os.getenv("BRIDGE_MISSING_REPORT_MAX_AGE_HOURS", str(DEFAULT_MISSING_MAX_AGE_HOURS)))
+    max_age_s = max_age_h * 3600
     rest_url = os.getenv("LAYER_REST_URL") or ""
 
     for row in ledger.pending_missing_reports(now=now, window_s=window_s):
+        anchor = row["block_ts"] if row["block_ts"] is not None else row["first_seen_ts"]
+        if anchor + max_age_s <= now:
+            ledger.resolve_missing_report(row["contract_address"], row["deposit_id"])
+            age_d = (now - anchor) / 86_400
+            logger.info(
+                f"bridge deposit {row['deposit_id']}: {age_d:.1f}d old with no Layer report — "
+                f"past the {max_age_h:.0f}h missing-report age, no alert"
+            )
+            continue
         qtype = _query_type_for_contract(row["contract_address"])
         qid = deposit_query_id(row["deposit_id"], qtype)
         detail = f"no Layer report within {int(window_blocks)}-block reporting window"

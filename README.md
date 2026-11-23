@@ -113,6 +113,10 @@ signature) or a mismatch waits `BRIDGE_CONFIRM_SECONDS` and re-reads — the con
 - `BRIDGE_REPORT_WINDOW_BLOCKS` × `BRIDGE_LAYER_BLOCK_SECONDS` - reporting window for the
   missing-report alert (defaults `2000` × `12`; Tellor Layer mainnet needs `BRIDGE_LAYER_BLOCK_SECONDS=3`)
 - `LAYER_REST_URL` - Layer LCD/REST base for the oracle double-check before a missing-report alert
+- `BRIDGE_MISSING_REPORT_MAX_AGE_HOURS` - age cutoff for the missing-report alert; older
+  deposits retire silently so a fresh ledger's history backfill doesn't re-alert deposits
+  whose reports simply predate the ledger (e.g. old TRBBridge reports from before the
+  transition to TRBBridgeV2) (default: `24`)
 
 Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
 (`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —
