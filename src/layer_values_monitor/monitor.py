@@ -51,6 +51,7 @@ from layer_values_monitor.utils import add_to_table, decode_hex_value
 
 import aiohttp
 import websockets
+from web3 import Web3
 
 DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS = 300.0
 SUBSCRIPTION_MAX_ATTEMPTS = 3
@@ -1847,12 +1848,20 @@ async def inspect_trbbridge_reports(
     logger: the logger object
     contract_address_env: env var name for the bridge contract address
     """
-    contract_address = os.getenv(contract_address_env)
+    raw_contract = os.getenv(contract_address_env)
     chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
     rpc_url = None  # Let trb_bridge.py handle RPC URL lookup via unified manager
 
-    if not contract_address:
+    if not raw_contract:
         logger.error(f"{contract_address_env} environment variable is not set")
+        return None
+
+    # Store the checksummed form: the reconciler's ledger joins (missing-report, rows-without-log)
+    # compare contract_address by exact string against checksummed env values.
+    try:
+        contract_address = Web3.to_checksum_address(raw_contract)
+    except ValueError:
+        logger.error(f"{contract_address_env} is not a valid ETH address: {raw_contract}")
         return None
 
     logger.info(f"TRBBridge contract address: {contract_address}")

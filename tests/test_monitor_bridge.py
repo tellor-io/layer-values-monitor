@@ -158,3 +158,12 @@ async def test_inspect_defer_dispute_skips_queue_put():
     msg = disputes_q.get_nowait()
     assert isinstance(msg, Msg)
     assert msg.category == "warning"
+
+
+@pytest.mark.asyncio
+async def test_lowercase_env_address_recorded_checksummed(bridge_env, monkeypatch):
+    """Ledger rows store the checksummed address: the reconciler's SQL joins compare exact
+    strings against the checksummed env values the sweep writes into eth_deposits."""
+    monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", CONTRACT.lower())
+    await run_inspection(bridge_env, (TRUSTED, "ok"))
+    assert bridge_env.get("0xtx1")["contract_address"] == CONTRACT
