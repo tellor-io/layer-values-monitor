@@ -1,34 +1,37 @@
-"""Tests for the Tier 2 bridge reconciler (anchored recheck disputes, sweeps, deadlines)."""
+"""Tests for the Tier 2 bridge reconciler (retry-forever, verdict disputes, counter sweep, deadlines)."""
 
 import asyncio
-import os
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from layer_values_monitor.bridge_ledger import (
-    STATUS_DISPUTED,
-    STATUS_EXPIRED_UNRESOLVED,
-    STATUS_MISMATCH_PENDING,
-    STATUS_UNVERIFIABLE,
+    STATUS_BAD,
+    STATUS_GOOD,
     STATUS_UNVERIFIED,
-    STATUS_VERIFIED_OK,
     BridgeLedger,
 )
 from layer_values_monitor.bridge_reconciler import (
+    bridge_reconcile_loop,
     check_deadlines,
-    check_reports_without_logs,
+    check_missing_reports,
     run_reconcile_cycle,
-    sweep_deposit_logs,
+    sweep_deposits,
 )
 from layer_values_monitor.custom_types import Metrics, Msg
+from layer_values_monitor.trb_bridge import ZERO_ADDRESS
 
 import pytest
 
 CONTRACT = "0x62733e63499a25E35844c91275d4c3bdb159D29d"
 REPORTED = {"eth_address": "0xaaa", "layer_address": "tellor1x", "amount": 100, "tip": 1}
-TRUSTED_TUPLE = ("0xaaa", "tellor1x", 100, 1)
-WRONG_TUPLE = ("0xbbb", "tellor1x", 55, 1)  # primary read disagrees with the report
+TRUSTED = {"eth_address": "0xaaa", "layer_address": "tellor1x", "amount": 100, "tip": 1}
+WRONG = {"eth_address": "0xbbb", "layer_address": "tellor1x", "amount": 55, "tip": 1}
+ZERO_STRUCT = (ZERO_ADDRESS, "", 0, 0, 0)
+
+
+def deposit_struct(amount=100, block=100):
+    return ("0x7660794ef8f978ea0922dc29b3b534d93e1fc94a", "tellor1x", amount, 1, block)
 
 
 def fake_metrics(warning=1.0):
@@ -55,12 +58,13 @@ def bridge_env(monkeypatch):
     monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", CONTRACT)
     monkeypatch.delenv("TRBBRIDGEV2_CONTRACT_ADDRESS", raising=False)
     monkeypatch.delenv("TRBBRIDGE_CHAIN_ID", raising=False)
-    # Keep built-in defaults (bridge_networks) out of scope: this file tests env-driven config,
-    # and CHAIN_ID may leak in from a developer's .env via conftest's load_dotenv.
     monkeypatch.delenv("CHAIN_ID", raising=False)
+    monkeypatch.delenv("LAYER_REST_URL", raising=False)
+    monkeypatch.setenv("BRIDGE_REPORT_WINDOW_BLOCKS", "1000")
+    monkeypatch.setenv("BRIDGE_LAYER_BLOCK_SECONDS", "3")
 
 
-def add_row(ledger, tx_hash="0xtx1", status=STATUS_MISMATCH_PENDING, retries=0, report_ts=None, deposit_id=7):
+def add_row(ledger, tx_hash="0xtx1", status=STATUS_UNVERIFIED, retries=0, report_ts=None, deposit_id=7):
     ledger.upsert_report(
         tx_hash=tx_hash,
         query_id="0xq",
@@ -84,158 +88,104 @@ def make_config_watcher(warning=1.0):
     return SimpleNamespace(get_metrics_for_query=lambda query_id, query_type: metrics)
 
 
-def patched(fetch_return=None, fetch_side_effect=None):
-    """Context pieces common to every recheck test (no secondary provider anymore)."""
-    kwargs = {"return_value": fetch_return} if fetch_side_effect is None else {"side_effect": fetch_side_effect}
+def patched(verdict_result):
+    """Run-a-cycle patches: scripted verdict, no sweep, no orphan check."""
     return (
         patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()),
-        patch("layer_values_monitor.bridge_reconciler.fetch_deposit", new=AsyncMock(**kwargs)),
-        patch("layer_values_monitor.bridge_reconciler.sweep_deposit_logs", new=AsyncMock()),
+        patch("layer_values_monitor.bridge_reconciler.get_bridge_verdict", new=AsyncMock(return_value=verdict_result)),
+        patch("layer_values_monitor.bridge_reconciler.sweep_deposits", new=AsyncMock()),
+        patch("layer_values_monitor.bridge_reconciler.check_missing_reports", new=AsyncMock()),
     )
 
 
-async def run_cycle(ledger, q, warning=1.0):
-    patches = patched()
-    with patches[0], patches[1], patches[2]:
-        await run_reconcile_cycle(ledger, q, make_config_watcher(warning=warning), MagicMock(), interval=0)
+async def run_cycle_with_verdict(ledger, q, verdict_result, warning=1.0):
+    """Run one cycle with a scripted verdict. Returns the bridge_ledger_alert mock used."""
+    ps = patched(verdict_result)
+    with ps[0], ps[1], ps[2], ps[3], patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+        await run_reconcile_cycle(
+            ledger, q, make_config_watcher(warning=warning), MagicMock(), interval=0, chain_id=11155111
+        )
+    return alert
 
 
 class TestRecheckLogic:
     @pytest.mark.asyncio
-    async def test_recheck_match_resolves_to_verified_ok(self, ledger):
-        add_row(ledger, status=STATUS_UNVERIFIED)
+    async def test_verdict_ok_marks_good_and_alerts_resolved(self, ledger):
+        add_row(ledger, status=STATUS_UNVERIFIED, retries=3)
         q = asyncio.Queue()
-        patches = patched((TRUSTED_TUPLE, "ok"))
-        with patches[0], patches[1], patches[2]:
-            await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
-        assert ledger.get("0xtx1")["status"] == STATUS_VERIFIED_OK
+        alert = await run_cycle_with_verdict(ledger, q, ("ok", TRUSTED))
+        assert ledger.get("0xtx1")["status"] == STATUS_GOOD
+        alert.assert_called_once()
+        assert "RESOLVED" in alert.call_args.args[0]
         assert q.empty()
 
     @pytest.mark.asyncio
-    async def test_mismatch_cleared_on_recheck_alerts_resolved(self, ledger):
-        """A standing mismatch that reads back clean on the anchored recheck: verified_ok + RESOLVED alert."""
-        add_row(ledger)
+    async def test_verdict_bad_inside_window_disputes(self, ledger):
+        add_row(ledger, report_ts=time.time() - 3600)  # well inside the 12h window
         q = asyncio.Queue()
-        patches = patched((TRUSTED_TUPLE, "ok"))
-        with (
-            patches[0],
-            patches[1],
-            patches[2],
-            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
-        ):
-            await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
-        assert ledger.get("0xtx1")["status"] == STATUS_VERIFIED_OK
-        assert alert.call_count == 1
-        assert "mismatch cleared" in alert.call_args.args[1]["Status"]
-        assert q.empty()
-
-    @pytest.mark.asyncio
-    async def test_first_mismatch_on_unverified_marks_pending(self, ledger):
-        """Mismatch on an unverified row: mark it; the NEXT cycle's anchored re-read disputes."""
-        add_row(ledger, status=STATUS_UNVERIFIED)
-        q = asyncio.Queue()
-        patches = patched((WRONG_TUPLE, "ok"))
-        with patches[0], patches[1], patches[2]:
-            await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
-        assert ledger.get("0xtx1")["status"] == STATUS_MISMATCH_PENDING
-        assert q.empty()
-
-    @pytest.mark.asyncio
-    async def test_anchored_recheck_mismatch_queues_dispute(self, ledger):
-        """Single trusted primary read, finalized-anchored: a still-mismatching recheck disputes."""
-        add_row(ledger)
-        q = asyncio.Queue()
-        patches = patched((WRONG_TUPLE, "ok"))
-        with patches[0], patches[1], patches[2]:
-            await run_reconcile_cycle(ledger, q, make_config_watcher(warning=1.0), MagicMock(), interval=0)
-        assert ledger.get("0xtx1")["status"] == STATUS_DISPUTED
+        alert = await run_cycle_with_verdict(ledger, q, ("bad", WRONG))
+        assert ledger.get("0xtx1")["status"] == STATUS_BAD
         msg = q.get_nowait()
         assert isinstance(msg, Msg)
         assert msg.category == "warning"
         assert msg.meta_id == "42"
         assert msg.query_id == "0xq"
+        assert "DISPUTED" in alert.call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_mismatch_stays_pending_when_disputes_disabled(self, ledger):
-        """Equality dispute thresholds of 0.0 disable disputes — rollout (alert-only) mode."""
-        add_row(ledger)
+    async def test_verdict_bad_past_window_alerts_late_without_dispute(self, ledger):
+        add_row(ledger, report_ts=time.time() - 13 * 3600)  # dispute window already closed
         q = asyncio.Queue()
-        await run_cycle(ledger, q, warning=0.0)
-        assert ledger.get("0xtx1")["status"] == STATUS_MISMATCH_PENDING
+        alert = await run_cycle_with_verdict(ledger, q, ("bad", WRONG))
+        assert ledger.get("0xtx1")["status"] == STATUS_BAD
         assert q.empty()
+        assert "LATE VERDICT" in alert.call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_mismatch_pending_zero_struct_disputes(self, ledger):
-        """A mismatch whose recheck reads zero struct (fake-deposit signature): dispute, not defer."""
-        add_row(ledger)
+    async def test_unavailable_stays_unverified_and_retries_forever(self, ledger):
+        """No retry cap: a row on its 100th failed read is still retried, status unchanged."""
+        add_row(ledger, status=STATUS_UNVERIFIED, retries=99)
         q = asyncio.Queue()
-        patches = patched((None, "zero_struct"))
-        with patches[0], patches[1], patches[2]:
-            await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
+        alert = await run_cycle_with_verdict(ledger, q, ("unavailable", None))
         row = ledger.get("0xtx1")
-        assert row["status"] == STATUS_DISPUTED
-        assert "zero struct" in row["last_error"]
-        assert q.get_nowait().category == "warning"
+        assert row["status"] == STATUS_UNVERIFIED
+        assert row["retries"] == 100
+        assert q.empty()
+        alert.assert_not_called()  # the row was already alerted when recorded
+        # still comes back next cycle
+        due = ledger.due_for_recheck(now=time.time() + 3600, interval=600)
+        assert [r["tx_hash"] for r in due] == ["0xtx1"]
 
     @pytest.mark.asyncio
-    async def test_mismatch_pending_defers_on_rpc_error(self, ledger):
-        """RPC loss on the recheck (rotation already tried inside fetch_deposit): defer, never age out."""
-        add_row(ledger, report_ts=time.time() - 3 * 3600)
+    async def test_bad_with_disputes_disabled_still_marks_bad(self, ledger):
+        """Threshold 0.0 (alert-only rollout): the verdict is recorded, nothing is queued."""
+        add_row(ledger, report_ts=time.time() - 3600)
         q = asyncio.Queue()
-        patches = patched((None, "rpc_error"))
-        with patches[0], patches[1], patches[2]:
-            await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
-        row = ledger.get("0xtx1")
-        assert row["status"] == STATUS_MISMATCH_PENDING
-        assert row["retries"] == 1  # keeps trying; never goes unverifiable while a mismatch stands
+        await run_cycle_with_verdict(ledger, q, ("bad", WRONG), warning=0.0)
+        assert ledger.get("0xtx1")["status"] == STATUS_BAD
         assert q.empty()
 
     @pytest.mark.asyncio
-    async def test_unverified_zero_struct_not_disputed(self, ledger):
-        """A never-verified row reading zero struct is flagged unverifiable, not disputed."""
-        add_row(ledger, status=STATUS_UNVERIFIED, retries=5)
+    async def test_good_and_bad_rows_are_not_rechecked(self, ledger):
+        add_row(ledger, tx_hash="0xg", status=STATUS_GOOD)
+        add_row(ledger, tx_hash="0xb", status=STATUS_BAD)
         q = asyncio.Queue()
-        patches = patched((None, "zero_struct"))
-        with (
-            patches[0],
-            patches[1],
-            patches[2],
-            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert"),
-        ):
-            await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
-        assert ledger.get("0xtx1")["status"] == STATUS_UNVERIFIABLE
-        assert q.empty()
-
-    @pytest.mark.asyncio
-    async def test_unverifiable_after_max_retries(self, ledger):
-        os.environ["BRIDGE_UNVERIFIABLE_RETRIES"] = "6"
-        try:
-            add_row(ledger, status=STATUS_UNVERIFIED, retries=5)
-            q = asyncio.Queue()
-            patches = patched((None, "rpc_error"))
-            with (
-                patches[0],
-                patches[1],
-                patches[2],
-                patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
-            ):
-                await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
-            assert ledger.get("0xtx1")["status"] == STATUS_UNVERIFIABLE
-            alert.assert_called_once()
-        finally:
-            del os.environ["BRIDGE_UNVERIFIABLE_RETRIES"]
+        await run_cycle_with_verdict(ledger, q, ("ok", TRUSTED))
+        assert ledger.get("0xg")["status"] == STATUS_GOOD
+        assert ledger.get("0xb")["status"] == STATUS_BAD
 
 
 class TestDeadlines:
     @pytest.mark.asyncio
-    async def test_escalation_alerts_once_near_deadline(self, ledger):
-        add_row(ledger, report_ts=time.time() - 10.5 * 3600)
+    async def test_escalation_alerts_once_with_undisputable_wording(self, ledger):
+        add_row(ledger, status=STATUS_UNVERIFIED, report_ts=time.time() - 10.5 * 3600)
         logger = MagicMock()
         with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
             await check_deadlines(ledger, logger)
             await check_deadlines(ledger, logger)
         assert alert.call_count == 1
-        assert "dispute window" in alert.call_args.args[1]["Detail"]
+        assert "UNDISPUTABLE" in alert.call_args.args[0]
+        assert "left" in alert.call_args.args[1]["Detail"]
         assert ledger.get("0xtx1")["escalated"] == 1
 
     @pytest.mark.asyncio
@@ -256,84 +206,150 @@ class TestDeadlines:
         led2.close()
 
     @pytest.mark.asyncio
-    async def test_expired_after_full_window(self, ledger):
-        add_row(ledger, report_ts=time.time() - 13 * 3600)
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert"):
+    async def test_terminal_rows_never_escalate(self, ledger):
+        old = time.time() - 10.5 * 3600
+        add_row(ledger, tx_hash="0xg", status=STATUS_GOOD, report_ts=old)
+        add_row(ledger, tx_hash="0xb", status=STATUS_BAD, report_ts=old)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
             await check_deadlines(ledger, MagicMock())
-        assert ledger.get("0xtx1")["status"] == STATUS_EXPIRED_UNRESOLVED
+        alert.assert_not_called()
 
 
-class TestLogSweep:
-    def make_w3(self, latest=150, latest_ts=None):
-        latest_ts = latest_ts or int(time.time())
+class TestCounterSweep:
+    def make_w3(self, counter, structs, probe_error_at=None):
+        """Fake Web3: depositId() -> counter; deposits(i) -> struct or zero struct."""
+        probed = []
+        bridge = MagicMock()
+        bridge.functions.depositId.return_value.call.return_value = counter
+
+        def deposits(dep_id):
+            probed.append(dep_id)
+            if probe_error_at is not None and dep_id == probe_error_at:
+                det = SimpleNamespace(call=MagicMock(side_effect=Exception("rpc down")))
+            else:
+                det = SimpleNamespace(call=lambda: structs.get(dep_id, ZERO_STRUCT))
+            return det
+
+        bridge.functions.deposits.side_effect = deposits
         w3 = MagicMock()
-        w3.eth.block_number = latest
-
-        def get_block(arg):
-            if arg == "latest":
-                return {"timestamp": latest_ts}
-            # block-number lookup for the first-run timestamp search: 1 block/second back from latest
-            return {"timestamp": latest_ts - (latest - int(arg))}
-
-        w3.eth.get_block.side_effect = get_block
-        return w3
+        w3.eth.contract.return_value = bridge
+        w3.eth.get_block.return_value = {"timestamp": 1_700_000_000}
+        return w3, probed
 
     @pytest.mark.asyncio
-    async def test_sweep_follows_latest_block(self, ledger):
-        """No finalized wait: the sweep target is simply w3.eth.block_number."""
-        w3 = self.make_w3(latest=321)
-        w3.eth.get_logs.return_value = []
-        await sweep_deposit_logs(ledger, MagicMock(), 111555111, w3=w3)
-        cursor = ledger.get_meta(f"sweep_cursor_{CONTRACT.lower()}")
-        assert cursor == "321" or int(cursor) == 321
+    async def test_first_run_backfill_stops_at_init_floor(self, ledger):
+        """Mainnet V2 was seeded from V1: ids below the init read zero — that's the floor."""
+        w3, probed = self.make_w3(counter=3, structs={1: deposit_struct(10), 2: deposit_struct(20)})
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+
+        assert probed == [2, 1, 0]  # downward probe stops at the first zero struct
+        assert ledger.has_eth_deposit(CONTRACT, 1) is True
+        assert ledger.has_eth_deposit(CONTRACT, 2) is True
+        assert ledger.has_eth_deposit(CONTRACT, 0) is False  # below the seeded floor
+        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") == "1"
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "3"
+
+        row = ledger.conn.execute("SELECT * FROM eth_deposits WHERE deposit_id = 1").fetchone()
+        assert row["eth_tx_hash"] == ""  # unknown from a state read
+        assert row["block_ts"] == 1_700_000_000  # anchored on the deposit block
+        assert row["log_block"] == 100
 
     @pytest.mark.asyncio
-    async def test_sweep_records_deposits_and_advances_cursor(self, ledger):
-        w3 = self.make_w3()
-        log_entry = {"transactionHash": b"\xab" * 32, "blockNumber": 120}
-        w3.eth.get_logs.return_value = [log_entry]
-        decoded = {"deposit_id": 7, "sender": "0xaaa", "recipient": "tellor1x", "amount": 100, "tip": 1}
-        with patch("layer_values_monitor.bridge_reconciler.decode_deposit_log", side_effect=[decoded]):
-            await sweep_deposit_logs(ledger, MagicMock(), 111555111, w3=w3)
+    async def test_first_run_backfill_aborts_on_rpc_error(self, ledger):
+        """A transient RPC error must not truncate history or record a floor."""
+        w3, _ = self.make_w3(counter=2, structs={1: deposit_struct()}, probe_error_at=1)
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") is None
+        assert ledger.has_eth_deposit(CONTRACT, 1) is False
 
-        assert ledger.has_eth_deposit(CONTRACT, 7) is True
-        cursor = ledger.get_meta(f"sweep_cursor_{CONTRACT.lower()}")
-        assert cursor is not None and int(cursor) >= 120
-
-        # Second sweep with no new range must not re-record or re-alert
-        w3.eth.get_logs.return_value = []
-        with patch("layer_values_monitor.bridge_reconciler.decode_deposit_log") as dec:
-            await sweep_deposit_logs(ledger, MagicMock(), 111555111, w3=w3)
-        dec.assert_not_called() if int(cursor) >= 150 else None  # caught up: no decode at all
-        assert ledger.record_eth_deposit(CONTRACT, 7, "0x", 121) is False
-
-
-class TestReportsWithoutLogs:
     @pytest.mark.asyncio
-    async def test_report_without_log_flagged_unverifiable(self, ledger):
-        add_row(ledger, status=STATUS_UNVERIFIED, deposit_id=77)
-        ledger.set_meta(f"sweep_start_ts_{CONTRACT.lower()}", "0")  # sweep covers everything
+    async def test_counter_advance_records_only_new_ids(self, ledger):
+        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
+        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
+        w3, probed = self.make_w3(counter=4, structs={0: deposit_struct(), 1: deposit_struct(),
+                                                       2: deposit_struct(30), 3: deposit_struct(40)})
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert probed == [2, 3]
+        assert ledger.has_eth_deposit(CONTRACT, 2) is True
+        assert ledger.has_eth_deposit(CONTRACT, 3) is True
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "4"
+
+        # no counter movement: probe nothing, change nothing
+        probed.clear()
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert probed == []
+
+    @pytest.mark.asyncio
+    async def test_counter_decrease_is_silent_noop(self, ledger):
+        """Reorg rewinds depositId(): cursor stays put, no alerts, no re-probing."""
+        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
+        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "5")
+        w3, probed = self.make_w3(counter=3, structs={})
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert probed == []
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
+
+
+class TestMissingReports:
+    @pytest.mark.asyncio
+    async def test_window_not_closed_stays_silent(self, ledger):
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 100)
         with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_reports_without_logs(ledger, MagicMock(), now=time.time() + 7200)
-        assert ledger.get("0xtx1")["status"] == STATUS_UNVERIFIABLE
-        assert "never emitted" in alert.call_args.args[1]["Detail"]
-
-    @pytest.mark.asyncio
-    async def test_fresh_report_without_log_waits_out_grace(self, ledger):
-        """A report minutes after its deposit outruns the sweep (which trails the tip by a
-        cycle): a missing Deposit log must NOT declare it unverifiable yet."""
-        add_row(ledger, status=STATUS_MISMATCH_PENDING, deposit_id=170)
-        ledger.set_meta(f"sweep_start_ts_{CONTRACT.lower()}", "0")
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_reports_without_logs(ledger, MagicMock())  # report_ts == now
-        assert ledger.get("0xtx1")["status"] == STATUS_MISMATCH_PENDING
+            await check_missing_reports(ledger, MagicMock())
         alert.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_report_with_log_left_alone(self, ledger):
-        add_row(ledger, status=STATUS_UNVERIFIED, deposit_id=7)
-        ledger.record_eth_deposit(CONTRACT, 7, "0xeth", 100, REPORTED)
-        ledger.set_meta(f"sweep_start_ts_{CONTRACT.lower()}", "0")
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert"):
-            await check_reports_without_logs(ledger, MagicMock())
-        assert ledger.get("0xtx1")["status"] == STATUS_UNVERIFIED
+    async def test_window_closed_oracle_has_report_resolves_silently(self, ledger, monkeypatch):
+        monkeypatch.setenv("LAYER_REST_URL", "http://rest.test")
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 4000)
+        with (
+            patch("layer_values_monitor.bridge_reconciler._layer_has_report", new=AsyncMock(return_value=True)),
+            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
+        ):
+            await check_missing_reports(ledger, MagicMock())
+        alert.assert_not_called()
+        assert ledger.pending_missing_reports(window_s=1) == []
+
+    @pytest.mark.asyncio
+    async def test_window_closed_rest_unreachable_alerts_with_caveat(self, ledger, monkeypatch):
+        monkeypatch.setenv("LAYER_REST_URL", "http://rest.test")
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 4000)
+        with (
+            patch("layer_values_monitor.bridge_reconciler._layer_has_report",
+                  new=AsyncMock(side_effect=Exception("connection refused"))),
+            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
+        ):
+            await check_missing_reports(ledger, MagicMock())
+        alert.assert_called_once()
+        assert "MISSING" in alert.call_args.args[0]
+        assert "oracle REST unconfirmed" in alert.call_args.args[1]["Detail"]
+
+    @pytest.mark.asyncio
+    async def test_alert_fires_once(self, ledger):
+        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 4000)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_missing_reports(ledger, MagicMock())
+            await check_missing_reports(ledger, MagicMock())
+        alert.assert_called_once()
+
+
+class TestLoopStartup:
+    @pytest.mark.asyncio
+    async def test_first_cycle_runs_before_first_sleep(self, ledger):
+        """Check-on-start rule: the loop cycles immediately, then sleeps between cycles."""
+        calls = []
+
+        async def fake_cycle(*args, **kwargs):
+            calls.append("cycle")
+
+        async def fake_sleep(seconds):
+            calls.append("sleep")
+            raise asyncio.CancelledError
+
+        with (
+            patch("layer_values_monitor.bridge_reconciler.run_reconcile_cycle", new=fake_cycle),
+            patch("layer_values_monitor.bridge_reconciler.asyncio.sleep", new=fake_sleep),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await bridge_reconcile_loop(asyncio.Queue(), None, MagicMock(), ledger=ledger, interval=60)
+        assert calls == ["cycle", "sleep"]

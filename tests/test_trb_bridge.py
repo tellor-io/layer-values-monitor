@@ -211,8 +211,13 @@ async def test_inspect_trbbridge_reports_defaults_to_chain_id_one(monkeypatch):
                 return_value=MagicMock(),
             ) as mock_builder:
                 with patch(
-                    "layer_values_monitor.monitor.fetch_deposit",
-                    new=AsyncMock(return_value=(("0xsender", "layer1recipient", 1, 0), "ok")),
+                    "layer_values_monitor.monitor.get_bridge_verdict",
+                    new=AsyncMock(
+                        return_value=(
+                            "ok",
+                            {"eth_address": "0xsender", "layer_address": "layer1recipient", "amount": 1, "tip": 0},
+                        )
+                    ),
                 ) as mock_fetch:
                     with patch("layer_values_monitor.monitor.inspect", new=AsyncMock()):
                         await inspect_trbbridge_reports([report], asyncio.Queue(), report.query_id, metrics, logger)

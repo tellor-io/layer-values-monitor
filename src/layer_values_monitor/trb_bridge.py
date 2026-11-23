@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -36,48 +37,37 @@ DEPOSITS_ABI = [
     }
 ]
 
-# Contract ABI for the Deposit event emitted by depositToLayer().
-# Signature (all args non-indexed): Deposit(uint256,address,string,uint256,uint256)
-DEPOSIT_EVENT_ABI = [
+# Contract ABI for the gapless deposit counter: `uint256 public depositId`.
+# Reverted deposits revert the increment too, and deposits(id) structs are written once
+# and never deleted, so every deposit ever made is permanently enumerable from state.
+DEPOSIT_ID_ABI = [
     {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": False, "internalType": "uint256", "name": "_depositId", "type": "uint256"},
-            {"indexed": False, "internalType": "address", "name": "_sender", "type": "address"},
-            {"indexed": False, "internalType": "string", "name": "_recipient", "type": "string"},
-            {"indexed": False, "internalType": "uint256", "name": "_amount", "type": "uint256"},
-            {"indexed": False, "internalType": "uint256", "name": "_tip", "type": "uint256"},
-        ],
-        "name": "Deposit",
-        "type": "event",
+        "inputs": [],
+        "name": "depositId",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
     }
 ]
 
 
-def deposit_event_topic() -> str:
-    """topic0 for the Deposit event (computed from the ABI so it can never drift)."""
-    return Web3().keccak(text="Deposit(uint256,address,string,uint256,uint256)").to_0x_hex()
+def read_deposit_counter(w3: Web3, contract_address: str) -> int:
+    """Read the contract's `depositId()` counter (next deposit ID == current count).
 
-
-def decode_deposit_log(log: Any) -> dict | None:
-    """Decode a get_logs entry into {deposit_id, sender, recipient, amount, tip}.
-
-    Logs that don't match the Deposit event ABI are skipped (None).
+    Raises on RPC failure — the caller decides whether a missing counter is retryable.
     """
-    w3 = Web3()
-    event_abi = w3.eth.contract(abi=DEPOSIT_EVENT_ABI).events.Deposit
-    try:
-        decoded = event_abi.process_log(dict(log))
-        args = decoded["args"]
-        return {
-            "deposit_id": int(args["_depositId"]),
-            "sender": str(args["_sender"]).lower(),
-            "recipient": str(args["_recipient"]),
-            "amount": int(args["_amount"]),
-            "tip": int(args["_tip"]),
-        }
-    except Exception:
-        return None
+    contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=DEPOSIT_ID_ABI)
+    return int(contract.functions.depositId().call())
+
+
+def trusted_dict(deposit: tuple) -> dict:
+    """Render a fetch_deposit tuple as the dict shape stored in reported_json."""
+    return {
+        "eth_address": deposit[0],
+        "layer_address": deposit[1],
+        "amount": deposit[2],
+        "tip": deposit[3],
+    }
 
 
 def is_zero_struct(deposit_details: tuple) -> bool:
@@ -286,6 +276,71 @@ async def fetch_deposit(
 
     logger.error(f"deposit {deposit_id}: all {max_attempts} fetch attempts failed (last: {last_error})")
     return None, "rpc_error"
+
+
+def get_confirm_delay_s(default: float = 60.0) -> float:
+    """Confirm-read delay from BRIDGE_CONFIRM_SECONDS (tests and callers may pass 0 directly)."""
+    raw = os.getenv("BRIDGE_CONFIRM_SECONDS")
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logging.getLogger(__name__).warning(f"BRIDGE_CONFIRM_SECONDS={raw!r} is not a number; using {default}s")
+        return default
+
+
+async def get_bridge_verdict(
+    provider_builder: Callable[[int], "Web3 | None"],
+    contract_address: str,
+    deposit_id: int,
+    reported: dict,
+    *,
+    confirm_delay_s: float | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    logger: Any = None,
+) -> tuple[str, dict | None]:
+    """Shared verdict discipline for Tier 1 and the reconciler: read, confirm, then decide.
+
+    First read is hardened (retry + provider rotation + zero-struct sanity). A match is an
+    immediate "ok". A zero struct or a mismatch waits `confirm_delay_s` then re-reads (the
+    hardened fetch rotates providers); the confirm result is the verdict. A confirm RPC loss
+    never resolves the row: it stays "unavailable" for the next retry.
+
+    Returns:
+        ("ok", trusted) | ("bad", trusted_or_None) | ("unavailable", None)
+
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    if confirm_delay_s is None:
+        confirm_delay_s = get_confirm_delay_s()
+
+    deposit, kind = await fetch_deposit(provider_builder, contract_address, deposit_id, sanity=True, logger=logger)
+
+    if kind != "ok" or deposit is None:
+        if kind == "ok":  # unreachable today (fetch pairs "ok" with a tuple); belt for future changes
+            kind = "rpc_error"
+        if kind == "rpc_error":
+            return "unavailable", None
+    else:
+        if trusted_dict(deposit) == reported:
+            return "ok", trusted_dict(deposit)
+
+    # zero struct or mismatch: confirm before calling the report bad. A lagging provider
+    # can read zero seconds after the deposit landed; the 60s re-read is the guard.
+    first = trusted_dict(deposit) if deposit is not None else None
+    await sleep(confirm_delay_s)
+    deposit2, kind2 = await fetch_deposit(provider_builder, contract_address, deposit_id, sanity=True, logger=logger)
+
+    if kind2 == "rpc_error":
+        return "unavailable", None
+    if kind2 == "zero_struct":
+        return "bad", None
+    trusted2 = trusted_dict(deposit2)
+    if trusted2 == reported:
+        return "ok", trusted2
+    return "bad", trusted2 or first
 
 
 def make_provider_builder(chain_id: int, rpc_url: str | None = None, logger: Any = None) -> Callable[[int], Web3]:

@@ -7,8 +7,8 @@ the UNIQUE(tx_hash) constraint is the idempotency guard for catch-up replays.
 
 Schema:
     bridge_deposits  one row per Layer report (keyed by report tx_hash)
-    eth_deposits     ground truth from the bridge contract's Deposit event logs
-    meta             cursors (log-sweep position) and misc keys
+    eth_deposits     ground truth from the bridge contract's deposits() state (counter sweep)
+    meta             sweep floor/cursor keys per contract and misc keys
 """
 
 import json
@@ -20,35 +20,21 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Row statuses
-STATUS_UNVERIFIED = "unverified"  # Tier 1 fetch failed; Tier 2 must retry
-STATUS_VERIFIED_OK = "verified_ok"  # trusted value matched the report (terminal)
-STATUS_MISMATCH_PENDING = "mismatch_pending"  # mismatch seen; next anchored recheck confirms
-STATUS_DISPUTED = "disputed"  # mismatch confirmed on anchored re-read, dispute queued (terminal)
-STATUS_RESOLVED_LAG = "resolved_lag"  # mismatch cleared on recheck (terminal)
-STATUS_EXPIRED_UNRESOLVED = "expired_unresolved"  # 12h dispute window elapsed, no verdict (terminal)
-STATUS_UNVERIFIABLE = "unverifiable"  # deposit invisible after N rechecks; flag for humans (terminal)
+# Row statuses — exactly three, by design. Nothing is terminal except good/bad;
+# unverified rows are retried by the reconciler forever until a real verdict.
+STATUS_UNVERIFIED = "unverified"  # no verdict yet (RPC dead, or migrated from old statuses)
+STATUS_GOOD = "good"  # trusted value matched the report (terminal)
+STATUS_BAD = "bad"  # mismatch/zero-struct confirmed on the 60s confirm read (terminal)
 
-TERMINAL_STATUSES = frozenset(
-    {
-        STATUS_VERIFIED_OK,
-        STATUS_DISPUTED,
-        STATUS_RESOLVED_LAG,
-        STATUS_EXPIRED_UNRESOLVED,
-        STATUS_UNVERIFIABLE,
-    }
-)
-RECHECK_STATUSES = (STATUS_UNVERIFIED, STATUS_MISMATCH_PENDING)
+TERMINAL_STATUSES = frozenset({STATUS_GOOD, STATUS_BAD})
+RECHECK_STATUSES = (STATUS_UNVERIFIED,)
 
 # Defaults (overridable via env in the callers)
 DISPUTE_WINDOW_HOURS = 12
 DEFAULT_RECONCILE_INTERVAL = 120  # seconds between reconciler cycles
-DEFAULT_UNVERIFIABLE_RETRIES = 6  # recheck cycles before flagging a row unverifiable
-# min report age before declaring "no Deposit event" ever happened; the sweep trails the
-# tip by up to a reconcile interval, so a report on a very recent deposit outruns it briefly
-DEFAULT_NO_LOG_GRACE = 1800
-DEFAULT_SWEEP_LOOKBACK_HOURS = 24
-DEFAULT_SWEEP_CHUNK_BLOCKS = 2000
+DEFAULT_CONFIRM_SECONDS = 60  # delay before the confirm read that confirms a zero/mismatch
+DEFAULT_REPORT_WINDOW_BLOCKS = 2000  # TRBBridgeV2 registry dataspec ReportBlockWindow (x/registry, v6.1.4 upgrade)
+DEFAULT_LAYER_BLOCK_SECONDS = 12.0  # block-time estimate to turn the window into seconds
 
 DEFAULT_LEDGER_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "bridge_ledger.db"
@@ -118,6 +104,18 @@ class BridgeLedger:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(eth_deposits)")}
         if "block_ts" not in cols:
             self.conn.execute("ALTER TABLE eth_deposits ADD COLUMN block_ts REAL")
+        # one-time status migration to the three-status vocabulary. Old stranded statuses
+        # map to `unverified` on purpose: previously-terminal rows resume retrying.
+        self.conn.execute(
+            """
+            UPDATE bridge_deposits SET status = CASE status
+              WHEN 'verified_ok' THEN 'good' WHEN 'resolved_lag' THEN 'good'
+              WHEN 'disputed' THEN 'bad'
+              WHEN 'unverifiable' THEN 'unverified' WHEN 'expired_unresolved' THEN 'unverified'
+              ELSE status END
+            WHERE status IN ('verified_ok','resolved_lag','disputed','unverifiable','expired_unresolved')
+            """
+        )
         self.conn.commit()
 
     def close(self) -> None:
@@ -196,7 +194,11 @@ class BridgeLedger:
         return dict(row) if row else None
 
     def due_for_recheck(self, now: float | None = None, interval: float = DEFAULT_RECONCILE_INTERVAL) -> list[dict]:
-        """Non-terminal rows whose status hasn't been revisited within the reconcile interval."""
+        """Unverified rows whose status hasn't been revisited within the reconcile interval.
+
+        This throttle (state_ts <= now - interval) IS the retry-forever rule: unverified rows
+        come back every cycle with no retry cap and no expiry — only good/bad end the loop.
+        """
         now = time.time() if now is None else now
         rows = self.conn.execute(
             f"""
@@ -229,51 +231,6 @@ class BridgeLedger:
         """Flag a row's deadline escalation alert as sent (alert-once)."""
         self.conn.execute("UPDATE bridge_deposits SET escalated = 1 WHERE tx_hash = ?", (tx_hash,))
         self.conn.commit()
-
-    def expired(self, now: float | None = None, hours: float = DISPUTE_WINDOW_HOURS) -> list[dict]:
-        """Non-terminal rows past the full dispute window (candidates for expired_unresolved)."""
-        now = time.time() if now is None else now
-        rows = self.conn.execute(
-            """
-            SELECT * FROM bridge_deposits
-            WHERE status NOT IN ({})
-              AND report_ts <= ?
-            """.format(",".join("?" * len(TERMINAL_STATUSES))),
-            (*sorted(TERMINAL_STATUSES), now - hours * 3600),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def rows_without_log(
-        self,
-        contract_address: str,
-        sweep_covered_from_ts: float,
-        now: float | None = None,
-        grace_s: float = DEFAULT_NO_LOG_GRACE,
-    ) -> list[dict]:
-        """Non-terminal rows for a contract whose deposit_id has no eth_deposits entry.
-
-        Restricted to reports made after the log sweep started covering events, and
-        older than `grace_s`: a report on a very recent deposit outruns the sweep
-        (which trails the tip by up to a reconcile interval), so a missing log
-        proves nothing yet.
-        """
-        now = time.time() if now is None else now
-        rows = self.conn.execute(
-            f"""
-            SELECT b.* FROM bridge_deposits b
-            WHERE b.status IN ({", ".join("?" * len(RECHECK_STATUSES))})
-              AND b.contract_address = ?
-              AND b.deposit_id IS NOT NULL
-              AND b.report_ts >= ?
-              AND b.report_ts <= ?
-              AND NOT EXISTS (
-                  SELECT 1 FROM eth_deposits e
-                  WHERE e.contract_address = b.contract_address AND e.deposit_id = b.deposit_id
-              )
-            """,
-            (*RECHECK_STATUSES, contract_address, sweep_covered_from_ts, now - grace_s),
-        ).fetchall()
-        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # eth_deposits
@@ -311,12 +268,53 @@ class BridgeLedger:
         return cur.rowcount > 0
 
     def has_eth_deposit(self, contract_address: str, deposit_id: int) -> bool:
-        """Check whether the Deposit event log recorded this deposit."""
+        """Check whether the deposit journal recorded this deposit."""
         row = self.conn.execute(
             "SELECT 1 FROM eth_deposits WHERE contract_address = ? AND deposit_id = ?",
             (contract_address, deposit_id),
         ).fetchone()
         return row is not None
+
+    def pending_missing_reports(self, now: float | None = None, window_s: float = 24_000) -> list[dict]:
+        """Eth deposits whose Layer reporting window has CLOSED with no report row yet (not alerted).
+
+        Anchored on the deposit's block timestamp when known (the window is defined on-chain
+        relative to the deposit), falling back to first-seen time for rows predating block_ts.
+        """
+        now = time.time() if now is None else now
+        rows = self.conn.execute(
+            """
+            SELECT e.* FROM eth_deposits e
+            WHERE e.missing_alerted = 0
+              AND COALESCE(e.block_ts, e.first_seen_ts) + ? <= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM bridge_deposits b
+                  WHERE b.contract_address = e.contract_address AND b.deposit_id = e.deposit_id
+              )
+            """,
+            (window_s, now),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def resolve_missing_report(self, contract_address: str, deposit_id: int) -> None:
+        """Quietly retire a pending missing-report deposit (e.g. late report found on oracle)."""
+        self.conn.execute(
+            "UPDATE eth_deposits SET missing_alerted = 1 WHERE contract_address = ? AND deposit_id = ?",
+            (contract_address, deposit_id),
+        )
+        self.conn.commit()
+
+    def mark_missing_report(self, contract_address: str, deposit_id: int) -> bool:
+        """Flag an eth deposit as missing its Layer report. Returns True on the first flag (alert-once)."""
+        cur = self.conn.execute(
+            """
+            UPDATE eth_deposits SET missing_report = 1, missing_alerted = 1
+            WHERE contract_address = ? AND deposit_id = ? AND missing_alerted = 0
+            """,
+            (contract_address, deposit_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
 
     # ------------------------------------------------------------------
     # meta

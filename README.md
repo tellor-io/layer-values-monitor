@@ -90,20 +90,34 @@ FATAL (the monitor refuses to start — a wrong-chain endpoint could otherwise p
 trusted values). A startup RPC outage only warns; runtime retries still apply.
 
 ### TRB Bridge Verification Ledger (two-tier)
-Every bridge report is journaled to a SQLite ledger (`data/bridge_ledger.db` by default) and
-re-verified by an in-process reconciler task. Tier 1 (stream) records and alerts but never
-disputes; the reconciler re-reads pending rows against a **finalized-anchored read on the
-primary RPC** — the read that still mismatches the report disputes (a mismatch first seen on an
-unverified row is marked, the next cycle's anchored re-read disputes it).
+Every bridge report is journaled to a SQLite ledger (`data/bridge_ledger.db` by default).
+Row statuses are exactly three — `good`, `bad`, `unverified` — and nothing is terminal but
+good/bad. Both tiers share one verdict discipline (`get_bridge_verdict`): a hardened
+`deposits()` read that matches the report is `good`; a zero-struct (the fake-deposit
+signature) or a mismatch waits `BRIDGE_CONFIRM_SECONDS` and re-reads — the confirm read
+(provider-rotated) that still reads zero/mismatch makes the report `bad`.
+
+- **Tier 1** (stream) reaches the verdict inline: `good` or `bad` is recorded immediately, a
+  confirmed `bad` disputes on the spot (subject to the threshold gate below), and a full RPC
+  outage records `unverified` + a "NO FUNCTIONAL RPC AVAILABLE" alert.
+- **Tier 2** (reconciler task) runs a cycle at startup, then every `BRIDGE_RECONCILE_INTERVAL`
+  seconds: it re-reads every `unverified` row **forever** (no retry cap, no expiry — a late
+  `bad` inside the 12h window disputes, one after the window alerts "LATE VERDICT"); sweeps
+  deposits from the contract's gapless `depositId()` counter (no event-log scanning); alerts
+  once per eth deposit whose Layer reporting window closes with no report (confirmed against
+  the oracle REST when `LAYER_REST_URL` is set); and escalates once per row ~10h in with an
+  "RPCs DOWN — ABOUT TO BE UNDISPUTABLE" alert.
 - `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
 - `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
-- `BRIDGE_SWEEP_LOOKBACK_HOURS` - Deposit-event sweep window on cold start (default: `24`)
-- `BRIDGE_NO_LOG_GRACE` - Min report age (s) before a missing Deposit log means "never emitted" (default: `1800`)
+- `BRIDGE_CONFIRM_SECONDS` - Confirm re-read delay before a zero/mismatch goes `bad` (default: `60`)
+- `BRIDGE_REPORT_WINDOW_BLOCKS` × `BRIDGE_LAYER_BLOCK_SECONDS` - reporting window for the
+  missing-report alert (defaults `2000` × `12`; Tellor Layer mainnet needs `BRIDGE_LAYER_BLOCK_SECONDS=3`)
+- `LAYER_REST_URL` - Layer LCD/REST base for the oracle double-check before a missing-report alert
 
 Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
 (`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —
-`0.0` disables disputes). The example config ships with this enabled for trbbridgev2;
-trbbridge and evmcall stay alert-only.
+`0.0` disables disputes; alert-only mode still records `bad`). The example config ships with
+this enabled for trbbridgev2; trbbridge and evmcall stay alert-only.
 
 ### Saga Guardian (Contract Pausing)
 Required only when starting with `--enable-saga-guard`.

@@ -4,9 +4,10 @@ import sqlite3
 import time
 
 from layer_values_monitor.bridge_ledger import (
-    STATUS_MISMATCH_PENDING,
+    STATUS_BAD,
+    STATUS_GOOD,
     STATUS_UNVERIFIED,
-    STATUS_VERIFIED_OK,
+    TERMINAL_STATUSES,
     BridgeLedger,
 )
 
@@ -53,38 +54,48 @@ class TestBridgeDeposits:
     def test_upsert_is_idempotent_by_tx_hash(self, ledger):
         """Catch-up replay of the same report must not reset an advanced status."""
         assert insert(ledger, status=STATUS_UNVERIFIED) is True
-        ledger.set_status("0xtx1", STATUS_MISMATCH_PENDING)
-        assert insert(ledger, status=STATUS_VERIFIED_OK) is False
-        assert ledger.get("0xtx1")["status"] == STATUS_MISMATCH_PENDING
+        ledger.set_status("0xtx1", STATUS_BAD)
+        assert insert(ledger, status=STATUS_GOOD) is False
+        assert ledger.get("0xtx1")["status"] == STATUS_BAD
 
     def test_set_status_transitions_and_retries(self, ledger):
         insert(ledger)
-        ledger.set_status("0xtx1", STATUS_MISMATCH_PENDING, error="tier1_mismatch")
+        ledger.set_status("0xtx1", STATUS_UNVERIFIED, error="rpc_error")
         row = ledger.get("0xtx1")
-        assert row["status"] == STATUS_MISMATCH_PENDING
-        assert row["last_error"] == "tier1_mismatch"
+        assert row["status"] == STATUS_UNVERIFIED
+        assert row["last_error"] == "rpc_error"
         assert row["retries"] == 0
 
-        ledger.set_status("0xtx1", STATUS_MISMATCH_PENDING, bump_retries=True)
+        ledger.set_status("0xtx1", STATUS_UNVERIFIED, bump_retries=True)
         assert ledger.get("0xtx1")["retries"] == 1
 
-    def test_due_for_recheck(self, ledger):
+    def test_due_for_recheck_only_unverified(self, ledger):
         insert(ledger, tx_hash="0xa", status=STATUS_UNVERIFIED)
-        insert(ledger, tx_hash="0xb", status=STATUS_VERIFIED_OK)
-        insert(ledger, tx_hash="0xc", status=STATUS_MISMATCH_PENDING)
+        insert(ledger, tx_hash="0xb", status=STATUS_GOOD)
+        insert(ledger, tx_hash="0xc", status=STATUS_BAD)
 
         now = time.time()
         # state_ts is 'now' → nothing due within the interval
         assert [r["tx_hash"] for r in ledger.due_for_recheck(now=now, interval=600)] == []
 
-        # One hour later, only the non-terminal rows are due
+        # One hour later, only the unverified row is due — good/bad are the only terminals
         due = {r["tx_hash"] for r in ledger.due_for_recheck(now=now + 3600, interval=600)}
-        assert due == {"0xa", "0xc"}
+        assert due == {"0xa"}
+        assert TERMINAL_STATUSES == {STATUS_GOOD, STATUS_BAD}
+
+    def test_retry_forever_no_cap(self, ledger):
+        """A row retried 100 times must still come back: no retry cap, no expiry."""
+        insert(ledger, tx_hash="0xa", status=STATUS_UNVERIFIED, report_ts=time.time() - 30 * 86_400)
+        ledger.conn.execute("UPDATE bridge_deposits SET retries = 100 WHERE tx_hash = '0xa'")
+        ledger.conn.commit()
+        due = ledger.due_for_recheck(now=time.time() + 3600, interval=600)
+        assert [r["tx_hash"] for r in due] == ["0xa"]
+        assert due[0]["retries"] == 100
 
     def test_near_deadline_and_escalation(self, ledger):
         old = time.time() - 10.5 * 3600  # past the 10h escalation point, before the 12h deadline
-        insert(ledger, tx_hash="0xa", status=STATUS_MISMATCH_PENDING, report_ts=old)
-        insert(ledger, tx_hash="0b", status=STATUS_VERIFIED_OK, report_ts=old)
+        insert(ledger, tx_hash="0xa", status=STATUS_UNVERIFIED, report_ts=old)
+        insert(ledger, tx_hash="0b", status=STATUS_GOOD, report_ts=old)
 
         rows = ledger.near_deadline(now=time.time(), hours=12, margin=2)
         assert [r["tx_hash"] for r in rows] == ["0xa"]
@@ -92,23 +103,71 @@ class TestBridgeDeposits:
         ledger.mark_escalated("0xa")
         assert ledger.near_deadline(now=time.time(), hours=12, margin=2) == []
 
-    def test_expired(self, ledger):
-        insert(ledger, tx_hash="0xa", status=STATUS_UNVERIFIED, report_ts=time.time() - 12.5 * 3600)
-        insert(ledger, tx_hash="0b", status=STATUS_UNVERIFIED, report_ts=time.time() - 11.5 * 3600)
-        expired = ledger.expired(now=time.time(), hours=12)
-        assert [r["tx_hash"] for r in expired] == ["0xa"]
-
     def test_persistence_across_reopen(self, tmp_path):
         path = str(tmp_path / "reopen.db")
         led = BridgeLedger(path)
         insert(led, tx_hash="0xpersist")
-        led.set_status("0xpersist", STATUS_MISMATCH_PENDING)
+        led.set_status("0xpersist", STATUS_BAD)
         led.close()
 
         led2 = BridgeLedger(path)
         row = led2.get("0xpersist")
         assert row is not None
-        assert row["status"] == STATUS_MISMATCH_PENDING
+        assert row["status"] == STATUS_BAD
+        led2.close()
+
+
+class TestStatusMigration:
+    """One-time migration of the pre-three-status vocabulary, run on every ledger open."""
+
+    @pytest.mark.parametrize(
+        "old_status,new_status",
+        [
+            ("verified_ok", "good"),
+            ("resolved_lag", "good"),
+            ("disputed", "bad"),
+            ("unverifiable", "unverified"),
+            ("expired_unresolved", "unverified"),
+        ],
+    )
+    def test_old_statuses_map_on_reopen(self, tmp_path, old_status, new_status):
+        path = str(tmp_path / f"mig_{old_status}.db")
+        led = BridgeLedger(path)
+        insert(led, tx_hash="0xmig")
+        # simulate a row written by pre-migration code
+        led.conn.execute("UPDATE bridge_deposits SET status = ? WHERE tx_hash = '0xmig'", (old_status,))
+        led.conn.commit()
+        led.close()
+
+        led2 = BridgeLedger(path)
+        assert led2.get("0xmig")["status"] == new_status
+        led2.close()
+
+    def test_migration_is_idempotent(self, tmp_path):
+        path = str(tmp_path / "mig2.db")
+        led = BridgeLedger(path)
+        insert(led, tx_hash="0xmig", status=STATUS_GOOD)
+        insert(led, tx_hash="0x2", status=STATUS_UNVERIFIED)
+        led.close()
+
+        BridgeLedger(path).close()
+        led3 = BridgeLedger(path)  # reopens must leave new statuses untouched
+        assert led3.get("0xmig")["status"] == "good"
+        assert led3.get("0x2")["status"] == "unverified"
+        led3.close()
+
+    def test_stranded_unverifiable_resumes_retrying(self, tmp_path):
+        """The original complaint: rows stranded in unverifiable must re-enter the retry loop."""
+        path = str(tmp_path / "mig3.db")
+        led = BridgeLedger(path)
+        insert(led, tx_hash="0xstranded", status=STATUS_UNVERIFIED)
+        led.conn.execute("UPDATE bridge_deposits SET status = 'unverifiable' WHERE tx_hash = '0xstranded'")
+        led.conn.commit()
+        led.close()
+
+        led2 = BridgeLedger(path)
+        due = led2.due_for_recheck(now=time.time() + 3600, interval=600)
+        assert [r["tx_hash"] for r in due] == ["0xstranded"]
         led2.close()
 
 
@@ -119,20 +178,51 @@ class TestEthDeposits:
         assert ledger.has_eth_deposit(CONTRACT, 7) is True
         assert ledger.has_eth_deposit(CONTRACT, 8) is False
 
-    def test_rows_without_log(self, ledger):
-        insert(ledger, tx_hash="0xtx1", status=STATUS_MISMATCH_PENDING, deposit_id=7)
-        insert(ledger, tx_hash="0xtx2", status=STATUS_MISMATCH_PENDING, deposit_id=8)
-        ledger.record_eth_deposit(CONTRACT, 7, "0xethA", 100)
 
-        # Sweep covers everything from 'start_ts' (0) onward; reports are past the grace
-        rows = ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=0, now=time.time() + 7200)
-        assert [r["tx_hash"] for r in rows] == ["0xtx2"]
+class TestMissingReports:
+    """Orphan alert window math: anchored on the deposit block, silent until the window closes."""
 
-        # Within the no-log grace (sweep lags finalized), a missing log proves nothing yet
-        assert ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=0) == []
+    def test_pending_only_after_window_closes(self, ledger):
+        now = time.time()
+        ledger.record_eth_deposit(CONTRACT, 1, "0xethA", 100, REPORTED, block_ts=now - 700)  # window closed
+        ledger.record_eth_deposit(CONTRACT, 2, "0xethB", 101, REPORTED, block_ts=now - 100)  # still open
+        ledger.record_eth_deposit(CONTRACT, 3, "0xethC", 102, REPORTED, block_ts=now - 700)
 
-        # A sweep that started AFTER the report covers nothing relevant
-        assert ledger.rows_without_log(CONTRACT, sweep_covered_from_ts=time.time() + 10, now=time.time() + 7200) == []
+        # a report landed for deposit 3 — not orphan material
+        ledger.upsert_report(
+            tx_hash="0xrep3",
+            query_id="0xq3",
+            query_type="TRBBridge",
+            deposit_id=3,
+            reported_value=REPORTED,
+            status=STATUS_GOOD,
+            report_ts=now,
+            contract_address=CONTRACT,
+        )
+
+        pending = {r["deposit_id"] for r in ledger.pending_missing_reports(now=now, window_s=600)}
+        assert pending == {1}
+
+    def test_block_ts_none_falls_back_to_first_seen(self, ledger):
+        now = time.time()
+        ledger.record_eth_deposit(CONTRACT, 9, "0xethD", 100, REPORTED, block_ts=None)
+        ledger.conn.execute("UPDATE eth_deposits SET first_seen_ts = ? WHERE deposit_id = 9", (now - 700,))
+        ledger.conn.commit()
+        pending = ledger.pending_missing_reports(now=now, window_s=600)
+        assert [r["deposit_id"] for r in pending] == [9]
+
+    def test_mark_missing_report_alerts_once(self, ledger):
+        ledger.record_eth_deposit(CONTRACT, 1, "0xethA", 100, REPORTED, block_ts=time.time() - 700)
+        assert ledger.mark_missing_report(CONTRACT, 1) is True
+        assert ledger.mark_missing_report(CONTRACT, 1) is False
+        assert ledger.pending_missing_reports(window_s=600) == []
+
+    def test_resolve_missing_report_retires_silently(self, ledger):
+        ledger.record_eth_deposit(CONTRACT, 1, "0xethA", 100, REPORTED, block_ts=time.time() - 700)
+        ledger.resolve_missing_report(CONTRACT, 1)
+        assert ledger.pending_missing_reports(window_s=600) == []
+        row = ledger.conn.execute("SELECT missing_report FROM eth_deposits WHERE deposit_id = 1").fetchone()
+        assert row["missing_report"] == 0  # resolved, never marked missing
 
 
 class TestMeta:

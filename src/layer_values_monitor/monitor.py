@@ -12,9 +12,9 @@ from typing import Any
 
 from layer_values_monitor.alert_state import get_alert_state_tracker
 from layer_values_monitor.bridge_ledger import (
-    STATUS_MISMATCH_PENDING,
+    STATUS_BAD,
+    STATUS_GOOD,
     STATUS_UNVERIFIED,
-    STATUS_VERIFIED_OK,
     get_bridge_ledger,
 )
 from layer_values_monitor.bridge_networks import resolve_bridge_chain_id, resolve_contract_address
@@ -47,7 +47,12 @@ from layer_values_monitor.telliot_feeds import (
     get_price_cache,
     get_query,
 )
-from layer_values_monitor.trb_bridge import decode_query_data, decode_report_value, fetch_deposit, make_provider_builder
+from layer_values_monitor.trb_bridge import (
+    decode_query_data,
+    decode_report_value,
+    get_bridge_verdict,
+    make_provider_builder,
+)
 from layer_values_monitor.utils import add_to_table, decode_hex_value
 
 import aiohttp
@@ -1899,13 +1904,16 @@ async def inspect_trbbridge_reports(
         }
         report_ts = (int(r.timestamp) / 1000.0) if r.timestamp else time.time()
 
-        # Hardened read (retries, provider rotation, zero-struct sanity). Tier 1 only
-        # records and alerts — disputes are deferred to the reconciler's second check.
-        deposit, error_kind = await fetch_deposit(provider_builder, contract_address, deposit_id, sanity=True, logger=logger)
+        # Shared read/confirm verdict helper (hardened read; a zero-struct or mismatch gets
+        # a BRIDGE_CONFIRM_SECONDS confirm read before any verdict). Tier 1 reaches the
+        # verdict inline: good/bad/unverified, disputing immediately on confirmed bad.
+        verdict, trusted = await get_bridge_verdict(
+            provider_builder, contract_address, deposit_id, reported_value, logger=logger
+        )
 
-        if deposit is None:
+        if verdict == "unavailable":
             # A failed eth read becomes a persisted `unverified` row + alert, never a silent
-            # skip indistinguishable from a verified-good report.
+            # skip indistinguishable from a verified-good report. The reconciler retries forever.
             newly_recorded = ledger.upsert_report(
                 tx_hash=r.tx_hash,
                 query_id=query_id,
@@ -1918,37 +1926,28 @@ async def inspect_trbbridge_reports(
                 reporter=r.reporter,
                 power=r.power,
                 meta_id=r.meta_id,
-                last_error=error_kind,
+                last_error="rpc_error",
             )
             if newly_recorded:  # catch-up replays must not re-alert
                 bridge_ledger_alert(
-                    "🌉 **BRIDGE REPORT UNVERIFIED**",
+                    "🌉 NO FUNCTIONAL RPC AVAILABLE TO CHECK BRIDGE REPORT!",
                     {
                         "QueryId": query_id,
                         "QueryType": r.query_type,
                         "Deposit ID": deposit_id,
                         "Reporter": r.reporter,
                         "Tx Hash": r.tx_hash,
-                        "Reason": error_kind,
+                        "Reason": "all RPC providers failed; reconciler will retry until a verdict",
                     },
                 )
             continue
 
-        trusted_eth_addr, trusted_layer_addr, trusted_amount, trusted_tip = deposit
-
-        trusted_value = {
-            "eth_address": trusted_eth_addr,
-            "layer_address": trusted_layer_addr,
-            "amount": trusted_amount,
-            "tip": trusted_tip,
-        }
+        trusted_value = trusted
 
         logger.info(f"TRBBridge Reported: {reported_value}")
         logger.info(f"TRBBridge Trusted: {trusted_value}")
+        logger.info(f"TRBBridge verdict: {verdict}")
 
-        # For TRBBridge, we expect exact equality
-        # Note: TRBBridge doesn't have a standard query object, pass None
-        matched = reported_value == trusted_value
         ledger.upsert_report(
             tx_hash=r.tx_hash,
             query_id=query_id,
@@ -1956,14 +1955,17 @@ async def inspect_trbbridge_reports(
             contract_address=contract_address,
             deposit_id=deposit_id,
             reported_value=reported_value,
-            status=STATUS_VERIFIED_OK if matched else STATUS_MISMATCH_PENDING,
+            status=STATUS_GOOD if verdict == "ok" else STATUS_BAD,
             report_ts=report_ts,
             reporter=r.reporter,
             power=r.power,
             meta_id=r.meta_id,
-            last_error=None if matched else "tier1_mismatch",
+            last_error=None if verdict == "ok" else "tier1_confirmed_bad",
         )
 
+        # For TRBBridge we expect exact equality; the verdict above already ran the
+        # confirm-read discipline, so inspect() disputes directly (no defer, no prefix).
+        # Note: TRBBridge doesn't have a standard query object, pass None
         await inspect(
             r,
             reported_value,
@@ -1972,8 +1974,7 @@ async def inspect_trbbridge_reports(
             metrics,
             logger,
             query=None,
-            defer_dispute=True,
-            alert_prefix=None if matched else "⏳ **PENDING RECONFIRM** — ",
+            defer_dispute=False,
         )
 
     return None
