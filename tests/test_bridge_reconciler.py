@@ -175,7 +175,7 @@ class TestRecheckLogic:
                     await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
         row = ledger.get("0xtx1")
         assert row["status"] == STATUS_DISPUTED
-        assert "no RPC" in row["last_error"]
+        assert "no usable re-read (rpc_error)" in row["last_error"]
         assert q.get_nowait().category == "warning"
 
     @pytest.mark.asyncio
@@ -229,6 +229,22 @@ class TestRecheckLogic:
         assert q.empty()
 
     @pytest.mark.asyncio
+    async def test_aged_zero_struct_mismatch_disputes(self, ledger):
+        """A mismatch that keeps reading back zero-struct past the aging window disputes, never unverifiable."""
+        add_row(ledger, report_ts=time.time() - 3 * 3600)
+        q = asyncio.Queue()
+        with patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()):
+            with patch(
+                "layer_values_monitor.bridge_reconciler.fetch_deposit", new=AsyncMock(return_value=(None, "zero_struct"))
+            ):
+                with patch("layer_values_monitor.bridge_reconciler.sweep_deposit_logs", new=AsyncMock()):
+                    await run_reconcile_cycle(ledger, q, make_config_watcher(), MagicMock(), interval=0)
+        row = ledger.get("0xtx1")
+        assert row["status"] == STATUS_DISPUTED
+        assert "zero_struct" in row["last_error"]
+        assert q.get_nowait().category == "warning"
+
+    @pytest.mark.asyncio
     async def test_unverifiable_after_max_retries(self, ledger):
         os.environ["BRIDGE_UNVERIFIABLE_RETRIES"] = "6"
         try:
@@ -258,6 +274,23 @@ class TestDeadlines:
         assert alert.call_count == 1
         assert "dispute window" in alert.call_args.args[1]["Detail"]
         assert ledger.get("0xtx1")["escalated"] == 1
+
+    @pytest.mark.asyncio
+    async def test_escalation_does_not_repeat_after_restart(self, tmp_path):
+        """escalated=1 lives in the SQLite row, not memory: a reopened ledger must not re-escalate."""
+        path = str(tmp_path / "restart.db")
+        led = BridgeLedger(path)
+        add_row(led, report_ts=time.time() - 10.5 * 3600)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+            await check_deadlines(led, MagicMock())
+        assert alert.call_count == 1
+        led.close()
+
+        led2 = BridgeLedger(path)
+        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert2:
+            await check_deadlines(led2, MagicMock())
+        assert alert2.call_count == 0
+        led2.close()
 
     @pytest.mark.asyncio
     async def test_expired_after_full_window(self, ledger):

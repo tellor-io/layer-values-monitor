@@ -110,6 +110,9 @@ def _query_type_for_contract(contract_address: str) -> str:
         addr = os.getenv(env_name)
         if addr and Web3.to_checksum_address(addr) == contract_address:
             return qtype
+    # No configured contract matches (env rotated/removed after the row was recorded):
+    # V2 is the live default, but the alert's QueryId may then be computed with the wrong typeString.
+    logging.getLogger(__name__).warning(f"bridge query-type lookup: no env match for contract {contract_address}; assuming TRBBridgeV2")
     return "TRBBridgeV2"
 
 
@@ -185,9 +188,11 @@ async def _recheck_row(
         return
 
     # Re-read failed (zero_struct / rpc_error)
-    if row["status"] == STATUS_MISMATCH_PENDING and kind == "rpc_error":
-        # Mismatch seen once, no readable RPC since: age out to a dispute, not to unverifiable.
-        if await _aged_dispute(row, ledger, disputes_q, config_watcher, logger, "no RPC available for recheck"):
+    if row["status"] == STATUS_MISMATCH_PENDING and kind in ("rpc_error", "zero_struct"):
+        # Mismatch seen once, no usable re-read since — RPC loss, or a deposit that keeps
+        # reading as zero struct (the fake-deposit signature): age out to a dispute on the
+        # anchored evidence, never to unverifiable while a mismatch stands.
+        if await _aged_dispute(row, ledger, disputes_q, config_watcher, logger, f"no usable re-read ({kind})"):
             return
         ledger.set_status(tx_hash, row["status"], error=kind, bump_retries=True)
         return
