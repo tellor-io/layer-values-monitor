@@ -234,9 +234,10 @@ async def sweep_deposits(
     """Journal deposits by sweeping the gapless `depositId()` counter (no event logs).
 
     depositId() only advances on success (reverted deposits revert the increment too) and
-    deposits(id) structs are never deleted, so ids [floor, depositId()) are exactly the
-    deposits ever made at this contract. `floor` covers the V1->V2 init seed: ids below the
-    init read zero structs here, so the first run probes downward until the first zero.
+    deposits(id) structs are never deleted. The counter is the LAST ISSUED id (deposit()
+    writes deposits[depositId] after ++), so ids [floor, depositId()] inclusive are exactly
+    the deposits ever made at this contract. `floor` covers the V1->V2 init seed: ids below
+    the init read zero structs here, so the first run probes downward until the first zero.
     A counter DECREASE (reorg) is a silent no-op: the cursor stays and catches up.
     """
     if w3 is None:
@@ -261,10 +262,11 @@ async def sweep_deposits(
 
         floor_raw = ledger.get_meta(floor_key)
         if floor_raw is None:
-            # First run: probe DOWNWARD from counter-1 until a zero struct (the init floor).
-            # Cost is O(deposits since init), one-time. An RPC error aborts the backfill
-            # without recording a floor, so a transient outage can't truncate history.
-            i = counter - 1
+            # First run: probe DOWNWARD from the counter (last issued id) until a zero
+            # struct (the init floor). Cost is O(deposits since init), one-time. An RPC
+            # error aborts the backfill without recording a floor, so a transient outage
+            # can't truncate history.
+            i = counter
             recorded = 0
             aborted = False
             while i >= 0:
@@ -285,20 +287,20 @@ async def sweep_deposits(
                 continue
             floor = max(i + 1, 0)
             ledger.set_meta(floor_key, str(floor))
-            ledger.set_meta(next_key, str(counter))
+            ledger.set_meta(next_key, str(counter + 1))
             logger.info(
                 f"bridge deposit backfill {contract[:10]}..: floor {floor}, {recorded} deposits recorded (counter {counter})"
             )
             continue
 
         next_id = int(ledger.get_meta(next_key) or floor_raw)
-        if counter <= next_id:
+        if counter < next_id:
             # silent no-op: counter flat, or reorged below the cursor
             continue
 
         recorded = 0
-        stopped_at = counter
-        for deposit_id in range(next_id, counter):
+        stopped_at = counter + 1
+        for deposit_id in range(next_id, counter + 1):
             try:
                 details = _probe_deposit_struct(w3, contract, deposit_id)
             except Exception as e:

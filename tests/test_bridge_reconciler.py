@@ -238,16 +238,23 @@ class TestCounterSweep:
 
     @pytest.mark.asyncio
     async def test_first_run_backfill_stops_at_init_floor(self, ledger):
-        """Mainnet V2 was seeded from V1: ids below the init read zero — that's the floor."""
-        w3, probed = self.make_w3(counter=3, structs={1: deposit_struct(10), 2: deposit_struct(20)})
+        """Mainnet V2 was seeded from V1: ids below the init read zero — that's the floor.
+
+        depositId() is the LAST ISSUED id (deposit() writes deposits[depositId] after ++),
+        so the probe starts AT the counter and the counter's own deposit is recorded.
+        """
+        w3, probed = self.make_w3(
+            counter=3, structs={1: deposit_struct(10), 2: deposit_struct(20), 3: deposit_struct(30)}
+        )
         await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
 
-        assert probed == [2, 1, 0]  # downward probe stops at the first zero struct
+        assert probed == [3, 2, 1, 0]  # downward probe stops at the first zero struct
         assert ledger.has_eth_deposit(CONTRACT, 1) is True
         assert ledger.has_eth_deposit(CONTRACT, 2) is True
+        assert ledger.has_eth_deposit(CONTRACT, 3) is True
         assert ledger.has_eth_deposit(CONTRACT, 0) is False  # below the seeded floor
         assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") == "1"
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "3"
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "4"
 
         row = ledger.conn.execute("SELECT * FROM eth_deposits WHERE deposit_id = 1").fetchone()
         assert row["eth_tx_hash"] == ""  # unknown from a state read
@@ -257,7 +264,7 @@ class TestCounterSweep:
     @pytest.mark.asyncio
     async def test_first_run_backfill_aborts_on_rpc_error(self, ledger):
         """A transient RPC error must not truncate history or record a floor."""
-        w3, _ = self.make_w3(counter=2, structs={1: deposit_struct()}, probe_error_at=1)
+        w3, _ = self.make_w3(counter=2, structs={1: deposit_struct(), 2: deposit_struct()}, probe_error_at=2)
         await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
         assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") is None
         assert ledger.has_eth_deposit(CONTRACT, 1) is False
@@ -266,13 +273,17 @@ class TestCounterSweep:
     async def test_counter_advance_records_only_new_ids(self, ledger):
         ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
         ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
-        w3, probed = self.make_w3(counter=4, structs={0: deposit_struct(), 1: deposit_struct(),
-                                                       2: deposit_struct(30), 3: deposit_struct(40)})
+        w3, probed = self.make_w3(
+            counter=4,
+            structs={0: deposit_struct(), 1: deposit_struct(), 2: deposit_struct(30),
+                     3: deposit_struct(40), 4: deposit_struct(50)},
+        )
         await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == [2, 3]
+        assert probed == [2, 3, 4]  # the counter's own id is the newest real deposit
         assert ledger.has_eth_deposit(CONTRACT, 2) is True
         assert ledger.has_eth_deposit(CONTRACT, 3) is True
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "4"
+        assert ledger.has_eth_deposit(CONTRACT, 4) is True
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
 
         # no counter movement: probe nothing, change nothing
         probed.clear()
