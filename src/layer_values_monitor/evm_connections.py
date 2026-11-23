@@ -33,7 +33,9 @@ def get_web3_connection(
     1. custom_rpc_url parameter (if provided, bypasses cache)
     2. Cached connection for chain_id (if exists, skipped when attempt > 0)
     3. EVM_RPC_URLS_{chain_id} - comma-separated list (tries each in order)
-    4. INFURA_API_KEY fallback (for chains 1, 11155111)
+    4. EVM_RPC_URLS - plain fallback (the Layer CHAIN_ID fixes the bridge chain, so one
+       URL list per process is enough; the suffixed var still wins where both are set)
+    5. INFURA_API_KEY fallback (for chains 1, 11155111)
 
     Args:
         chain_id: Target chain ID (e.g., 1 for Ethereum mainnet, 11155111 for Sepolia)
@@ -75,9 +77,11 @@ def get_web3_connection(
     # Build list of RPC URLs to try
     rpc_urls_to_try = []
 
-    # Check for explicit chain-specific config first (takes precedence)
-    urls_key = f"EVM_RPC_URLS_{chain_id}"
-    urls_value = os.getenv(urls_key)
+    # Check for explicit chain-specific config first; plain EVM_RPC_URLS is the fallback
+    # because the Layer CHAIN_ID already determines the bridge chain (bridge_networks.py).
+    suffixed_value = os.getenv(f"EVM_RPC_URLS_{chain_id}")
+    urls_value = suffixed_value or os.getenv("EVM_RPC_URLS")
+    urls_key = f"EVM_RPC_URLS_{chain_id}" if suffixed_value else "EVM_RPC_URLS"
 
     if urls_value:
         # Parse comma-separated URLs
@@ -105,14 +109,14 @@ def get_web3_connection(
                 logger.error(
                     f"No RPC URL configured for chain {chain_id}. "
                     f"INFURA_API_KEY only supports chains: {list(infura_rpc_urls.keys())}. "
-                    f"Set EVM_RPC_URLS_{chain_id} for other chains."
+                    f"Set EVM_RPC_URLS (or EVM_RPC_URLS_{chain_id}) for other chains."
                 )
                 return None
         else:
             if required:
                 logger.error(
                     f"No RPC URL configured for chain {chain_id}. "
-                    f"Set INFURA_API_KEY (for chains 1, 11155111) or EVM_RPC_URLS_{chain_id} (comma-separated URLs)"
+                    f"Set INFURA_API_KEY (for chains 1, 11155111) or EVM_RPC_URLS[_<chain_id>] (comma-separated URLs)"
                 )
             return None
 
@@ -301,51 +305,6 @@ def invalidate_web3_connection(chain_id: int) -> None:
     _web3_cache.pop(chain_id, None)
     _web3_cache_source.pop(chain_id, None)
     logger.info(f"Invalidated cached Web3 connection for chain {chain_id}")
-
-
-def get_secondary_connection(chain_id: int) -> Web3 | None:
-    """Get a Web3 connection to chain_id from a *different* provider than the primary.
-
-    Lookup order:
-    1. BRIDGE_SECONDARY_RPC_URL env var (explicit override, never cached)
-    2. Rotation: the first entry in EVM_RPC_URLS_{chain_id} that differs from the URL
-       backing the currently cached primary connection.
-
-    Returns None when no distinct provider is configured — the bridge reconciler then runs its
-    second check on the same endpoint (single-RPC deployments still auto-dispute).
-    """
-    secondary_url = os.getenv("BRIDGE_SECONDARY_RPC_URL")
-    if secondary_url:
-        try:
-            w3 = Web3(Web3.HTTPProvider(secondary_url.strip()))
-            _ = w3.eth.block_number
-            logger.info(f"Using BRIDGE_SECONDARY_RPC_URL as secondary provider for chain {chain_id}")
-            return w3
-        except Exception as e:
-            logger.error(f"BRIDGE_SECONDARY_RPC_URL failed to connect for chain {chain_id}: {e}")
-            return None
-
-    # Fallback: rotate to a different entry in the chain's URL list
-    urls_value = os.getenv(f"EVM_RPC_URLS_{chain_id}")
-    if not urls_value:
-        logger.warning(f"No secondary provider available for chain {chain_id} (set BRIDGE_SECONDARY_RPC_URL)")
-        return None
-
-    urls = [url.strip() for url in urls_value.split(",") if url.strip()]
-    primary_url = _web3_cache_source.get(chain_id)
-    candidates = [u for u in urls if u != primary_url]
-    if not candidates:
-        logger.warning(f"Chain {chain_id} URL list has no entry distinct from the primary; no secondary provider")
-        return None
-
-    try:
-        w3 = Web3(Web3.HTTPProvider(candidates[0]))
-        _ = w3.eth.block_number
-        logger.info(f"Using rotated provider for chain {chain_id} secondary checks")
-        return w3
-    except Exception as e:
-        logger.error(f"Secondary RPC {candidates[0]} failed for chain {chain_id}: {e}")
-        return None
 
 
 def clear_cache() -> None:

@@ -8,6 +8,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from layer_values_monitor.bridge_networks import (
+    BRIDGE_CONTRACT_ENVS,
+    resolve_bridge_chain_id,
+    resolve_contract_address,
+    validate_bridge_rpc,
+)
 from layer_values_monitor.bridge_reconciler import bridge_reconcile_loop
 from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
@@ -208,6 +214,19 @@ async def start() -> None:
     # Terminal summary of config
     supported_types = list(config_watcher.query_types.keys())
     console_logger.info(f"✅ Monitoring {len(supported_types)} query types: {', '.join(supported_types)}")
+
+    # Bridge config summary: env override or built-in default per query version (bridge_networks)
+    if any(config_watcher.is_supported_query_type(t) for t in ("TRBBridge", "TRBBridgeV2")):
+        for env_name in BRIDGE_CONTRACT_ENVS:
+            resolved = resolve_contract_address(env_name, logger=logger)
+            source = "env override" if os.getenv(env_name) else ("built-in default" if resolved else "MISSING")
+            console_logger.info(f"🌉 Bridge contract {env_name}: {resolved} ({source})")
+        evm_chain = resolve_bridge_chain_id(logger=logger)
+        env_src = "env override" if os.getenv("TRBBRIDGE_CHAIN_ID") else "built-in default"
+        console_logger.info(f"🌉 Bridge EVM chain ID: {evm_chain} ({env_src})")
+        # Fatal if a configured bridge RPC answers a different chain: wrong-chain reads
+        # could produce a wrong trusted value (startup is the last cheap place to refuse).
+        validate_bridge_rpc(logger=logger)
 
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events

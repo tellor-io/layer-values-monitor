@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 # Row statuses
 STATUS_UNVERIFIED = "unverified"  # Tier 1 fetch failed; Tier 2 must retry
 STATUS_VERIFIED_OK = "verified_ok"  # trusted value matched the report (terminal)
-STATUS_MISMATCH_PENDING = "mismatch_pending"  # needs second-provider confirmation
-STATUS_DISPUTED = "disputed"  # double-confirmed mismatch, dispute queued (terminal)
+STATUS_MISMATCH_PENDING = "mismatch_pending"  # mismatch seen; next anchored recheck confirms
+STATUS_DISPUTED = "disputed"  # mismatch confirmed on anchored re-read, dispute queued (terminal)
 STATUS_RESOLVED_LAG = "resolved_lag"  # mismatch cleared on recheck (terminal)
 STATUS_EXPIRED_UNRESOLVED = "expired_unresolved"  # 12h dispute window elapsed, no verdict (terminal)
 STATUS_UNVERIFIABLE = "unverifiable"  # deposit invisible after N rechecks; flag for humans (terminal)
@@ -44,14 +44,9 @@ RECHECK_STATUSES = (STATUS_UNVERIFIED, STATUS_MISMATCH_PENDING)
 DISPUTE_WINDOW_HOURS = 12
 DEFAULT_RECONCILE_INTERVAL = 120  # seconds between reconciler cycles
 DEFAULT_UNVERIFIABLE_RETRIES = 6  # recheck cycles before flagging a row unverifiable
-DEFAULT_REPORT_WINDOW_BLOCKS = 2000  # TRBBridgeV2 registry dataspec ReportBlockWindow (x/registry, v6.1.4 upgrade)
-DEFAULT_LAYER_BLOCK_SECONDS = 12.0  # block-time estimate to turn the window into seconds
-# min report age before declaring "no Deposit event" ever happened; the sweep only follows
-# `finalized`, so a report on a very recent deposit legitimately outruns it for a few minutes
+# min report age before declaring "no Deposit event" ever happened; the sweep trails the
+# tip by up to a reconcile interval, so a report on a very recent deposit outruns it briefly
 DEFAULT_NO_LOG_GRACE = 1800
-# a detected mismatch older than this disputes on its last anchored read when no re-check
-# is possible at all (RPC loss / secondary dead), instead of expiring undisputed
-DEFAULT_NO_RPC_DISPUTE_HOURS = 2.0
 DEFAULT_SWEEP_LOOKBACK_HOURS = 24
 DEFAULT_SWEEP_CHUNK_BLOCKS = 2000
 
@@ -259,7 +254,8 @@ class BridgeLedger:
 
         Restricted to reports made after the log sweep started covering events, and
         older than `grace_s`: a report on a very recent deposit outruns the sweep
-        (which only follows `finalized`), so a missing log proves nothing yet.
+        (which trails the tip by up to a reconcile interval), so a missing log
+        proves nothing yet.
         """
         now = time.time() if now is None else now
         rows = self.conn.execute(
@@ -321,47 +317,6 @@ class BridgeLedger:
             (contract_address, deposit_id),
         ).fetchone()
         return row is not None
-
-    def pending_missing_reports(self, now: float | None = None, window_s: float = 24_000) -> list[dict]:
-        """Eth deposits whose Layer reporting window has CLOSED with no report row yet (not alerted).
-
-        Anchored on the deposit's block timestamp when known (the window is defined on-chain
-        relative to the deposit), falling back to first-seen time for rows predating block_ts.
-        """
-        now = time.time() if now is None else now
-        rows = self.conn.execute(
-            """
-            SELECT e.* FROM eth_deposits e
-            WHERE e.missing_alerted = 0
-              AND COALESCE(e.block_ts, e.first_seen_ts) + ? <= ?
-              AND NOT EXISTS (
-                  SELECT 1 FROM bridge_deposits b
-                  WHERE b.contract_address = e.contract_address AND b.deposit_id = e.deposit_id
-              )
-            """,
-            (window_s, now),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def resolve_missing_report(self, contract_address: str, deposit_id: int) -> None:
-        """Quietly retire a pending missing-report deposit (e.g. late report found on oracle)."""
-        self.conn.execute(
-            "UPDATE eth_deposits SET missing_alerted = 1 WHERE contract_address = ? AND deposit_id = ?",
-            (contract_address, deposit_id),
-        )
-        self.conn.commit()
-
-    def mark_missing_report(self, contract_address: str, deposit_id: int) -> bool:
-        """Flag an eth deposit as missing its Layer report. Returns True on the first flag (alert-once)."""
-        cur = self.conn.execute(
-            """
-            UPDATE eth_deposits SET missing_report = 1, missing_alerted = 1
-            WHERE contract_address = ? AND deposit_id = ? AND missing_alerted = 0
-            """,
-            (contract_address, deposit_id),
-        )
-        self.conn.commit()
-        return cur.rowcount > 0
 
     # ------------------------------------------------------------------
     # meta

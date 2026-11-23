@@ -119,34 +119,6 @@ class TestEthDeposits:
         assert ledger.has_eth_deposit(CONTRACT, 7) is True
         assert ledger.has_eth_deposit(CONTRACT, 8) is False
 
-    def test_pending_missing_reports_and_alert_once(self, ledger):
-        insert(ledger, tx_hash="0xtx1", status=STATUS_VERIFIED_OK, deposit_id=7)
-        ledger.record_eth_deposit(CONTRACT, 7, "0xethA", 100)
-        ledger.record_eth_deposit(CONTRACT, 8, "0xethB", 200)
-
-        now = time.time()
-        # reporting window still open; nothing pending yet
-        assert ledger.pending_missing_reports(now=now, window_s=3600) == []
-
-        # Two hours later, deposit 8 (no Layer report) is pending; deposit 7 is covered
-        pending = ledger.pending_missing_reports(now=now + 7200, window_s=3600)
-        assert [r["deposit_id"] for r in pending] == [8]
-
-        assert ledger.mark_missing_report(CONTRACT, 8) is True
-        assert ledger.mark_missing_report(CONTRACT, 8) is False  # alert-once
-        assert ledger.pending_missing_reports(now=now + 7200, window_s=3600) == []
-
-    def test_missing_window_anchored_on_block_ts(self, ledger):
-        """A deposit swept long after it happened must not be 'pending' until ITS window closes."""
-        now = time.time()
-        ledger.record_eth_deposit(CONTRACT, 9, "0xethC", 300, block_ts=now)
-        ledger.conn.execute("UPDATE eth_deposits SET first_seen_ts=? WHERE deposit_id=9", (now - 86_400,))
-        ledger.conn.commit()
-        # first_seen is a day old, but the deposit itself just happened: window open
-        assert ledger.pending_missing_reports(now=now + 1800, window_s=3600) == []
-        pending = ledger.pending_missing_reports(now=now + 7200, window_s=3600)
-        assert [r["deposit_id"] for r in pending] == [9]
-
     def test_rows_without_log(self, ledger):
         insert(ledger, tx_hash="0xtx1", status=STATUS_MISMATCH_PENDING, deposit_id=7)
         insert(ledger, tx_hash="0xtx2", status=STATUS_MISMATCH_PENDING, deposit_id=8)
@@ -207,8 +179,8 @@ class TestSchemaMigration:
         led = BridgeLedger(path)
         cols = {r[1] for r in led.conn.execute("PRAGMA table_info(eth_deposits)")}
         assert "block_ts" in cols
-        # old rows stay usable through the first_seen_ts fallback
-        assert [r["deposit_id"] for r in led.pending_missing_reports(window_s=600)] == [7]
+        # old rows stay readable through the schema migration
+        assert [r["deposit_id"] for r in led.conn.execute("SELECT deposit_id FROM eth_deposits")] == [7]
         led.close()
 
     def test_migration_tolerates_reopen(self, tmp_path):

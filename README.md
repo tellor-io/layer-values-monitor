@@ -59,9 +59,11 @@ These can be set in `.env` or passed as positional CLI arguments.
 **Simple (Infura):**
 - `INFURA_API_KEY` - Auto-configures mainnet (chain 1) and Sepolia (chain 11155111)
 
-**Advanced (Custom/Backup):**
-- `EVM_RPC_URLS_<CHAIN_ID>` - Comma-separated RPC URLs per chain
-  - Example: `EVM_RPC_URLS_1="https://ethrpc1.com,https://ethrpc2.com"`
+**Recommended (Custom/Backup):**
+- `EVM_RPC_URLS` - Comma-separated RPC URLs; applies to the EVM chain implied by `CHAIN_ID`
+  (tellor-1 -> chain 1, layertest-5 -> chain 11155111)
+  - Example: `EVM_RPC_URLS="https://ethrpc1.com,https://ethrpc2.com"`
+- `EVM_RPC_URLS_<chain_id>` - Optional per-chain override; wins over the plain var
   - Example: `EVM_RPC_URLS_11155111="https://sepolia1.com,https://sepolia2.com"`
 
 ### TRB Bridge Monitoring
@@ -70,20 +72,33 @@ Required only when monitoring TRBBridge/TRBBridgeV2 query types.
 - `TRBBRIDGEV2_CONTRACT_ADDRESS` - Bridge contract address for TRBBridgeV2
 - `TRBBRIDGE_CHAIN_ID` - Bridge chain ID, shared by both versions (code default: `1`; set `11155111` for Sepolia)
 
+All three have built-in defaults selected by the monitored Layer chain (`CHAIN_ID`);
+the env vars above are overrides, required only on chains without a built-in default
+(e.g. local devnets):
+- `tellor-1` -> mainnet TokenBridgeV2 `0x6ec401744008f4B018Ed9A36f76e6629799Ee50E` for both
+  query versions (it is the only bridge contract on mainnet), `TRBBRIDGE_CHAIN_ID=1`
+- `layertest-5` -> Sepolia TokenBridge `0x62733e63499a25E35844c91275d4c3bdb159D29d` (v1) and
+  TokenBridgeV2 `0x55355157703A44f7516FBB831333317E98944e32`, `TRBBRIDGE_CHAIN_ID=11155111`
+  (exact match only — layertest-8 and other testnets do NOT inherit these; set the env vars)
+
+For `tellor-1` and `layertest-5`, `CHAIN_ID` + `EVM_RPC_URLS` is the complete bridge
+configuration — the EVM chain ID and both bridge contract addresses are built in.
+
+Startup gate: every configured bridge RPC (`EVM_RPC_URLS[_<chain>]` / Infura) is probed once at
+boot; an endpoint answering a different chain ID than the resolved `TRBBRIDGE_CHAIN_ID` is
+FATAL (the monitor refuses to start — a wrong-chain endpoint could otherwise produce wrong
+trusted values). A startup RPC outage only warns; runtime retries still apply.
+
 ### TRB Bridge Verification Ledger (two-tier)
 Every bridge report is journaled to a SQLite ledger (`data/bridge_ledger.db` by default) and
 re-verified by an in-process reconciler task. Tier 1 (stream) records and alerts but never
-disputes; the reconciler disputes a mismatch after a second check — a **second, different RPC
-provider** when configured, otherwise a same-endpoint re-read — against a finalized-anchored read.
-If no re-check read is possible at all (RPC loss), a mismatch older than
-`BRIDGE_NO_RPC_DISPUTE_HOURS` (default 2) disputes on its aged anchored evidence rather than
-expiring undisputed.
+disputes; the reconciler re-reads pending rows against a **finalized-anchored read on the
+primary RPC** — the read that still mismatches the report disputes (a mismatch first seen on an
+unverified row is marked, the next cycle's anchored re-read disputes it).
 - `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
 - `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
 - `BRIDGE_SWEEP_LOOKBACK_HOURS` - Deposit-event sweep window on cold start (default: `24`)
-- `BRIDGE_SECONDARY_RPC_URL` - Explicit second provider for mismatch double-confirmation
-  (unset = rotate to a different entry in `EVM_RPC_URLS_<chain>`; ops should pick a different vendor)
-- `BRIDGE_NO_RPC_DISPUTE_HOURS` - Aged-mismatch dispute threshold when re-checks are impossible (default: `2`)
+- `BRIDGE_NO_LOG_GRACE` - Min report age (s) before a missing Deposit log means "never emitted" (default: `1800`)
 
 Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
 (`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —

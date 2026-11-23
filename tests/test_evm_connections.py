@@ -38,6 +38,9 @@ def fake_web3(monkeypatch):
     EC_STATE["fail"] = set()
     EC_STATE["chain_id"] = 1
     monkeypatch.setattr(ec, "Web3", FakeWeb3)
+    # A developer's .env leaks in via conftest's load_dotenv — URL resolution must be deterministic.
+    for name in ("EVM_RPC_URLS", "EVM_RPC_URLS_1", "EVM_RPC_URLS_11155111", "INFURA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     ec.clear_cache()
     yield
     ec.clear_cache()
@@ -46,7 +49,6 @@ def fake_web3(monkeypatch):
 @pytest.fixture
 def url_list(monkeypatch):
     monkeypatch.setenv("EVM_RPC_URLS_1", "https://p.example,https://s.example,https://t.example")
-    monkeypatch.delenv("BRIDGE_SECONDARY_RPC_URL", raising=False)
 
 
 class TestAttemptRotation:
@@ -83,35 +85,18 @@ class TestAttemptRotation:
         ec.invalidate_web3_connection(999)
 
 
-class TestSecondaryConnection:
-    def test_explicit_secondary_env(self, url_list, monkeypatch):
-        monkeypatch.setenv("BRIDGE_SECONDARY_RPC_URL", "https://explicit-secondary.example")
-        w3 = ec.get_secondary_connection(1)
-        assert w3.provider == "https://explicit-secondary.example"
+class TestPlainEvmRpcUrls:
+    """get_web3_connection falls back to plain EVM_RPC_URLS when EVM_RPC_URLS_<chain> is unset."""
 
-    def test_secondary_fails_returns_none(self, url_list, monkeypatch):
-        EC_STATE["fail"].add("https://explicit-secondary.example")
-        monkeypatch.setenv("BRIDGE_SECONDARY_RPC_URL", "https://explicit-secondary.example")
-        assert ec.get_secondary_connection(1) is None
+    def test_plain_urls_used_when_suffix_absent(self, monkeypatch):
+        monkeypatch.setenv("EVM_RPC_URLS", "https://plain1.example,https://plain2.example")
+        w3 = ec.get_web3_connection(1)
+        assert w3 is not None
+        assert w3.provider == "https://plain1.example"
 
-    def test_secondary_rotates_away_from_cached_primary(self, url_list):
-        ec.get_web3_connection(1)  # caches p as the primary source
-        w3 = ec.get_secondary_connection(1)
-        assert w3.provider == "https://s.example"  # first entry distinct from p
-
-    def test_secondary_rotates_when_primary_is_backup(self, url_list):
-        EC_STATE["fail"].add("https://p.example")
-        ec.get_web3_connection(1)  # primary dead → s cached as the source
-        EC_STATE["fail"].discard("https://p.example")  # provider recovered, but cache source stays s
-        w3 = ec.get_secondary_connection(1)
-        assert w3.provider == "https://p.example"  # distinct from cached source
-
-    def test_secondary_none_without_url_list(self, monkeypatch):
-        monkeypatch.delenv("EVM_RPC_URLS_1", raising=False)
-        monkeypatch.delenv("BRIDGE_SECONDARY_RPC_URL", raising=False)
-        assert ec.get_secondary_connection(1) is None
-
-    def test_secondary_none_when_only_primary_exists(self, monkeypatch):
-        monkeypatch.setenv("EVM_RPC_URLS_1", "https://only.example")
-        ec.get_web3_connection(1)
-        assert ec.get_secondary_connection(1) is None
+    def test_suffixed_urls_take_precedence_over_plain(self, monkeypatch):
+        monkeypatch.setenv("EVM_RPC_URLS", "https://wrong-chain-default.example")
+        monkeypatch.setenv("EVM_RPC_URLS_1", "https://right-chain-specific.example")
+        w3 = ec.get_web3_connection(1)
+        assert w3 is not None
+        assert w3.provider == "https://right-chain-specific.example"

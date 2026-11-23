@@ -292,7 +292,7 @@ def make_provider_builder(chain_id: int, rpc_url: str | None = None, logger: Any
     """Build the stream/reconciler provider factory with failover + TelliotConfig fallback.
 
     attempt > 0 invalidates the cached connection (a dead primary must not latch) and asks
-    the connection manager to rotate to a different URL from EVM_RPC_URLS_{chain_id}.
+    the connection manager to rotate to a different URL from EVM_RPC_URLS[_<chain_id>].
     """
     if logger is None:
         logger = logging.getLogger(__name__)

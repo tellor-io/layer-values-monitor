@@ -17,6 +17,7 @@ from layer_values_monitor.bridge_ledger import (
     STATUS_VERIFIED_OK,
     get_bridge_ledger,
 )
+from layer_values_monitor.bridge_networks import resolve_bridge_chain_id, resolve_contract_address
 from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
@@ -1850,12 +1851,15 @@ async def inspect_trbbridge_reports(
     logger: the logger object
     contract_address_env: env var name for the bridge contract address
     """
-    raw_contract = os.getenv(contract_address_env)
-    chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
+    # Env override first, then built-in defaults keyed by the Layer chain (bridge_networks).
+    raw_contract = resolve_contract_address(contract_address_env, logger=logger)
+    chain_id = resolve_bridge_chain_id(logger=logger)
     rpc_url = None  # Let trb_bridge.py handle RPC URL lookup via unified manager
 
     if not raw_contract:
-        logger.error(f"{contract_address_env} environment variable is not set")
+        logger.error(
+            f"{contract_address_env} not set (and no built-in default for Layer chain '{os.getenv('CHAIN_ID', '')}')"
+        )
         return None
 
     # Store the checksummed form: the reconciler's ledger joins (missing-report, rows-without-log)

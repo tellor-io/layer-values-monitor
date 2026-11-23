@@ -173,6 +173,7 @@ async def test_inspect_trbbridge_reports_defaults_to_chain_id_one(monkeypatch):
 
     monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", "0x62733e63499a25E35844c91275d4c3bdb159D29d")
     monkeypatch.delenv("TRBBRIDGE_CHAIN_ID", raising=False)
+    monkeypatch.delenv("CHAIN_ID", raising=False)  # no Layer chain hint -> historical chain-1 fallback
 
     report = NewReport(
         query_type="TRBBridge",
