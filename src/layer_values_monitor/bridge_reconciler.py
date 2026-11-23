@@ -112,7 +112,9 @@ def _query_type_for_contract(contract_address: str) -> str:
             return qtype
     # No configured contract matches (env rotated/removed after the row was recorded):
     # V2 is the live default, but the alert's QueryId may then be computed with the wrong typeString.
-    logging.getLogger(__name__).warning(f"bridge query-type lookup: no env match for contract {contract_address}; assuming TRBBridgeV2")
+    logging.getLogger(__name__).warning(
+        f"bridge query-type lookup: no env match for contract {contract_address}; assuming TRBBridgeV2"
+    )
     return "TRBBridgeV2"
 
 

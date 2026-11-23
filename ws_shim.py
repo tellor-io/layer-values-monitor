@@ -17,10 +17,14 @@ put a shim in front of quistis:26257 that:
 
 Run:  .venv/bin/python ws_shim.py   (listens on 0.0.0.0:26157)
 """
-import asyncio, json, logging, time
+import asyncio
+import json
+import logging
+import time
+
 import aiohttp
-from aiohttp import web
 import websockets
+from aiohttp import web
 
 UPSTREAM_RPC = "http://localhost:26257"
 UPSTREAM_WS = "ws://localhost:26257/websocket"
@@ -31,11 +35,13 @@ log = logging.getLogger("shim")
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
+    """Serve LVM's /websocket: ack subscribes, forward expanded tx events."""
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     out: asyncio.Queue = asyncio.Queue()
 
-    async def upstream():
+    async def upstream() -> None:
+        """Hold a rotating tm.event='Tx' upstream sub, feeding the out queue."""
         # The node's WS event bus wedges per-subscription after a few minutes
         # (chain-side bug), so rotate the upstream subscription every ROTATE_S.
         ROTATE_S, last_rotate = 60.0, 0.0
@@ -61,7 +67,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             break
                         try:
                             msg = await asyncio.wait_for(u.recv(), timeout=2.0)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             continue
                         frame = json.loads(msg)
                         ev = (frame.get("result") or {}).get("events") or {}
@@ -87,10 +93,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         finally:
             await out.put(None)  # poison pill -> close client
 
-    async def expand_tx_events(txhash, height):
-        """Return flat events dict (new_report.* prefixed) if the block
-        contains a new_report event, else None. Uses block_results (indexed
-        at commit) because tx?hash relies on the lagging tx index."""
+    async def expand_tx_events(txhash: str, height: str | int | None) -> dict | None:
+        """Return flat new_report.* events dict for the block, else None.
+
+        Uses block_results (indexed at commit) because tx?hash relies on the
+        lagging tx index.
+        """
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as sess:
                 async with sess.get(f"{UPSTREAM_RPC}/block_results",
@@ -157,6 +165,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
 
 async def http_proxy(request: web.Request) -> web.Response:
+    """Proxy any non-WS request through to the node RPC unchanged."""
     url = UPSTREAM_RPC + request.path_qs
     body = await request.read()
     async with aiohttp.ClientSession() as sess:
@@ -167,6 +176,7 @@ async def http_proxy(request: web.Request) -> web.Response:
 
 
 def main() -> None:
+    """Run the shim (WS handler + catch-all HTTP proxy) on LISTEN."""
     app = web.Application()
     app.router.add_get("/websocket", ws_handler)
     app.router.add_route("*", "/{tail:.*}", http_proxy)

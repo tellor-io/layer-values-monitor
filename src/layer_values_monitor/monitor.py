@@ -486,7 +486,9 @@ async def listen_to_websocket_events(
                     probe_interval = max(1.0, WS_STALL_TIMEOUT_SECONDS / 4)
                     while True:
                         await asyncio.sleep(probe_interval)
-                        idle_for = time.monotonic() - last_message_time
+                        # Late binding is intended: the watchdog must see every
+                        # update the recv loop makes to last_message_time.
+                        idle_for = time.monotonic() - last_message_time  # noqa: B023
                         if idle_for < WS_STALL_TIMEOUT_SECONDS:
                             continue
                         current_height = await get_current_height(uri)
