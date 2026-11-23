@@ -1,5 +1,6 @@
 """Tests for the bridge deposit ledger (SQLite journal)."""
 
+import sqlite3
 import time
 
 from layer_values_monitor.bridge_ledger import (
@@ -170,3 +171,53 @@ class TestMeta:
         assert ledger.get_meta("cursor") == "123"
         ledger.set_meta("cursor", "456")
         assert ledger.get_meta("cursor") == "456"
+
+
+class TestSchemaMigration:
+    """The eth_deposits.block_ts addition must upgrade a DB written before the column existed."""
+
+    OLD_ETH_DEPOSITS = """
+        CREATE TABLE eth_deposits (
+            contract_address TEXT NOT NULL,
+            deposit_id       INTEGER NOT NULL,
+            eth_tx_hash      TEXT,
+            log_block        INTEGER,
+            reported_json    TEXT,
+            first_seen_ts    REAL NOT NULL,
+            missing_report   INTEGER NOT NULL DEFAULT 0,
+            missing_alerted  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (contract_address, deposit_id)
+        );
+    """
+
+    def _make_old_db(self, path):
+        conn = sqlite3.connect(path)
+        conn.executescript(self.OLD_ETH_DEPOSITS)
+        conn.execute(
+            "INSERT INTO eth_deposits (contract_address, deposit_id, first_seen_ts) VALUES (?, ?, ?)",
+            (CONTRACT, 7, time.time() - 86_400),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_block_ts_added_to_existing_db(self, tmp_path):
+        path = str(tmp_path / "old.db")
+        self._make_old_db(path)
+
+        led = BridgeLedger(path)
+        cols = {r[1] for r in led.conn.execute("PRAGMA table_info(eth_deposits)")}
+        assert "block_ts" in cols
+        # old rows stay usable through the first_seen_ts fallback
+        assert [r["deposit_id"] for r in led.pending_missing_reports(window_s=600)] == [7]
+        led.close()
+
+    def test_migration_tolerates_reopen(self, tmp_path):
+        path = str(tmp_path / "old.db")
+        self._make_old_db(path)
+
+        BridgeLedger(path).close()
+        led2 = BridgeLedger(path)  # ALTER guard must make the re-run a no-op
+        cols = {r[1] for r in led2.conn.execute("PRAGMA table_info(eth_deposits)")}
+        assert "block_ts" in cols
+        assert led2.conn.execute("SELECT COUNT(*) FROM eth_deposits").fetchone()[0] == 1
+        led2.close()

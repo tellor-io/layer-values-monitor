@@ -71,8 +71,9 @@ class BridgeLedger:
     def __init__(self, path: str | None = None) -> None:
         """Open (and create if needed) the ledger database at path."""
         self.path = path or default_ledger_path()
-        Path(self.path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        resolved = Path(self.path).expanduser().resolve()
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(resolved)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")

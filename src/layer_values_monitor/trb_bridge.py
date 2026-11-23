@@ -221,7 +221,8 @@ async def fetch_deposit(
 
     Returns:
         (deposit, error_kind) with deposit = (sender, layer_recipient, amount, tip) on success
-        (None otherwise) and error_kind in {"ok", "not_found", "zero_struct", "rpc_error"}.
+        (None otherwise) and error_kind in {"ok", "zero_struct", "rpc_error"}. A missing
+        deposit reads as the zero struct, so it surfaces as "zero_struct", not a separate kind.
 
     """
     if logger is None:

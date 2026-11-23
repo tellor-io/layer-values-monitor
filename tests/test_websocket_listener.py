@@ -295,3 +295,32 @@ async def test_stall_watchdog_holds_when_chain_height_not_advancing(
             await listener_task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_stall_watchdog_probe_failure_keeps_connection(
+    mock_websockets_connect, mock_websocket, event_queue
+):
+    """An unreachable height probe is not proof of a wedge: the socket must stay open."""
+    uri = "test-server.com"
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+    messages = [ack, _heartbeat_message(101)]
+    mock_websocket.recv.side_effect = _drain_then_hang(messages)
+
+    mock_websocket.close = AsyncMock()
+    height_tracker = HeightTracker()
+
+    with (
+        patch("layer_values_monitor.monitor.WS_STALL_TIMEOUT_SECONDS", 0.5),
+        patch("layer_values_monitor.monitor.get_current_height", AsyncMock(return_value=None)),
+    ):
+        listener_task = asyncio.create_task(
+            listen_to_websocket_events(uri, ["tm.event='NewBlock'"], event_queue, mock_logger, height_tracker)
+        )
+        await asyncio.sleep(2.0)  # several failed probe cycles with silence
+        mock_websocket.close.assert_not_awaited()
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
