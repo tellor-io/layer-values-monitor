@@ -229,5 +229,5 @@ async def test_inspect_trbbridge_reports_defaults_to_chain_id_one(monkeypatch):
                     with patch("layer_values_monitor.monitor.inspect", new=AsyncMock()):
                         await inspect_trbbridge_reports([report], asyncio.Queue(), report.query_id, metrics, logger)
 
-    mock_builder.assert_called_once_with(1, rpc_url=None, logger=logger)
+    mock_builder.assert_called_once_with(1, logger=logger)
     assert mock_fetch.await_args.args[2] == 0xABCD
