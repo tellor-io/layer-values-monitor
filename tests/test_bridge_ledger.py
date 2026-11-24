@@ -171,115 +171,58 @@ class TestStatusMigration:
         led2.close()
 
 
-class TestEthDeposits:
-    def test_record_and_duplicate(self, ledger):
-        assert ledger.record_eth_deposit(CONTRACT, 7, "0xeth", 100, REPORTED) is True
-        assert ledger.record_eth_deposit(CONTRACT, 7, "0xeth", 100, REPORTED) is False
-        assert ledger.has_eth_deposit(CONTRACT, 7) is True
-        assert ledger.has_eth_deposit(CONTRACT, 8) is False
+class TestLegacySideTablesDropped:
+    """Opening an older ledger drops the sweep tables and keeps the report rows."""
 
-
-class TestMissingReports:
-    """Orphan alert window math: anchored on the deposit block, silent until the window closes."""
-
-    def test_pending_only_after_window_closes(self, ledger):
-        now = time.time()
-        ledger.record_eth_deposit(CONTRACT, 1, "0xethA", 100, REPORTED, block_ts=now - 700)  # window closed
-        ledger.record_eth_deposit(CONTRACT, 2, "0xethB", 101, REPORTED, block_ts=now - 100)  # still open
-        ledger.record_eth_deposit(CONTRACT, 3, "0xethC", 102, REPORTED, block_ts=now - 700)
-
-        # a report landed for deposit 3 — not orphan material
-        ledger.upsert_report(
-            tx_hash="0xrep3",
-            query_id="0xq3",
-            query_type="TRBBridge",
-            deposit_id=3,
-            reported_value=REPORTED,
-            status=STATUS_GOOD,
-            report_ts=now,
-            contract_address=CONTRACT,
-        )
-
-        pending = {r["deposit_id"] for r in ledger.pending_missing_reports(now=now, window_s=600)}
-        assert pending == {1}
-
-    def test_block_ts_none_falls_back_to_first_seen(self, ledger):
-        now = time.time()
-        ledger.record_eth_deposit(CONTRACT, 9, "0xethD", 100, REPORTED, block_ts=None)
-        ledger.conn.execute("UPDATE eth_deposits SET first_seen_ts = ? WHERE deposit_id = 9", (now - 700,))
-        ledger.conn.commit()
-        pending = ledger.pending_missing_reports(now=now, window_s=600)
-        assert [r["deposit_id"] for r in pending] == [9]
-
-    def test_mark_missing_report_alerts_once(self, ledger):
-        ledger.record_eth_deposit(CONTRACT, 1, "0xethA", 100, REPORTED, block_ts=time.time() - 700)
-        assert ledger.mark_missing_report(CONTRACT, 1) is True
-        assert ledger.mark_missing_report(CONTRACT, 1) is False
-        assert ledger.pending_missing_reports(window_s=600) == []
-
-    def test_resolve_missing_report_retires_silently(self, ledger):
-        ledger.record_eth_deposit(CONTRACT, 1, "0xethA", 100, REPORTED, block_ts=time.time() - 700)
-        ledger.resolve_missing_report(CONTRACT, 1)
-        assert ledger.pending_missing_reports(window_s=600) == []
-        row = ledger.conn.execute("SELECT missing_report FROM eth_deposits WHERE deposit_id = 1").fetchone()
-        assert row["missing_report"] == 0  # resolved, never marked missing
-
-
-class TestMeta:
-    def test_meta_roundtrip(self, ledger):
-        assert ledger.get_meta("cursor") is None
-        assert ledger.get_meta("cursor", "0") == "0"
-        ledger.set_meta("cursor", "123")
-        assert ledger.get_meta("cursor") == "123"
-        ledger.set_meta("cursor", "456")
-        assert ledger.get_meta("cursor") == "456"
-
-
-class TestSchemaMigration:
-    """The eth_deposits.block_ts addition must upgrade a DB written before the column existed."""
-
-    OLD_ETH_DEPOSITS = """
-        CREATE TABLE eth_deposits (
-            contract_address TEXT NOT NULL,
-            deposit_id       INTEGER NOT NULL,
-            eth_tx_hash      TEXT,
-            log_block        INTEGER,
-            reported_json    TEXT,
-            first_seen_ts    REAL NOT NULL,
-            missing_report   INTEGER NOT NULL DEFAULT 0,
-            missing_alerted  INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (contract_address, deposit_id)
-        );
-    """
-
-    def _make_old_db(self, path):
+    def test_eth_deposits_and_meta_removed(self, tmp_path):
+        path = str(tmp_path / "old.db")
         conn = sqlite3.connect(path)
-        conn.executescript(self.OLD_ETH_DEPOSITS)
+        conn.executescript(
+            """
+            CREATE TABLE bridge_deposits (
+                tx_hash TEXT PRIMARY KEY,
+                query_id TEXT NOT NULL,
+                query_type TEXT NOT NULL,
+                contract_address TEXT,
+                deposit_id INTEGER,
+                reported_json TEXT,
+                status TEXT NOT NULL,
+                state_ts REAL NOT NULL,
+                report_ts REAL NOT NULL,
+                retries INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                reporter TEXT,
+                power TEXT,
+                meta_id TEXT,
+                escalated INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE eth_deposits (
+                contract_address TEXT NOT NULL,
+                deposit_id INTEGER NOT NULL,
+                first_seen_ts REAL NOT NULL,
+                PRIMARY KEY (contract_address, deposit_id)
+            );
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO bridge_deposits
+                (tx_hash, query_id, query_type, status, state_ts, report_ts)
+            VALUES ('0xkeep', '0xq', 'TRBBridge', 'good', 1, 1)
+            """
+        )
         conn.execute(
             "INSERT INTO eth_deposits (contract_address, deposit_id, first_seen_ts) VALUES (?, ?, ?)",
-            (CONTRACT, 7, time.time() - 86_400),
+            (CONTRACT, 7, 1.0),
         )
+        conn.execute("INSERT INTO meta (key, value) VALUES ('deposit_floor_abc', '1')")
         conn.commit()
         conn.close()
 
-    def test_block_ts_added_to_existing_db(self, tmp_path):
-        path = str(tmp_path / "old.db")
-        self._make_old_db(path)
-
         led = BridgeLedger(path)
-        cols = {r[1] for r in led.conn.execute("PRAGMA table_info(eth_deposits)")}
-        assert "block_ts" in cols
-        # old rows stay readable through the schema migration
-        assert [r["deposit_id"] for r in led.conn.execute("SELECT deposit_id FROM eth_deposits")] == [7]
+        tables = {r[0] for r in led.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert "eth_deposits" not in tables
+        assert "meta" not in tables
+        assert led.get("0xkeep")["status"] == "good"
         led.close()
-
-    def test_migration_tolerates_reopen(self, tmp_path):
-        path = str(tmp_path / "old.db")
-        self._make_old_db(path)
-
-        BridgeLedger(path).close()
-        led2 = BridgeLedger(path)  # ALTER guard must make the re-run a no-op
-        cols = {r[1] for r in led2.conn.execute("PRAGMA table_info(eth_deposits)")}
-        assert "block_ts" in cols
-        assert led2.conn.execute("SELECT COUNT(*) FROM eth_deposits").fetchone()[0] == 1
-        led2.close()

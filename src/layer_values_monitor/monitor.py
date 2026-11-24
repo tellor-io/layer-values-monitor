@@ -1888,7 +1888,6 @@ async def inspect_trbbridge_reports(
     # Env override first, then built-in defaults keyed by the Layer chain (bridge_networks).
     raw_contract = resolve_contract_address(contract_address_env, logger=logger)
     chain_id = resolve_bridge_chain_id(logger=logger)
-    rpc_url = None  # Let trb_bridge.py handle RPC URL lookup via unified manager
 
     if not raw_contract:
         logger.error(
@@ -1896,8 +1895,7 @@ async def inspect_trbbridge_reports(
         )
         return None
 
-    # Store the checksummed form: the reconciler's ledger joins (missing-report, rows-without-log)
-    # compare contract_address by exact string against checksummed env values.
+    # Store the checksummed form so later contract reads use one canonical address.
     try:
         contract_address = Web3.to_checksum_address(raw_contract)
     except ValueError:
@@ -1908,7 +1906,7 @@ async def inspect_trbbridge_reports(
     logger.info(f"chain ID: {chain_id}")
 
     ledger = get_bridge_ledger()
-    provider_builder = make_provider_builder(chain_id, rpc_url=rpc_url, logger=logger)
+    provider_builder = make_provider_builder(chain_id, logger=logger)
 
     for r in reports:
         # Decode the reported value

@@ -109,20 +109,10 @@ for the reconciler. Tier 2 keeps the confirm read — a zero-struct or a mismatc
   seconds: it re-reads every `unverified` row **forever** with the confirm read (no retry cap,
   no expiry — a late `bad` inside the 12h window disputes, one after the window alerts
   "LATE VERDICT"). Dispute latency for a stream mismatch is one reconcile interval plus the
-  confirm delay. It also sweeps deposits from the contract's gapless `depositId()` counter
-  (no event-log scanning); alerts once per eth deposit whose Layer reporting window closes
-  with no report (confirmed against the oracle REST when `LAYER_REST_URL` is set); and
-  escalates once per row ~10h in with an "RPCs DOWN — ABOUT TO BE UNDISPUTABLE" alert.
+  confirm delay. It escalates once per row ~10h in with an "RPCs DOWN — ABOUT TO BE UNDISPUTABLE" alert.
 - `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
 - `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
 - `BRIDGE_CONFIRM_SECONDS` - Confirm re-read delay before a zero/mismatch goes `bad` (default: `60`)
-- `BRIDGE_REPORT_WINDOW_BLOCKS` × `BRIDGE_LAYER_BLOCK_SECONDS` - reporting window for the
-  missing-report alert (defaults `2000` × `12`; Tellor Layer mainnet needs `BRIDGE_LAYER_BLOCK_SECONDS=3`)
-- `LAYER_REST_URL` - Layer LCD/REST base for the oracle double-check before a missing-report alert
-- `BRIDGE_MISSING_REPORT_MAX_AGE_HOURS` - age cutoff for the missing-report alert; older
-  deposits retire silently so a fresh ledger's history backfill doesn't re-alert deposits
-  whose reports simply predate the ledger (e.g. old TRBBridge reports from before the
-  transition to TRBBridgeV2) (default: `24`)
 
 Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
 (`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —

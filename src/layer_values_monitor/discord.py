@@ -117,7 +117,7 @@ def deprecated_query_type_alert(
 
 
 def bridge_ledger_alert(description: str, details: dict) -> None:
-    """Send a bridge verification alert (unverified / deadline / resolved / missing report).
+    """Send a bridge verification alert (unverified / deadline / resolved).
 
     Args:
         description: Discord description line, e.g. "🌉 **BRIDGE REPORT UNVERIFIED**"

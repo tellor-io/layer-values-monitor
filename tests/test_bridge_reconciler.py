@@ -1,4 +1,4 @@
-"""Tests for the Tier 2 bridge reconciler (retry-forever, verdict disputes, counter sweep, deadlines)."""
+"""Tests for the Tier 2 bridge reconciler (retry-forever, verdict disputes, deadlines)."""
 
 import asyncio
 import time
@@ -12,15 +12,11 @@ from layer_values_monitor.bridge_ledger import (
     BridgeLedger,
 )
 from layer_values_monitor.bridge_reconciler import (
-    _deposit_block_ts,
     bridge_reconcile_loop,
     check_deadlines,
-    check_missing_reports,
     run_reconcile_cycle,
-    sweep_deposits,
 )
 from layer_values_monitor.custom_types import Metrics, Msg
-from layer_values_monitor.trb_bridge import ZERO_ADDRESS
 
 import pytest
 
@@ -28,11 +24,6 @@ CONTRACT = "0x62733e63499a25E35844c91275d4c3bdb159D29d"
 REPORTED = {"eth_address": "0xaaa", "layer_address": "tellor1x", "amount": 100, "tip": 1}
 TRUSTED = {"eth_address": "0xaaa", "layer_address": "tellor1x", "amount": 100, "tip": 1}
 WRONG = {"eth_address": "0xbbb", "layer_address": "tellor1x", "amount": 55, "tip": 1}
-ZERO_STRUCT = (ZERO_ADDRESS, "", 0, 0, 0)
-
-
-def deposit_struct(amount=100, block=100):
-    return ("0x7660794ef8f978ea0922dc29b3b534d93e1fc94a", "tellor1x", amount, 1, block)
 
 
 def fake_metrics(warning=1.0):
@@ -52,18 +43,6 @@ def ledger(tmp_path):
     led = BridgeLedger(str(tmp_path / "ledger.db"))
     yield led
     led.close()
-
-
-@pytest.fixture(autouse=True)
-def bridge_env(monkeypatch):
-    monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", CONTRACT)
-    monkeypatch.delenv("TRBBRIDGEV2_CONTRACT_ADDRESS", raising=False)
-    monkeypatch.delenv("TRBBRIDGE_CHAIN_ID", raising=False)
-    monkeypatch.delenv("CHAIN_ID", raising=False)
-    monkeypatch.delenv("LAYER_REST_URL", raising=False)
-    monkeypatch.setenv("BRIDGE_REPORT_WINDOW_BLOCKS", "1000")
-    monkeypatch.setenv("BRIDGE_LAYER_BLOCK_SECONDS", "3")
-    monkeypatch.delenv("BRIDGE_MISSING_REPORT_MAX_AGE_HOURS", raising=False)
 
 
 def add_row(ledger, tx_hash="0xtx1", status=STATUS_UNVERIFIED, retries=0, report_ts=None, deposit_id=7):
@@ -91,19 +70,17 @@ def make_config_watcher(warning=1.0):
 
 
 def patched(verdict_result):
-    """Run-a-cycle patches: scripted verdict, no sweep, no orphan check."""
+    """Run-a-cycle patches: scripted verdict."""
     return (
         patch("layer_values_monitor.bridge_reconciler.make_provider_builder", return_value=MagicMock()),
         patch("layer_values_monitor.bridge_reconciler.get_bridge_verdict", new=AsyncMock(return_value=verdict_result)),
-        patch("layer_values_monitor.bridge_reconciler.sweep_deposits", new=AsyncMock()),
-        patch("layer_values_monitor.bridge_reconciler.check_missing_reports", new=AsyncMock()),
     )
 
 
 async def run_cycle_with_verdict(ledger, q, verdict_result, warning=1.0):
     """Run one cycle with a scripted verdict. Returns the bridge_ledger_alert mock used."""
     ps = patched(verdict_result)
-    with ps[0], ps[1], ps[2], ps[3], patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
+    with ps[0], ps[1], patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
         await run_reconcile_cycle(
             ledger, q, make_config_watcher(warning=warning), MagicMock(), interval=0, chain_id=11155111
         )
@@ -215,276 +192,6 @@ class TestDeadlines:
         with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
             await check_deadlines(ledger, MagicMock())
         alert.assert_not_called()
-
-
-class TestCounterSweep:
-    def make_w3(self, counter, structs, probe_error_at=None):
-        """Fake Web3: depositId() -> counter; deposits(i) -> struct or zero struct."""
-        probed = []
-        bridge = MagicMock()
-        bridge.functions.depositId.return_value.call.return_value = counter
-
-        def deposits(dep_id):
-            probed.append(dep_id)
-            if probe_error_at is not None and dep_id == probe_error_at:
-                det = SimpleNamespace(call=MagicMock(side_effect=Exception("rpc down")))
-            else:
-                det = SimpleNamespace(call=lambda: structs.get(dep_id, ZERO_STRUCT))
-            return det
-
-        bridge.functions.deposits.side_effect = deposits
-        w3 = MagicMock()
-        w3.eth.contract.return_value = bridge
-        w3.eth.get_block.return_value = {"timestamp": 1_700_000_000}
-        return w3, probed
-
-    @pytest.mark.asyncio
-    async def test_first_run_backfill_stops_at_init_floor(self, ledger):
-        """Mainnet V2 was seeded from V1: ids below the init read zero — that's the floor.
-
-        depositId() is the LAST ISSUED id (deposit() writes deposits[depositId] after ++),
-        so the probe starts AT the counter and the counter's own deposit is recorded.
-        """
-        w3, probed = self.make_w3(
-            counter=3, structs={1: deposit_struct(10), 2: deposit_struct(20), 3: deposit_struct(30)}
-        )
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-
-        assert probed == [3, 2, 1, 0, 0]  # the init-floor zero is read once more, then accepted
-        assert ledger.has_eth_deposit(CONTRACT, 1) is True
-        assert ledger.has_eth_deposit(CONTRACT, 2) is True
-        assert ledger.has_eth_deposit(CONTRACT, 3) is True
-        assert ledger.has_eth_deposit(CONTRACT, 0) is False  # below the seeded floor
-        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") == "1"
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "4"
-
-        row = ledger.conn.execute("SELECT * FROM eth_deposits WHERE deposit_id = 1").fetchone()
-        assert row["eth_tx_hash"] == ""  # unknown from a state read
-        assert row["block_ts"] == 1_700_000_000  # anchored on the deposit block
-        assert row["log_block"] == 100
-
-    @pytest.mark.asyncio
-    async def test_first_run_backfill_aborts_on_rpc_error(self, ledger):
-        """A transient RPC error must not truncate history or record a floor."""
-        w3, _ = self.make_w3(counter=2, structs={1: deposit_struct(), 2: deposit_struct()}, probe_error_at=2)
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") is None
-        assert ledger.has_eth_deposit(CONTRACT, 1) is False
-
-    @pytest.mark.asyncio
-    async def test_counter_advance_records_only_new_ids(self, ledger):
-        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
-        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
-        w3, probed = self.make_w3(
-            counter=4,
-            structs={0: deposit_struct(), 1: deposit_struct(), 2: deposit_struct(30),
-                     3: deposit_struct(40), 4: deposit_struct(50)},
-        )
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == [2, 3, 4]  # the counter's own id is the newest real deposit
-        assert ledger.has_eth_deposit(CONTRACT, 2) is True
-        assert ledger.has_eth_deposit(CONTRACT, 3) is True
-        assert ledger.has_eth_deposit(CONTRACT, 4) is True
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
-
-        # no counter movement: probe nothing, change nothing
-        probed.clear()
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == []
-
-    @pytest.mark.asyncio
-    async def test_counter_decrease_is_silent_noop(self, ledger):
-        """Reorg rewinds depositId(): cursor stays put, no alerts, no re-probing."""
-        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
-        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "5")
-        w3, probed = self.make_w3(counter=3, structs={})
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == []
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
-
-
-    @pytest.mark.asyncio
-    async def test_backfill_zero_at_counter_does_not_set_floor(self, ledger):
-        """A zero at the counter before anything is recorded retries next cycle."""
-        w3, probed = self.make_w3(counter=5, structs={})
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == [5]
-        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") is None
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") is None
-        assert ledger.has_eth_deposit(CONTRACT, 5) is False
-
-    @pytest.mark.asyncio
-    async def test_backfill_nonzero_reread_continues(self, ledger):
-        """A zero that is non-zero on the second read is a real deposit, not the floor."""
-        calls: dict[int, int] = {}
-        probed = []
-
-        def deposits(dep_id):
-            probed.append(dep_id)
-            calls[dep_id] = calls.get(dep_id, 0) + 1
-            if dep_id == 1 and calls[dep_id] == 1:
-                value = ZERO_STRUCT
-            elif dep_id == 0:
-                value = ZERO_STRUCT
-            else:
-                value = deposit_struct(dep_id * 10)
-            return SimpleNamespace(call=lambda value=value: value)
-
-        bridge = MagicMock()
-        bridge.functions.depositId.return_value.call.return_value = 2
-        bridge.functions.deposits.side_effect = deposits
-        w3 = MagicMock()
-        w3.eth.contract.return_value = bridge
-        w3.eth.get_block.return_value = {"timestamp": 1_700_000_000}
-
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == [2, 1, 1, 0, 0]
-        assert ledger.has_eth_deposit(CONTRACT, 2) is True
-        assert ledger.has_eth_deposit(CONTRACT, 1) is True
-        assert ledger.has_eth_deposit(CONTRACT, 0) is False
-        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") == "1"
-
-    @pytest.mark.asyncio
-    async def test_forward_zero_stops_cursor(self, ledger):
-        """A zero above the floor holds the cursor on that id, like an RPC failure."""
-        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
-        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
-        w3, probed = self.make_w3(counter=4, structs={2: deposit_struct(30), 4: deposit_struct(50)})
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert probed == [2, 3]
-        assert ledger.has_eth_deposit(CONTRACT, 2) is True
-        assert ledger.has_eth_deposit(CONTRACT, 4) is False
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "3"
-        assert ledger.get_meta(f"deposit_zero_strikes_{CONTRACT.lower()}") == "3:1"
-
-    @pytest.mark.asyncio
-    async def test_forward_zero_advances_after_three_cycles(self, ledger):
-        """Three cycles stuck on the same zero id step past it so newer deposits are not frozen."""
-        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
-        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
-        w3, _ = self.make_w3(counter=4, structs={2: deposit_struct(30), 4: deposit_struct(50)})
-        for _cycle in range(2):
-            await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-            assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "3"
-            assert ledger.has_eth_deposit(CONTRACT, 4) is False
-        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
-        assert ledger.has_eth_deposit(CONTRACT, 4) is True
-        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
-        assert ledger.get_meta(f"deposit_zero_strikes_{CONTRACT.lower()}") == ""
-
-
-def test_shared_address_computes_v2_query_id(monkeypatch):
-    """Both env names pointing at one contract still build a TRBBridgeV2 query id."""
-    from layer_values_monitor.bridge_reconciler import _query_type_for_contract
-    from layer_values_monitor.trb_bridge import deposit_query_id
-
-    from web3 import Web3
-
-    shared = "0x6ec401744008f4B018Ed9A36f76e6629799Ee50E"
-    monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", shared)
-    monkeypatch.setenv("TRBBRIDGEV2_CONTRACT_ADDRESS", shared)
-    checksum = Web3.to_checksum_address(shared)
-    qtype = _query_type_for_contract(checksum)
-    assert qtype == "TRBBridgeV2"
-    assert deposit_query_id(7, qtype) == deposit_query_id(7, "TRBBridgeV2")
-    assert deposit_query_id(7, qtype) != deposit_query_id(7, "TRBBridge")
-
-
-class TestMissingReports:
-    @pytest.mark.asyncio
-    async def test_window_not_closed_stays_silent(self, ledger):
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 100)
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_window_closed_oracle_has_report_resolves_silently(self, ledger, monkeypatch):
-        monkeypatch.setenv("LAYER_REST_URL", "http://rest.test")
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 4000)
-        with (
-            patch("layer_values_monitor.bridge_reconciler._layer_has_report", new=AsyncMock(return_value=True)),
-            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
-        ):
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_not_called()
-        assert ledger.pending_missing_reports(window_s=1) == []
-
-    @pytest.mark.asyncio
-    async def test_window_closed_rest_unreachable_alerts_with_caveat(self, ledger, monkeypatch):
-        monkeypatch.setenv("LAYER_REST_URL", "http://rest.test")
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 4000)
-        with (
-            patch("layer_values_monitor.bridge_reconciler._layer_has_report",
-                  new=AsyncMock(side_effect=Exception("connection refused"))),
-            patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert,
-        ):
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_called_once()
-        assert "MISSING" in alert.call_args.args[0]
-        assert "oracle REST unconfirmed" in alert.call_args.args[1]["Detail"]
-
-    @pytest.mark.asyncio
-    async def test_alert_fires_once(self, ledger):
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 4000)
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_missing_reports(ledger, MagicMock())
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_deposit_older_than_max_age_retires_without_alert(self, ledger):
-        """Fresh-start backfill: an ancient unreported deposit retires silently (default 24h cutoff)."""
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 400_000)
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_not_called()
-        assert ledger.pending_missing_reports(window_s=1) == []
-
-    @pytest.mark.asyncio
-    async def test_max_age_env_override_lower_than_deposit_age_still_alerts(self, ledger, monkeypatch):
-        monkeypatch.setenv("BRIDGE_MISSING_REPORT_MAX_AGE_HOURS", "200")
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=time.time() - 400_000)
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_null_block_ts_ages_on_first_seen(self, ledger):
-        """Pruned-block rows (block_ts NULL) also honor the age cutoff via first_seen_ts."""
-        ledger.record_eth_deposit(CONTRACT, 1, "", 100, REPORTED, block_ts=None)
-        ledger.conn.execute("UPDATE eth_deposits SET first_seen_ts = ?", (time.time() - 400_000,))
-        ledger.conn.commit()
-        with patch("layer_values_monitor.bridge_reconciler.bridge_ledger_alert") as alert:
-            await check_missing_reports(ledger, MagicMock())
-        alert.assert_not_called()
-        assert ledger.pending_missing_reports(window_s=1) == []
-
-
-class TestDepositBlockTs:
-    def test_real_block_timestamp_preferred(self):
-        w3 = MagicMock()
-        w3.eth.get_block.return_value = {"timestamp": 1234}
-        assert _deposit_block_ts(w3, 100, MagicMock()) == 1234.0
-        w3.eth.get_block.assert_called_once_with(100)
-
-    def test_pruned_block_estimated_from_head(self):
-        head_ts = time.time()
-
-        def get_block(ref):
-            if ref == "latest":
-                return {"timestamp": head_ts, "number": 200}
-            raise Exception("pruned history unavailable")
-
-        w3 = MagicMock()
-        w3.eth.get_block.side_effect = get_block
-        ts = _deposit_block_ts(w3, 100, MagicMock())
-        assert ts == pytest.approx(head_ts - 100 * 12)
-
-    def test_head_read_failure_returns_none(self):
-        w3 = MagicMock()
-        w3.eth.get_block.side_effect = Exception("rpc down")
-        assert _deposit_block_ts(w3, 100, MagicMock()) is None
 
 
 class TestLoopStartup:

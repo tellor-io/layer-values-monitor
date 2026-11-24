@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from layer_values_monitor.evm_connections import get_web3_connection, invalidate_web3_connection
 
-from eth_abi.abi import encode as abi_encode
 from telliot_core.apps.telliot_config import TelliotConfig
 from web3 import Web3
 from web3.contract import Contract
@@ -36,32 +35,6 @@ DEPOSITS_ABI = [
         "type": "function",
     }
 ]
-
-# Contract ABI for the gapless deposit counter: `uint256 public depositId`.
-# Reverted deposits revert the increment too, and deposits(id) structs are written once
-# and never deleted, so every deposit ever made is permanently enumerable from state.
-DEPOSIT_ID_ABI = [
-    {
-        "inputs": [],
-        "name": "depositId",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    }
-]
-
-
-def read_deposit_counter(w3: Web3, contract_address: str) -> int:
-    """Read the contract's `depositId()` counter: the last issued deposit id.
-
-    `deposit()` increments the counter and then writes `deposits[depositId]`, so the
-    value is the last issued id, not the next one. Ids from the init floor through
-    this counter, inclusive, are exactly the deposits ever made.
-
-    Raises on RPC failure — the caller decides whether a missing counter is retryable.
-    """
-    contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=DEPOSIT_ID_ABI)
-    return int(contract.functions.depositId().call())
 
 
 def trusted_dict(deposit: tuple) -> dict:
@@ -92,15 +65,6 @@ def is_zero_struct(deposit_details: tuple) -> bool:
     """
     sender, layer_recipient, amount, tip, block_number = deposit_details
     return str(sender).lower() == ZERO_ADDRESS and layer_recipient == "" and amount == 0 and tip == 0 and block_number == 0
-
-
-def deposit_query_id(deposit_id: int, query_string: str = "TRBBridgeV2") -> str:
-    """QueryId for a bridge deposit: keccak(abi.encode(typeString, abi.encode(toLayer, depositId)))."""
-    query_data = abi_encode(
-        ["string", "bytes"],
-        [query_string, abi_encode(["bool", "uint256"], [True, deposit_id])],
-    )
-    return "0x" + Web3.keccak(query_data).hex()
 
 
 def decode_query_data(query_data: str) -> int | None:
@@ -249,9 +213,7 @@ async def fetch_deposit(
             continue
 
         try:
-            contract: Contract = w3.eth.contract(
-                address=Web3.to_checksum_address(contract_address), abi=DEPOSITS_ABI
-            )
+            contract: Contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=DEPOSITS_ABI)
             fn = contract.functions.deposits(deposit_id)
             try:
                 if anchor is not None:

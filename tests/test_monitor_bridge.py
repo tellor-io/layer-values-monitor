@@ -201,8 +201,7 @@ async def test_inspect_queues_dispute_on_equality_mismatch():
 
 @pytest.mark.asyncio
 async def test_lowercase_env_address_recorded_checksummed(bridge_env, monkeypatch):
-    """Ledger rows store the checksummed address: the reconciler's SQL joins compare exact
-    strings against the checksummed env values the deposit sweep writes into eth_deposits."""
+    """Ledger rows store the checksummed address so later contract reads use one canonical form."""
     monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", CONTRACT.lower())
     await run_inspection(bridge_env, ("ok", TRUSTED))
     assert bridge_env.get("0xtx1")["contract_address"] == CONTRACT
