@@ -17,7 +17,7 @@ class FakeEth:
 
     @property
     def chain_id(self):
-        return EC_STATE["chain_id"]
+        return EC_STATE["chain_by_url"].get(self._url, EC_STATE["chain_id"])
 
 
 class FakeWeb3:
@@ -30,13 +30,14 @@ class FakeWeb3:
         return url
 
 
-EC_STATE = {"fail": set(), "chain_id": 1}
+EC_STATE = {"fail": set(), "chain_id": 1, "chain_by_url": {}}
 
 
 @pytest.fixture(autouse=True)
 def fake_web3(monkeypatch):
     EC_STATE["fail"] = set()
     EC_STATE["chain_id"] = 1
+    EC_STATE["chain_by_url"] = {}
     monkeypatch.setattr(ec, "Web3", FakeWeb3)
     # A developer's .env leaks in via conftest's load_dotenv — URL resolution must be deterministic.
     for name in ("EVM_RPC_URLS", "EVM_RPC_URLS_1", "EVM_RPC_URLS_11155111", "INFURA_API_KEY"):
@@ -83,6 +84,16 @@ class TestAttemptRotation:
 
     def test_invalidate_unknown_chain_is_noop(self, url_list):
         ec.invalidate_web3_connection(999)
+
+    def test_wrong_chain_is_skipped_for_the_next_url(self, monkeypatch):
+        """A chain-id mismatch is not cached and is not returned; the next URL is used."""
+        monkeypatch.setenv("EVM_RPC_URLS_1", "https://wrong.example,https://right.example")
+        EC_STATE["chain_by_url"]["https://wrong.example"] = 11155111
+        w3 = ec.get_web3_connection(1)
+        assert w3 is not None
+        assert w3.provider == "https://right.example"
+        assert ec.get_cached_chain_ids() == [1]
+        assert ec.get_web3_connection(1) is w3
 
 
 class TestPlainEvmRpcUrls:

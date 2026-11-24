@@ -10,6 +10,7 @@ from layer_values_monitor.bridge_networks import (
     _SEPOLIA_BRIDGE_V1,
     _SEPOLIA_BRIDGE_V2,
     _configured_bridge_rpc_urls,
+    bridge_chain_id_source,
     resolve_bridge_chain_id,
     resolve_contract_address,
     validate_bridge_rpc,
@@ -41,8 +42,10 @@ def clean_bridge_env(monkeypatch):
 class TestContractAddressDefaults:
     def test_tellor1_resolves_both_to_mainnet_bridge(self, monkeypatch):
         monkeypatch.setenv("CHAIN_ID", MAINNET)
-        assert resolve_contract_address("TRBBRIDGE_CONTRACT_ADDRESS") == _MAINNET_BRIDGE
+        assert resolve_contract_address("TRBBRIDGE_CONTRACT_ADDRESS") is None
         assert resolve_contract_address("TRBBRIDGEV2_CONTRACT_ADDRESS") == _MAINNET_BRIDGE
+        monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", "0x1111111111111111111111111111111111111111")
+        assert resolve_contract_address("TRBBRIDGE_CONTRACT_ADDRESS") == "0x1111111111111111111111111111111111111111"
 
     def test_layertest5_resolves_sepolia_pair(self, monkeypatch):
         monkeypatch.setenv("CHAIN_ID", "layertest-5")
@@ -100,6 +103,13 @@ class TestEvmChainIdDefaults:
     def test_no_layer_chain_falls_back_to_historical_default(self):
         assert resolve_bridge_chain_id() == 1
 
+    def test_source_label(self, monkeypatch):
+        assert bridge_chain_id_source() == "fallback chain 1"
+        monkeypatch.setenv("CHAIN_ID", MAINNET)
+        assert bridge_chain_id_source() == "built-in default"
+        monkeypatch.setenv("TRBBRIDGE_CHAIN_ID", "11155111")
+        assert bridge_chain_id_source() == "env override"
+
 
 class TestPlainEvmRpcUrls:
     """Plain EVM_RPC_URLS is a fallback for the chain-suffixed var (coupled via CHAIN_ID)."""
@@ -132,8 +142,8 @@ class TestLogOnce:
 
         logger = logging.getLogger("test-bridge-networks")
         with caplog.at_level(logging.INFO, logger="test-bridge-networks"):
-            resolve_contract_address("TRBBRIDGE_CONTRACT_ADDRESS", logger=logger)
-            resolve_contract_address("TRBBRIDGE_CONTRACT_ADDRESS", logger=logger)
+            resolve_contract_address("TRBBRIDGEV2_CONTRACT_ADDRESS", logger=logger)
+            resolve_contract_address("TRBBRIDGEV2_CONTRACT_ADDRESS", logger=logger)
         assert sum("built-in default" in r.message for r in caplog.records) == 1
 
     def test_unknown_env_var_returns_none_even_on_known_chain(self, monkeypatch):

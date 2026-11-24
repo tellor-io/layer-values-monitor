@@ -72,17 +72,19 @@ Required only when monitoring TRBBridge/TRBBridgeV2 query types.
 - `TRBBRIDGEV2_CONTRACT_ADDRESS` - Bridge contract address for TRBBridgeV2
 - `TRBBRIDGE_CHAIN_ID` - Bridge chain ID, shared by both versions (code default: `1`; set `11155111` for Sepolia)
 
-All three have built-in defaults selected by the monitored Layer chain (`CHAIN_ID`);
+Built-in defaults are selected by the monitored Layer chain (`CHAIN_ID`);
 the env vars above are overrides, required only on chains without a built-in default
 (e.g. local devnets):
-- `tellor-1` -> mainnet TokenBridgeV2 `0x6ec401744008f4B018Ed9A36f76e6629799Ee50E` for both
-  query versions (it is the only bridge contract on mainnet), `TRBBRIDGE_CHAIN_ID=1`
+- `tellor-1` -> mainnet TokenBridgeV2 `0x6ec401744008f4B018Ed9A36f76e6629799Ee50E`
+  (`TRBBRIDGEV2_CONTRACT_ADDRESS` only; `TRBBRIDGE_CONTRACT_ADDRESS` stays unset unless
+  you set it), `TRBBRIDGE_CHAIN_ID=1`
 - `layertest-5` -> Sepolia TokenBridge `0x62733e63499a25E35844c91275d4c3bdb159D29d` (v1) and
   TokenBridgeV2 `0x55355157703A44f7516FBB831333317E98944e32`, `TRBBRIDGE_CHAIN_ID=11155111`
   (exact match only — layertest-8 and other testnets do NOT inherit these; set the env vars)
 
-For `tellor-1` and `layertest-5`, `CHAIN_ID` + `EVM_RPC_URLS` is the complete bridge
-configuration — the EVM chain ID and both bridge contract addresses are built in.
+For `tellor-1`, `CHAIN_ID` + `EVM_RPC_URLS` covers TokenBridgeV2. `layertest-5` also
+bakes in the Sepolia v1 address. On any other chain the env vars are required. A shared
+address (both env vars checksum-equal) is queried as TRBBridgeV2.
 
 Startup gate: every configured bridge RPC (`EVM_RPC_URLS[_<chain>]` / Infura) is probed once at
 boot; an endpoint answering a different chain ID than the resolved `TRBBRIDGE_CHAIN_ID` is
@@ -92,21 +94,25 @@ trusted values). A startup RPC outage only warns; runtime retries still apply.
 ### TRB Bridge Verification Ledger (two-tier)
 Every bridge report is journaled to a SQLite ledger (`data/bridge_ledger.db` by default).
 Row statuses are exactly three — `good`, `bad`, `unverified` — and nothing is terminal but
-good/bad. Both tiers share one verdict discipline (`get_bridge_verdict`): a hardened
-`deposits()` read that matches the report is `good`; a zero-struct (the fake-deposit
-signature) or a mismatch waits `BRIDGE_CONFIRM_SECONDS` and re-reads — the confirm read
-(provider-rotated) that still reads zero/mismatch makes the report `bad`.
+good/bad. Both tiers share one verdict helper (`get_bridge_verdict`). Tier 1 reads once
+and does not wait: a match is `good`; a zero-struct or a mismatch is left `unverified`
+for the reconciler. Tier 2 keeps the confirm read — a zero-struct or a mismatch waits
+`BRIDGE_CONFIRM_SECONDS` and re-reads, and that confirm read decides `good` or `bad`.
 
-- **Tier 1** (stream) reaches the verdict inline: `good` or `bad` is recorded immediately, a
-  confirmed `bad` disputes on the spot (subject to the threshold gate below), and a full RPC
-  outage records `unverified` + a "NO FUNCTIONAL RPC AVAILABLE" alert.
+- **Tier 1** (stream) does not hold the new-report queue for the confirm delay. A match is
+  recorded `good` and inspected immediately, with nothing queued. A zero-struct or a mismatch
+  is recorded `unverified` ("waiting for the confirm read") with `state_ts` already old enough
+  for the next reconciler cycle; no dispute and no Discord alert on that path. A full RPC
+  outage records `unverified` + a "NO FUNCTIONAL RPC AVAILABLE" alert. A replay of a row
+  already `good` or `bad` is skipped.
 - **Tier 2** (reconciler task) runs a cycle at startup, then every `BRIDGE_RECONCILE_INTERVAL`
-  seconds: it re-reads every `unverified` row **forever** (no retry cap, no expiry — a late
-  `bad` inside the 12h window disputes, one after the window alerts "LATE VERDICT"); sweeps
-  deposits from the contract's gapless `depositId()` counter (no event-log scanning); alerts
-  once per eth deposit whose Layer reporting window closes with no report (confirmed against
-  the oracle REST when `LAYER_REST_URL` is set); and escalates once per row ~10h in with an
-  "RPCs DOWN — ABOUT TO BE UNDISPUTABLE" alert.
+  seconds: it re-reads every `unverified` row **forever** with the confirm read (no retry cap,
+  no expiry — a late `bad` inside the 12h window disputes, one after the window alerts
+  "LATE VERDICT"). Dispute latency for a stream mismatch is one reconcile interval plus the
+  confirm delay. It also sweeps deposits from the contract's gapless `depositId()` counter
+  (no event-log scanning); alerts once per eth deposit whose Layer reporting window closes
+  with no report (confirmed against the oracle REST when `LAYER_REST_URL` is set); and
+  escalates once per row ~10h in with an "RPCs DOWN — ABOUT TO BE UNDISPUTABLE" alert.
 - `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
 - `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
 - `BRIDGE_CONFIRM_SECONDS` - Confirm re-read delay before a zero/mismatch goes `bad` (default: `60`)

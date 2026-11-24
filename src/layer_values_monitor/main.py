@@ -10,6 +10,7 @@ from typing import Any
 
 from layer_values_monitor.bridge_networks import (
     BRIDGE_CONTRACT_ENVS,
+    bridge_chain_id_source,
     resolve_bridge_chain_id,
     resolve_contract_address,
     validate_bridge_rpc,
@@ -222,8 +223,7 @@ async def start() -> None:
             source = "env override" if os.getenv(env_name) else ("built-in default" if resolved else "MISSING")
             console_logger.info(f"🌉 Bridge contract {env_name}: {resolved} ({source})")
         evm_chain = resolve_bridge_chain_id(logger=logger)
-        env_src = "env override" if os.getenv("TRBBRIDGE_CHAIN_ID") else "built-in default"
-        console_logger.info(f"🌉 Bridge EVM chain ID: {evm_chain} ({env_src})")
+        console_logger.info(f"🌉 Bridge EVM chain ID: {evm_chain} ({bridge_chain_id_source()})")
         # Fatal if a configured bridge RPC answers a different chain: wrong-chain reads
         # could produce a wrong trusted value (startup is the last cheap place to refuse).
         validate_bridge_rpc(logger=logger)

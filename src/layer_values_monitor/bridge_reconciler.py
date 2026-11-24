@@ -1,10 +1,10 @@
 """Tier 2: in-process reconciliation of bridge deposit reports.
 
-Tier 1 (inspect_trbbridge_reports in monitor.py) reaches verdicts inline but only disputes
-its own confirmed mismatches. This task periodically sweeps the ledger and:
+Tier 1 (inspect_trbbridge_reports in monitor.py) records a match immediately and leaves a
+zero-struct or mismatch unverified for this task. This task periodically sweeps the ledger and:
 
   a) re-reads EVERY `unverified` row each cycle, FOREVER — no retry cap, no expiry. The
-     60s confirm-read discipline (shared get_bridge_verdict helper) decides good/bad;
+     60s confirm-read discipline (shared get_bridge_verdict helper, confirm=True) decides good/bad;
      nothing but good/bad ends the retry loop,
   b) sweeps the bridge's `depositId()` counter to journal every deposit ever made
      (gapless counter; structs written once, never deleted),
@@ -38,6 +38,7 @@ from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_types import DisputeCategory, Metrics, Msg
 from layer_values_monitor.discord import bridge_ledger_alert
+from layer_values_monitor.dispute import equality_dispute_category
 from layer_values_monitor.evm_connections import get_web3_connection
 from layer_values_monitor.trb_bridge import (
     DEPOSITS_ABI,
@@ -63,6 +64,10 @@ AVG_EVM_BLOCK_SECONDS = 12
 # Bridge contract env var -> query type string (used to recompute queryIds for orphan alerts)
 BRIDGE_QUERY_TYPES = {"TRBBRIDGE_CONTRACT_ADDRESS": "TRBBridge", "TRBBRIDGEV2_CONTRACT_ADDRESS": "TRBBridgeV2"}
 
+# A permanent zero at one id must not freeze every newer deposit. Three cycles on the
+# same id, then the cursor steps past it. Not an env var: the gap is an on-chain fact.
+DEPOSIT_ZERO_STRIKE_LIMIT = 3
+
 
 def _equality_dispute_category(metrics: Metrics | None) -> DisputeCategory | None:
     """Resolve the equality dispute category the way inspect() does.
@@ -76,20 +81,29 @@ def _equality_dispute_category(metrics: Metrics | None) -> DisputeCategory | Non
         return None
     if metrics.warning_threshold <= 0:
         return None  # dispute gate disabled (LVM equality semantics)
-    if metrics.warning_threshold == 1.0:
-        return "warning"
-    if metrics.minor_threshold == 1.0:
-        return "minor"
-    if metrics.major_threshold == 1.0:
-        return "major"
-    return None
+    return equality_dispute_category(metrics)
 
 
 def _query_type_for_contract(contract_address: str) -> str:
-    """Map a bridge contract address (checksummed) back to its query type string."""
+    """Map a bridge contract address (checksummed) back to its query type string.
+
+    When both env addresses checksum-equal (mainnet's single TokenBridgeV2, or an
+    operator pointing both names at one contract), the query type is TRBBridgeV2.
+    """
+    resolved: list[tuple[str, str]] = []
     for env_name, qtype in BRIDGE_QUERY_TYPES.items():
         addr = resolve_contract_address(env_name)
-        if addr and Web3.to_checksum_address(addr) == contract_address:
+        if not addr:
+            continue
+        try:
+            checksum = Web3.to_checksum_address(addr)
+        except ValueError:
+            continue
+        resolved.append((checksum, qtype))
+    if len(resolved) >= 2 and resolved[0][0] == resolved[1][0] == contract_address:
+        return "TRBBridgeV2"
+    for checksum, qtype in resolved:
+        if checksum == contract_address:
             return qtype
     # No configured contract matches (env rotated/removed after the row was recorded):
     # V2 is the live default, but the alert's QueryId may then be computed with the wrong typeString.
@@ -236,7 +250,7 @@ def _deposit_block_ts(w3: Web3, block_number: int, logger: logging.Logger) -> fl
         return None
 
 
-def _record_deposit_state(ledger: BridgeLedger, w3: Web3, contract: str, deposit_id: int, details: tuple) -> bool:
+async def _record_deposit_state(ledger: BridgeLedger, w3: Web3, contract: str, deposit_id: int, details: tuple) -> bool:
     """Journal one deposits() struct into eth_deposits. True when newly recorded."""
     sender, layer_recipient, amount, tip, block_number = details
     reported = {
@@ -247,9 +261,25 @@ def _record_deposit_state(ledger: BridgeLedger, w3: Web3, contract: str, deposit
     }
     block_number = int(block_number)
     # deposit block timestamp anchors the missing-report window
-    block_ts = _deposit_block_ts(w3, block_number, logging.getLogger(__name__))
+    block_ts = await asyncio.to_thread(_deposit_block_ts, w3, block_number, logging.getLogger(__name__))
     # eth_tx_hash is unknown from a state read; the journal keeps "" for it
     return ledger.record_eth_deposit(contract, deposit_id, "", block_number, reported, block_ts)
+
+
+def _zero_strikes(raw: str | None, deposit_id: int) -> int:
+    """Return the strike count for this deposit id.
+
+    `deposit_zero_strikes_*` is stored as `id:count`. A different id resets the count.
+    """
+    if not raw or ":" not in raw:
+        return 0
+    id_s, count_s = raw.split(":", 1)
+    try:
+        if int(id_s) != deposit_id:
+            return 0
+        return int(count_s)
+    except ValueError:
+        return 0
 
 
 async def sweep_deposits(
@@ -277,9 +307,10 @@ async def sweep_deposits(
         contract = Web3.to_checksum_address(contract)
         floor_key = f"deposit_floor_{contract.lower()}"
         next_key = f"deposit_next_{contract.lower()}"
+        strikes_key = f"deposit_zero_strikes_{contract.lower()}"
 
         try:
-            counter = read_deposit_counter(w3, contract)
+            counter = await asyncio.to_thread(read_deposit_counter, w3, contract)
         except Exception as e:
             logger.warning(f"bridge deposit sweep {contract[:10]}..: depositId() read failed ({e})")
             continue
@@ -288,14 +319,14 @@ async def sweep_deposits(
         if floor_raw is None:
             # First run: probe DOWNWARD from the counter (last issued id) until a zero
             # struct (the init floor). Cost is O(deposits since init), one-time. An RPC
-            # error aborts the backfill without recording a floor, so a transient outage
-            # can't truncate history.
+            # error, or a zero at the counter before anything is recorded, aborts without
+            # a floor so a lagging read can't truncate history.
             i = counter
             recorded = 0
             aborted = False
             while i >= 0:
                 try:
-                    details = _probe_deposit_struct(w3, contract, i)
+                    details = await asyncio.to_thread(_probe_deposit_struct, w3, contract, i)
                 except Exception as e:
                     logger.warning(
                         f"bridge deposit backfill {contract[:10]}..: deposits({i}) failed ({e}); retry next cycle"
@@ -303,8 +334,25 @@ async def sweep_deposits(
                     aborted = True
                     break
                 if is_zero_struct(details):
-                    break
-                if _record_deposit_state(ledger, w3, contract, i, details):
+                    if recorded == 0:
+                        logger.warning(
+                            f"bridge deposit backfill {contract[:10]}..: deposits({i}) zero struct and nothing "
+                            "recorded; retry next cycle"
+                        )
+                        aborted = True
+                        break
+                    try:
+                        details = await asyncio.to_thread(_probe_deposit_struct, w3, contract, i)
+                    except Exception as e:
+                        logger.warning(
+                            f"bridge deposit backfill {contract[:10]}..: deposits({i}) re-read failed ({e}); "
+                            "retry next cycle"
+                        )
+                        aborted = True
+                        break
+                    if is_zero_struct(details):
+                        break
+                if await _record_deposit_state(ledger, w3, contract, i, details):
                     recorded += 1
                 i -= 1
             if aborted:
@@ -326,18 +374,28 @@ async def sweep_deposits(
         stopped_at = counter + 1
         for deposit_id in range(next_id, counter + 1):
             try:
-                details = _probe_deposit_struct(w3, contract, deposit_id)
+                details = await asyncio.to_thread(_probe_deposit_struct, w3, contract, deposit_id)
             except Exception as e:
                 logger.warning(f"bridge deposit sweep {contract[:10]}..: deposits({deposit_id}) failed ({e})")
                 stopped_at = deposit_id
                 break
             if is_zero_struct(details):
+                strikes = _zero_strikes(ledger.get_meta(strikes_key), deposit_id) + 1
+                if strikes >= DEPOSIT_ZERO_STRIKE_LIMIT:
+                    logger.warning(
+                        f"bridge deposit sweep {contract[:10]}..: deposits({deposit_id}) still zero after "
+                        f"{strikes} cycles; advancing past the gap"
+                    )
+                    ledger.set_meta(strikes_key, "")
+                    continue
+                ledger.set_meta(strikes_key, f"{deposit_id}:{strikes}")
                 logger.warning(
-                    f"bridge deposit sweep {contract[:10]}..: deposits({deposit_id}) zero struct above floor "
-                    "— gapless counter assumption broken"
+                    f"bridge deposit sweep {contract[:10]}..: deposits({deposit_id}) zero struct; "
+                    f"holding cursor ({strikes}/{DEPOSIT_ZERO_STRIKE_LIMIT})"
                 )
-                continue
-            if _record_deposit_state(ledger, w3, contract, deposit_id, details):
+                stopped_at = deposit_id
+                break
+            if await _record_deposit_state(ledger, w3, contract, deposit_id, details):
                 recorded += 1
         ledger.set_meta(next_key, str(stopped_at))
         if recorded:
@@ -353,6 +411,8 @@ async def _layer_has_report(rest_url: str, query_id: str) -> bool:
     url = f"{rest_url.rstrip('/')}/layer/oracle/get_reportsby_qid/{query_id}"
     async with aiohttp.ClientSession() as sess:
         async with sess.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"oracle REST status {resp.status}")
             data = await resp.json(content_type=None)
     return bool(isinstance(data, dict) and data.get("microReports"))
 

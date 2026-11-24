@@ -250,7 +250,7 @@ class TestCounterSweep:
         )
         await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
 
-        assert probed == [3, 2, 1, 0]  # downward probe stops at the first zero struct
+        assert probed == [3, 2, 1, 0, 0]  # the init-floor zero is read once more, then accepted
         assert ledger.has_eth_deposit(CONTRACT, 1) is True
         assert ledger.has_eth_deposit(CONTRACT, 2) is True
         assert ledger.has_eth_deposit(CONTRACT, 3) is True
@@ -301,6 +301,93 @@ class TestCounterSweep:
         await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
         assert probed == []
         assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
+
+
+    @pytest.mark.asyncio
+    async def test_backfill_zero_at_counter_does_not_set_floor(self, ledger):
+        """A zero at the counter before anything is recorded retries next cycle."""
+        w3, probed = self.make_w3(counter=5, structs={})
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert probed == [5]
+        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") is None
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") is None
+        assert ledger.has_eth_deposit(CONTRACT, 5) is False
+
+    @pytest.mark.asyncio
+    async def test_backfill_nonzero_reread_continues(self, ledger):
+        """A zero that is non-zero on the second read is a real deposit, not the floor."""
+        calls: dict[int, int] = {}
+        probed = []
+
+        def deposits(dep_id):
+            probed.append(dep_id)
+            calls[dep_id] = calls.get(dep_id, 0) + 1
+            if dep_id == 1 and calls[dep_id] == 1:
+                value = ZERO_STRUCT
+            elif dep_id == 0:
+                value = ZERO_STRUCT
+            else:
+                value = deposit_struct(dep_id * 10)
+            return SimpleNamespace(call=lambda value=value: value)
+
+        bridge = MagicMock()
+        bridge.functions.depositId.return_value.call.return_value = 2
+        bridge.functions.deposits.side_effect = deposits
+        w3 = MagicMock()
+        w3.eth.contract.return_value = bridge
+        w3.eth.get_block.return_value = {"timestamp": 1_700_000_000}
+
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert probed == [2, 1, 1, 0, 0]
+        assert ledger.has_eth_deposit(CONTRACT, 2) is True
+        assert ledger.has_eth_deposit(CONTRACT, 1) is True
+        assert ledger.has_eth_deposit(CONTRACT, 0) is False
+        assert ledger.get_meta(f"deposit_floor_{CONTRACT.lower()}") == "1"
+
+    @pytest.mark.asyncio
+    async def test_forward_zero_stops_cursor(self, ledger):
+        """A zero above the floor holds the cursor on that id, like an RPC failure."""
+        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
+        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
+        w3, probed = self.make_w3(counter=4, structs={2: deposit_struct(30), 4: deposit_struct(50)})
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert probed == [2, 3]
+        assert ledger.has_eth_deposit(CONTRACT, 2) is True
+        assert ledger.has_eth_deposit(CONTRACT, 4) is False
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "3"
+        assert ledger.get_meta(f"deposit_zero_strikes_{CONTRACT.lower()}") == "3:1"
+
+    @pytest.mark.asyncio
+    async def test_forward_zero_advances_after_three_cycles(self, ledger):
+        """Three cycles stuck on the same zero id step past it so newer deposits are not frozen."""
+        ledger.set_meta(f"deposit_floor_{CONTRACT.lower()}", "0")
+        ledger.set_meta(f"deposit_next_{CONTRACT.lower()}", "2")
+        w3, _ = self.make_w3(counter=4, structs={2: deposit_struct(30), 4: deposit_struct(50)})
+        for _cycle in range(2):
+            await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+            assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "3"
+            assert ledger.has_eth_deposit(CONTRACT, 4) is False
+        await sweep_deposits(ledger, MagicMock(), 11155111, w3=w3)
+        assert ledger.has_eth_deposit(CONTRACT, 4) is True
+        assert ledger.get_meta(f"deposit_next_{CONTRACT.lower()}") == "5"
+        assert ledger.get_meta(f"deposit_zero_strikes_{CONTRACT.lower()}") == ""
+
+
+def test_shared_address_computes_v2_query_id(monkeypatch):
+    """Both env names pointing at one contract still build a TRBBridgeV2 query id."""
+    from layer_values_monitor.bridge_reconciler import _query_type_for_contract
+    from layer_values_monitor.trb_bridge import deposit_query_id
+
+    from web3 import Web3
+
+    shared = "0x6ec401744008f4B018Ed9A36f76e6629799Ee50E"
+    monkeypatch.setenv("TRBBRIDGE_CONTRACT_ADDRESS", shared)
+    monkeypatch.setenv("TRBBRIDGEV2_CONTRACT_ADDRESS", shared)
+    checksum = Web3.to_checksum_address(shared)
+    qtype = _query_type_for_contract(checksum)
+    assert qtype == "TRBBridgeV2"
+    assert deposit_query_id(7, qtype) == deposit_query_id(7, "TRBBridgeV2")
+    assert deposit_query_id(7, qtype) != deposit_query_id(7, "TRBBridge")
 
 
 class TestMissingReports:

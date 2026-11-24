@@ -9,17 +9,29 @@ import aiohttp
 
 
 class HeightTracker:
-    """Track the last processed block height to detect missed blocks."""
+    """Track block heights for catch-up and for the silent-socket watchdog.
+
+    `last_height` is the catch-up cursor: it moves when reports are queued or
+    processed, and after a catch-up pass. `last_observed_height` moves only from
+    NewBlock heartbeats, so a heartbeat-only socket cannot hide a missed report
+    by dragging the catch-up cursor forward.
+    """
 
     def __init__(self, max_catchup_blocks: int = 15) -> None:
-        """Initialize height tracker at height 0."""
+        """Initialize both cursors at height 0."""
         self.last_height = 0
+        self.last_observed_height = 0
         self.max_catchup_blocks = max_catchup_blocks
 
     def update(self, height: int) -> None:
-        """Update the last processed height."""
+        """Advance the catch-up cursor. Heartbeats do not call this."""
         if height > self.last_height:
             self.last_height = height
+
+    def observe(self, height: int) -> None:
+        """Record a NewBlock heartbeat without moving the catch-up cursor."""
+        if height > self.last_observed_height:
+            self.last_observed_height = height
 
     def get_missed_range(self, current_height: int) -> tuple[int, int] | None:
         """Get the range of missed blocks, if any, limited to max_catchup_blocks."""

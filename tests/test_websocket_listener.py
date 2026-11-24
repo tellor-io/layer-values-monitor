@@ -221,7 +221,8 @@ async def test_newblock_heartbeat_updates_tracker_without_queueing(
     )
     await asyncio.sleep(0.1)
 
-    assert height_tracker.last_height == 101, "Heartbeat block height must update the tracker"
+    assert height_tracker.last_observed_height == 101, "Heartbeat block height must update the observed cursor"
+    assert height_tracker.last_height == 0, "A heartbeat must not move the catch-up cursor"
     assert event_queue.empty(), "Heartbeats must not reach the queue handler"
 
     listener_task.cancel()
@@ -319,6 +320,97 @@ async def test_stall_watchdog_probe_failure_keeps_connection(
         )
         await asyncio.sleep(2.0)  # several failed probe cycles with silence
         mock_websocket.close.assert_not_awaited()
+        listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
+
+
+def _block_with_new_report() -> dict:
+    return {"txs_results": [{"events": [{"type": "new_report", "attributes": []}]}]}
+
+
+@pytest.mark.asyncio
+async def test_partial_wedge_reconnects_when_gap_block_has_a_report(
+    mock_websockets_connect, mock_websocket, event_queue
+):
+    """Heartbeats flowing with a new_report two blocks behind the tip means the attribute stream missed it."""
+    uri = "test-server.com"
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+    messages = [ack]
+
+    async def mock_recv():
+        if messages:
+            return messages.pop(0)
+        await asyncio.sleep(0.05)
+        return _heartbeat_message(110)
+
+    mock_websocket.recv.side_effect = mock_recv
+    closed = asyncio.Event()
+
+    async def fake_close(*args, **kwargs):
+        closed.set()
+
+    mock_websocket.close.side_effect = fake_close
+    logger = MagicMock(spec=logging.Logger)
+    height_tracker = HeightTracker()
+
+    with (
+        patch("layer_values_monitor.monitor.WS_STALL_TIMEOUT_SECONDS", 2.0),
+        patch("layer_values_monitor.monitor.get_current_height", AsyncMock(return_value=None)),
+        patch(
+            "layer_values_monitor.monitor.query_block_events",
+            AsyncMock(return_value=_block_with_new_report()),
+        ) as query,
+    ):
+        listener_task = asyncio.create_task(
+            listen_to_websocket_events(uri, ["tm.event='NewBlock'"], event_queue, logger, height_tracker)
+        )
+        await asyncio.wait_for(closed.wait(), timeout=10)
+
+    query.assert_awaited()
+    assert query.await_args.args[1] == height_tracker.last_observed_height - 2
+    assert any("forcing reconnect" in str(call) for call in logger.warning.call_args_list)
+
+    listener_task.cancel()
+    try:
+        await listener_task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_partial_wedge_holds_when_gap_block_has_no_report(
+    mock_websockets_connect, mock_websocket, event_queue
+):
+    """A quiet gap is not a missed subscription: heartbeats alone must not close the socket."""
+    uri = "test-server.com"
+    ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+    messages = [ack]
+
+    async def mock_recv():
+        if messages:
+            return messages.pop(0)
+        await asyncio.sleep(0.05)
+        return _heartbeat_message(110)
+
+    mock_websocket.recv.side_effect = mock_recv
+    mock_websocket.close = AsyncMock()
+    height_tracker = HeightTracker()
+
+    with (
+        patch("layer_values_monitor.monitor.WS_STALL_TIMEOUT_SECONDS", 2.0),
+        patch("layer_values_monitor.monitor.get_current_height", AsyncMock(return_value=None)),
+        patch("layer_values_monitor.monitor.query_block_events", AsyncMock(return_value={"txs_results": []})),
+    ):
+        listener_task = asyncio.create_task(
+            listen_to_websocket_events(uri, ["tm.event='NewBlock'"], event_queue, mock_logger, height_tracker)
+        )
+        await asyncio.sleep(1.5)
+        mock_websocket.close.assert_not_awaited()
+        assert height_tracker.last_observed_height == 110
+        assert height_tracker.last_height == 0
         listener_task.cancel()
         try:
             await listener_task

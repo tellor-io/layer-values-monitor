@@ -52,7 +52,11 @@ DEPOSIT_ID_ABI = [
 
 
 def read_deposit_counter(w3: Web3, contract_address: str) -> int:
-    """Read the contract's `depositId()` counter (next deposit ID == current count).
+    """Read the contract's `depositId()` counter: the last issued deposit id.
+
+    `deposit()` increments the counter and then writes `deposits[depositId]`, so the
+    value is the last issued id, not the next one. Ids from the init floor through
+    this counter, inclusive, are exactly the deposits ever made.
 
     Raises on RPC failure — the caller decides whether a missing counter is retryable.
     """
@@ -67,6 +71,16 @@ def trusted_dict(deposit: tuple) -> dict:
         "layer_address": deposit[1],
         "amount": deposit[2],
         "tip": deposit[3],
+    }
+
+
+def zero_trusted_value() -> dict:
+    """Return the dict a confirmed all-zeros deposits() struct compares as."""
+    return {
+        "eth_address": ZERO_ADDRESS,
+        "layer_address": "",
+        "amount": 0,
+        "tip": 0,
     }
 
 
@@ -296,19 +310,24 @@ async def get_bridge_verdict(
     deposit_id: int,
     reported: dict,
     *,
+    confirm: bool = True,
     confirm_delay_s: float | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     logger: Any = None,
 ) -> tuple[str, dict | None]:
-    """Shared verdict discipline for Tier 1 and the reconciler: read, confirm, then decide.
+    """Shared verdict discipline for Tier 1 and the reconciler.
 
     First read is hardened (retry + provider rotation + zero-struct sanity). A match is an
-    immediate "ok". A zero struct or a mismatch waits `confirm_delay_s` then re-reads (the
-    hardened fetch rotates providers); the confirm result is the verdict. A confirm RPC loss
-    never resolves the row: it stays "unavailable" for the next retry.
+    immediate "ok". With `confirm=True` (the reconciler), a zero struct or a mismatch waits
+    `confirm_delay_s` then re-reads; the confirm result is the verdict. A confirm RPC loss
+    stays "unavailable". With `confirm=False` (Tier 1), a zero struct or a mismatch returns
+    "pending" immediately so the report consumer is not held for the confirm delay.
 
     Returns:
-        ("ok", trusted) | ("bad", trusted_or_None) | ("unavailable", None)
+        ("ok", trusted) | ("bad", trusted) | ("pending", observed) | ("unavailable", None)
+
+    A confirmed zero struct is "bad" with the zero-address dict (amount 0, tip 0,
+    empty recipient), not a missing trusted value. A pending zero struct uses that same dict.
 
     """
     if logger is None:
@@ -327,20 +346,23 @@ async def get_bridge_verdict(
         if trusted_dict(deposit) == reported:
             return "ok", trusted_dict(deposit)
 
-    # zero struct or mismatch: confirm before calling the report bad. A lagging provider
-    # can read zero seconds after the deposit landed; the 60s re-read is the guard.
-    first = trusted_dict(deposit) if deposit is not None else None
+    # zero struct or mismatch
+    observed = trusted_dict(deposit) if deposit is not None else zero_trusted_value()
+    if not confirm:
+        return "pending", observed
+
+    # A lagging provider can read zero seconds after the deposit landed; the re-read is the guard.
     await sleep(confirm_delay_s)
     deposit2, kind2 = await fetch_deposit(provider_builder, contract_address, deposit_id, sanity=True, logger=logger)
 
     if kind2 == "rpc_error":
         return "unavailable", None
     if kind2 == "zero_struct":
-        return "bad", None
+        return "bad", zero_trusted_value()
     trusted2 = trusted_dict(deposit2)
     if trusted2 == reported:
         return "ok", trusted2
-    return "bad", trusted2 or first
+    return "bad", trusted2 or observed
 
 
 def make_provider_builder(chain_id: int, rpc_url: str | None = None, logger: Any = None) -> Callable[[int], Web3]:
@@ -366,44 +388,3 @@ def make_provider_builder(chain_id: int, rpc_url: str | None = None, logger: Any
         return w3
 
     return provider_builder
-
-
-async def get_trb_bridge_trusted_value(
-    query_data: str, contract_address: str, chain_id: int = 1, rpc_url: str = None, logger: logging.Logger = None
-) -> tuple[str, str, int, int] | None:
-    """Get trusted value for TRBBridge query type by reading from deposits mapping.
-
-    Thin wrapper over fetch_deposit keeping the historical (tuple | None) shape so existing
-    callers don't churn. A zero-struct or a failed read returns None.
-
-    Args:
-        query_data: The query data containing deposit ID
-        contract_address: Address of the TRBBridge contract
-        chain_id: Chain ID for the contract (default: 1 for Ethereum mainnet)
-        rpc_url: RPC URL for the bridge contract chain (if None, uses unified connection manager)
-        logger: Logger instance
-
-    Returns:
-        Tuple of (eth_address, layer_address, amount, tip) from contract, or None if failed
-
-    """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
-    deposit_id = decode_query_data(query_data)
-    if deposit_id is None:
-        logger.error("Failed to decode deposit ID from query data")
-        return None
-
-    logger.info(f"Checking TRBBridge deposit ID: {deposit_id}")
-
-    deposit, error_kind = await fetch_deposit(
-        make_provider_builder(chain_id, rpc_url=rpc_url, logger=logger),
-        contract_address,
-        deposit_id,
-        sanity=True,
-        logger=logger,
-    )
-    if deposit is None:
-        logger.error(f"Unable to fetch trusted value for deposit ID {deposit_id} ({error_kind})")
-    return deposit

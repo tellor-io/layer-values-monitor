@@ -204,7 +204,12 @@ class TestGetBridgeVerdict:
                 MagicMock(), CONTRACT, 9, self.REPORTED, confirm_delay_s=42, sleep=record_sleep, logger=MagicMock()
             )
         assert verdict == "bad"
-        assert trusted is None
+        assert trusted == {
+            "eth_address": "0x" + "0" * 40,
+            "layer_address": "",
+            "amount": 0,
+            "tip": 0,
+        }
         assert slept == [42]
 
     @pytest.mark.asyncio
@@ -229,6 +234,58 @@ class TestGetBridgeVerdict:
             )
         assert verdict == "unavailable"
         assert trusted is None
+
+    @pytest.mark.asyncio
+    async def test_confirm_false_mismatch_is_pending_without_waiting(self):
+        from layer_values_monitor.trb_bridge import get_bridge_verdict
+
+        slept = []
+
+        async def record_sleep(seconds):
+            slept.append(seconds)
+
+        wrong = ("0xbbb", "tellor1x", 55, 1)
+        fetch = AsyncMock(return_value=(wrong, "ok"))
+        with patch("layer_values_monitor.trb_bridge.fetch_deposit", new=fetch):
+            verdict, trusted = await get_bridge_verdict(
+                MagicMock(),
+                CONTRACT,
+                9,
+                self.REPORTED,
+                confirm=False,
+                confirm_delay_s=42,
+                sleep=record_sleep,
+                logger=MagicMock(),
+            )
+        assert verdict == "pending"
+        assert trusted == {"eth_address": "0xbbb", "layer_address": "tellor1x", "amount": 55, "tip": 1}
+        assert slept == []
+        assert fetch.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_confirm_false_zero_struct_is_pending_without_waiting(self):
+        from layer_values_monitor.trb_bridge import get_bridge_verdict, zero_trusted_value
+
+        slept = []
+
+        async def record_sleep(seconds):
+            slept.append(seconds)
+
+        fetch = AsyncMock(return_value=(None, "zero_struct"))
+        with patch("layer_values_monitor.trb_bridge.fetch_deposit", new=fetch):
+            verdict, trusted = await get_bridge_verdict(
+                MagicMock(),
+                CONTRACT,
+                9,
+                self.REPORTED,
+                confirm=False,
+                confirm_delay_s=42,
+                sleep=record_sleep,
+                logger=MagicMock(),
+            )
+        assert verdict == "pending"
+        assert trusted == zero_trusted_value()
+        assert slept == []
 
 
 def test_get_confirm_delay_s(monkeypatch):

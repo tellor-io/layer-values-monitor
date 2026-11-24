@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from layer_values_monitor.custom_types import Metrics, NewReport
-from layer_values_monitor.trb_bridge import decode_query_data, decode_report_value, get_trb_bridge_trusted_value
+from layer_values_monitor.trb_bridge import decode_query_data, decode_report_value, fetch_deposit, make_provider_builder
 
 import pytest
 
@@ -126,7 +126,7 @@ class TestTRBBridgeDecoding:
         assert result_with is not None
 
     @pytest.mark.asyncio
-    async def test_get_trb_bridge_trusted_value(self):
+    async def test_fetch_deposit(self):
         """Test getting TRBBridge trusted value. Get deposit 9 from palmito
 
         This test requires a valid RPC endpoint for Sepolia. Set ETHEREUM_RPC_URL
@@ -150,8 +150,15 @@ class TestTRBBridgeDecoding:
         )
         contract_address = "0x5acb5977f35b1A91C4fE0F4386eB669E046776F2"  # token bridge contract address on sepolia
         chain_id = 11155111  # sepolia
+        deposit_id = decode_query_data(query_data)
+        assert deposit_id is not None
 
-        result = await get_trb_bridge_trusted_value(query_data, contract_address, chain_id)
+        result, kind = await fetch_deposit(
+            make_provider_builder(chain_id, rpc_url=rpc_url),
+            contract_address,
+            deposit_id,
+        )
+        assert kind == "ok"
         assert result is not None
 
         #   [ deposits(uint256) method Response ]

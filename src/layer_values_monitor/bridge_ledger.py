@@ -141,6 +141,7 @@ class BridgeLedger:
         power: str | None = None,
         meta_id: str | None = None,
         last_error: str | None = None,
+        state_ts: float | None = None,
     ) -> bool:
         """Insert a report row. Idempotent: an existing tx_hash (catch-up replay) is left untouched.
 
@@ -163,7 +164,7 @@ class BridgeLedger:
                 deposit_id,
                 json.dumps(reported_value) if reported_value is not None else None,
                 status,
-                time.time(),
+                time.time() if state_ts is None else state_ts,
                 report_ts,
                 last_error,
                 reporter,

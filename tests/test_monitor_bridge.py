@@ -89,15 +89,18 @@ async def test_verdict_ok_records_good(bridge_env):
 
 @pytest.mark.asyncio
 async def test_verdict_bad_records_bad_and_queues_dispute(bridge_env):
-    """Confirmed mismatch: status bad AND the dispute Msg queued straight from inspect()."""
-    q = await run_inspection(bridge_env, ("bad", TRUSTED), reported=("0xaaa", "tellor1x", 999, 1))
+    """Tier 1 does not confirm: a mismatch stays unverified and queues nothing."""
+    import time
+
+    with patch("layer_values_monitor.monitor.bridge_ledger_alert") as alert:
+        q = await run_inspection(bridge_env, ("pending", WRONG), reported=("0xaaa", "tellor1x", 999, 1))
     row = bridge_env.get("0xtx1")
-    assert row["status"] == STATUS_BAD
-    assert row["last_error"] == "tier1_confirmed_bad"
-    msg = q.get_nowait()
-    assert isinstance(msg, Msg)
-    assert msg.category == "warning"
-    assert msg.query_id == "0xq"
+    assert row["status"] == STATUS_UNVERIFIED
+    assert row["last_error"] == "waiting for the confirm read"
+    assert q.empty()
+    alert.assert_not_called()
+    due = bridge_env.due_for_recheck(now=time.time())
+    assert any(item["tx_hash"] == "0xtx1" for item in due)
 
 
 @pytest.mark.asyncio
@@ -148,8 +151,33 @@ async def test_unavailable_alert_fires_once_per_tx_hash(bridge_env):
 
 
 @pytest.mark.asyncio
-async def test_inspect_defer_dispute_skips_queue_put():
-    """Direct unit check of inspect(): defer_dispute suppresses only the disputes_q.put."""
+async def test_unavailable_then_bad_disputes_once(bridge_env):
+    """An unverified row that later confirms bad is disputed once and ends bad."""
+    reported = ("0xaaa", "tellor1x", 999, 1)
+    with patch("layer_values_monitor.monitor.bridge_ledger_alert"):
+        await run_inspection(bridge_env, ("unavailable", None))
+    q = await run_inspection(bridge_env, ("bad", TRUSTED), reported=reported)
+    assert bridge_env.get("0xtx1")["status"] == STATUS_BAD
+    assert q.qsize() == 1
+    msg = q.get_nowait()
+    assert isinstance(msg, Msg)
+    assert msg.category == "warning"
+
+
+@pytest.mark.asyncio
+async def test_bad_then_bad_disputes_once(bridge_env):
+    """A replay of a row already marked bad does not inspect or dispute again."""
+    reported = ("0xaaa", "tellor1x", 999, 1)
+    q1 = await run_inspection(bridge_env, ("bad", TRUSTED), reported=reported)
+    q2 = await run_inspection(bridge_env, ("bad", TRUSTED), reported=reported)
+    assert bridge_env.get("0xtx1")["status"] == STATUS_BAD
+    assert q1.qsize() == 1
+    assert q2.empty()
+
+
+@pytest.mark.asyncio
+async def test_inspect_queues_dispute_on_equality_mismatch():
+    """inspect() queues a dispute when an equality mismatch crosses the configured level."""
     from layer_values_monitor.monitor import inspect
 
     disputes_q = asyncio.Queue()
@@ -165,23 +193,6 @@ async def test_inspect_defer_dispute_skips_queue_put():
             equality_metrics(warning=1.0, minor=0.0),
             MagicMock(),
             query=None,
-            defer_dispute=True,
-        )
-    assert disputes_q.empty()
-
-    with (
-        patch("layer_values_monitor.monitor.add_to_table"),
-        patch("layer_values_monitor.monitor.generic_alert"),
-    ):
-        await inspect(
-            make_report(),
-            {"a": 1},
-            {"a": 2},
-            disputes_q,
-            equality_metrics(warning=1.0, minor=0.0),
-            MagicMock(),
-            query=None,
-            defer_dispute=False,
         )
     msg = disputes_q.get_nowait()
     assert isinstance(msg, Msg)

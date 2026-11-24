@@ -12,13 +12,14 @@ from typing import Any
 
 from layer_values_monitor.alert_state import get_alert_state_tracker
 from layer_values_monitor.bridge_ledger import (
+    DEFAULT_RECONCILE_INTERVAL,
     STATUS_BAD,
     STATUS_GOOD,
     STATUS_UNVERIFIED,
     get_bridge_ledger,
 )
 from layer_values_monitor.bridge_networks import resolve_bridge_chain_id, resolve_contract_address
-from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
+from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks, query_block_events
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_types import (
@@ -35,6 +36,7 @@ from layer_values_monitor.discord import bridge_ledger_alert, deprecated_query_t
 from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
+    equality_dispute_category,
     is_disputable,
 )
 from layer_values_monitor.logger import console_logger
@@ -444,6 +446,17 @@ def parse_reporters_response(data: dict[str, Any], logger: logging.Logger) -> Re
         return None
 
 
+def _block_has_new_report(block_events: dict[str, Any] | None) -> bool:
+    """Return whether a block_results payload contains a new_report event."""
+    if not block_events:
+        return False
+    for tx_result in block_events.get("txs_results") or []:
+        for event in tx_result.get("events") or []:
+            if event.get("type") == "new_report":
+                return True
+    return False
+
+
 async def listen_to_websocket_events(
     uri: str, queries: list[str], q: asyncio.Queue, logger: logging.Logger, height_tracker: HeightTracker
 ) -> None:
@@ -482,12 +495,17 @@ async def listen_to_websocket_events(
                 last_message_time = time.monotonic()
 
                 async def _stall_watchdog() -> None:
-                    """Force a reconnect when the stream goes silent while the chain advances.
+                    """Force a reconnect when the socket is silent or the attribute stream is wedged.
 
                     Silence alone is ambiguous (a quiet period has no reports, a
                     halted chain has no blocks), so the silence is only judged a
-                    wedge when an RPC height probe shows blocks past the last one
-                    we actually delivered on this socket.
+                    wedge when an RPC height probe shows blocks past the last
+                    NewBlock heartbeat. A stream that still delivers NewBlock can
+                    hide a dead attribute subscription: if the tip is more than
+                    two blocks ahead of the catch-up cursor, one older block in
+                    that gap with a new_report means the subscription missed it.
+                    The two-block cushion keeps the current height from looking
+                    missed while its txs are still in the queue.
                     """
                     probe_interval = max(1.0, WS_STALL_TIMEOUT_SECONDS / 4)
                     while True:
@@ -496,6 +514,18 @@ async def listen_to_websocket_events(
                         # update the recv loop makes to last_message_time.
                         idle_for = time.monotonic() - last_message_time  # noqa: B023
                         if idle_for < WS_STALL_TIMEOUT_SECONDS:
+                            observed = height_tracker.last_observed_height
+                            if observed > height_tracker.last_height + 2:
+                                check_height = observed - 2
+                                block_events = await query_block_events(uri, check_height, logger)
+                                if _block_has_new_report(block_events):
+                                    logger.warning(
+                                        f"⚠️ Block {check_height} has a new_report the attribute subscription "
+                                        f"missed (observed {observed}, catch-up cursor {height_tracker.last_height}); "
+                                        "forcing reconnect"
+                                    )
+                                    await websocket.close()
+                                    return
                             continue
                         current_height = await get_current_height(uri)
                         if current_height is None:
@@ -503,10 +533,10 @@ async def listen_to_websocket_events(
                                 f"WebSocket silent for {idle_for:.0f}s but height probe failed; keeping connection"
                             )
                             continue
-                        if current_height > height_tracker.last_height:
+                        if current_height > height_tracker.last_observed_height:
                             logger.warning(
                                 f"⚠️ WebSocket silent for {idle_for:.0f}s while chain advanced to "
-                                f"{current_height} (last delivered block {height_tracker.last_height}); "
+                                f"{current_height} (last observed block {height_tracker.last_observed_height}); "
                                 "treating subscription as wedged and forcing reconnect"
                             )
                             await websocket.close()
@@ -521,13 +551,12 @@ async def listen_to_websocket_events(
 
                         result = parsed_response.get("result") or {}
                         if (result.get("data") or {}).get("type") == "tendermint/event/NewBlock":
-                            # NewBlock copy of a matched event, or heartbeat-only message:
-                            # track the height for catch-up/stall checks, keep it out of the
-                            # queue (raw_data_queue_handler discards these events anyway).
+                            # Heartbeat only: record the tip for the stall watchdog.
+                            # The catch-up cursor stays where reports were actually queued.
                             block_heights = (result.get("events") or {}).get("block.height")
                             if block_heights:
                                 try:
-                                    height_tracker.update(int(block_heights[0]))
+                                    height_tracker.observe(int(block_heights[0]))
                                 except (ValueError, TypeError):
                                     pass
                             continue
@@ -1904,11 +1933,15 @@ async def inspect_trbbridge_reports(
         }
         report_ts = (int(r.timestamp) / 1000.0) if r.timestamp else time.time()
 
-        # Shared read/confirm verdict helper (hardened read; a zero-struct or mismatch gets
-        # a BRIDGE_CONFIRM_SECONDS confirm read before any verdict). Tier 1 reaches the
-        # verdict inline: good/bad/unverified, disputing immediately on confirmed bad.
+        # A catch-up replay of a finished row must not re-inspect or dispute.
+        existing = ledger.get(r.tx_hash)
+        if existing is not None and existing["status"] in (STATUS_GOOD, STATUS_BAD):
+            continue
+
+        # Tier 1 does not wait on the confirm read. A match is good; a zero struct or a
+        # mismatch is pending and the reconciler confirms it on the next cycle.
         verdict, trusted = await get_bridge_verdict(
-            provider_builder, contract_address, deposit_id, reported_value, logger=logger
+            provider_builder, contract_address, deposit_id, reported_value, confirm=False, logger=logger
         )
 
         if verdict == "unavailable":
@@ -1942,30 +1975,55 @@ async def inspect_trbbridge_reports(
                 )
             continue
 
+        if verdict == "pending":
+            # Due on the next reconciler cycle, which runs the 60s confirm. No dispute
+            # and no Discord alert on this path — the new-report queue is not held.
+            interval = float(os.getenv("BRIDGE_RECONCILE_INTERVAL", str(DEFAULT_RECONCILE_INTERVAL)))
+            ledger.upsert_report(
+                tx_hash=r.tx_hash,
+                query_id=query_id,
+                query_type=r.query_type,
+                contract_address=contract_address,
+                deposit_id=deposit_id,
+                reported_value=reported_value,
+                status=STATUS_UNVERIFIED,
+                report_ts=report_ts,
+                reporter=r.reporter,
+                power=r.power,
+                meta_id=r.meta_id,
+                last_error="waiting for the confirm read",
+                state_ts=time.time() - interval,
+            )
+            continue
+
+        status = STATUS_GOOD if verdict == "ok" else STATUS_BAD
+        last_error = None if verdict == "ok" else "tier1_confirmed_bad"
+        if existing is not None and existing["status"] == STATUS_UNVERIFIED:
+            ledger.set_status(r.tx_hash, status, error=last_error)
+        else:
+            ledger.upsert_report(
+                tx_hash=r.tx_hash,
+                query_id=query_id,
+                query_type=r.query_type,
+                contract_address=contract_address,
+                deposit_id=deposit_id,
+                reported_value=reported_value,
+                status=status,
+                report_ts=report_ts,
+                reporter=r.reporter,
+                power=r.power,
+                meta_id=r.meta_id,
+                last_error=last_error,
+            )
+
         trusted_value = trusted
 
         logger.info(f"TRBBridge Reported: {reported_value}")
         logger.info(f"TRBBridge Trusted: {trusted_value}")
         logger.info(f"TRBBridge verdict: {verdict}")
 
-        ledger.upsert_report(
-            tx_hash=r.tx_hash,
-            query_id=query_id,
-            query_type=r.query_type,
-            contract_address=contract_address,
-            deposit_id=deposit_id,
-            reported_value=reported_value,
-            status=STATUS_GOOD if verdict == "ok" else STATUS_BAD,
-            report_ts=report_ts,
-            reporter=r.reporter,
-            power=r.power,
-            meta_id=r.meta_id,
-            last_error=None if verdict == "ok" else "tier1_confirmed_bad",
-        )
-
-        # For TRBBridge we expect exact equality; the verdict above already ran the
-        # confirm-read discipline, so inspect() disputes directly (no defer, no prefix).
-        # Note: TRBBridge doesn't have a standard query object, pass None
+        # Dispute only when this pass is the one that records bad (first sight, or the
+        # transition out of unverified). A later replay hits the good/bad skip above.
         await inspect(
             r,
             reported_value,
@@ -1974,7 +2032,6 @@ async def inspect_trbbridge_reports(
             metrics,
             logger,
             query=None,
-            defer_dispute=False,
         )
 
     return None
@@ -2131,12 +2188,7 @@ async def perform_dispute_verification(
 
                 # Determine dispute category
                 if metrics.metric.lower() == "equality":
-                    if metrics.warning_threshold == 1.0:
-                        result["dispute_category"] = "warning"
-                    elif metrics.minor_threshold == 1.0:
-                        result["dispute_category"] = "minor"
-                    elif metrics.major_threshold == 1.0:
-                        result["dispute_category"] = "major"
+                    result["dispute_category"] = equality_dispute_category(metrics)
                 else:
                     category = determine_dispute_category(
                         diff=final_diff,
@@ -2160,20 +2212,13 @@ async def perform_dispute_verification(
         # Single-check logic for TRBBridge queries (no fetcher available)
         logger.info(f"disputable: true, diff: {diff} (single-check mode)")
 
-        # For equality metrics, determine dispute level based on which threshold is set to 1.0
+        # For equality metrics, the dispute level is whichever threshold is set to 1.0
         if metrics.metric.lower() == "equality":
-            if metrics.warning_threshold == 1.0:
-                result["dispute_category"] = "warning"
+            category = equality_dispute_category(metrics)
+            if category is not None:
+                result["dispute_category"] = category
                 result["should_dispute"] = True
-                logger.info("Auto-disputing equality mismatch at warning level")
-            elif metrics.minor_threshold == 1.0:
-                result["dispute_category"] = "minor"
-                result["should_dispute"] = True
-                logger.info("Auto-disputing equality mismatch at minor level")
-            elif metrics.major_threshold == 1.0:
-                result["dispute_category"] = "major"
-                result["should_dispute"] = True
-                logger.info("Auto-disputing equality mismatch at major level")
+                logger.info(f"Auto-disputing equality mismatch at {category} level")
             else:
                 logger.debug("No dispute level configured for equality metric (no threshold set to 1.0)")
         else:
@@ -2202,8 +2247,6 @@ async def inspect(
     logger: logging,
     query: Any = None,
     trusted_value_fetcher: Any = None,
-    defer_dispute: bool = False,
-    alert_prefix: str | None = None,
 ) -> None:
     """Inspect a new report and check if it is disputable.
 
@@ -2216,9 +2259,6 @@ async def inspect(
         logger: Logger instance
         query: Optional query object from telliot-feeds
         trusted_value_fetcher: Optional async callable that returns (value, timestamp) tuple for re-fetching trusted value
-        defer_dispute: If True, alert as usual but never enqueue a dispute — the bridge
-            reconciler (Tier 2) disputes only after its second check confirms the mismatch.
-        alert_prefix: Optional string prepended to the Discord alert description.
 
     """
     # Per-report logging removed - now using batch summaries at height changes
@@ -2289,12 +2329,7 @@ async def inspect(
 
     if disputable:
         if metrics.metric.lower() == "equality":
-            if metrics.warning_threshold == 1.0:
-                dispute_level = "warning"
-            elif metrics.minor_threshold == 1.0:
-                dispute_level = "minor"
-            elif metrics.major_threshold == 1.0:
-                dispute_level = "major"
+            dispute_level = equality_dispute_category(metrics)
         else:
             category = determine_dispute_category(
                 diff=diff,
@@ -2391,7 +2426,7 @@ async def inspect(
             logger.info(f"Double-check alert:\n{description}\n{msg}")
             if alert_tracker.should_alert(report.query_id):
                 alert_tracker.mark_active(report.query_id, diff, query_info)
-                generic_alert(msg, description=alert_prefix + description if alert_prefix else description)
+                generic_alert(msg, description=description)
             else:
                 alert_tracker.record_suppressed(report.query_id, diff)
                 state = alert_tracker.get_active_state(report.query_id)
@@ -2448,7 +2483,7 @@ async def inspect(
             logger.info(f"Alertable value detected:\n{msg}")
             if alert_tracker.should_alert(report.query_id):
                 alert_tracker.mark_active(report.query_id, diff, query_info)
-                generic_alert(msg, description=alert_prefix + description if alert_prefix else description)
+                generic_alert(msg, description=description)
             else:
                 alert_tracker.record_suppressed(report.query_id, diff)
                 state = alert_tracker.get_active_state(report.query_id)
@@ -2460,8 +2495,8 @@ async def inspect(
 
     display["DISPUTABLE"] = disputable
 
-    # Submit dispute if needed (deferred disputes are queued later by the bridge reconciler)
-    if should_dispute and dispute_category is not None and not defer_dispute:
+    # Submit dispute if needed
+    if should_dispute and dispute_category is not None:
         logger.info(f"Getting ready to send dispute tx... reported value: {reported_value}")
         fee = determine_dispute_fee(dispute_category, int(report.power))
         logger.info(f"Fee: {fee.__str__() + DENOM}")

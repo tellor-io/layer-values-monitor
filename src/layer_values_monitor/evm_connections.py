@@ -14,9 +14,6 @@ logger = logging.getLogger(__name__)
 # Global cache for Web3 connections - shared across all modules
 _web3_cache: dict[int, Web3] = {}
 
-# Which URL produced each cached connection (needed to pick a *different* provider)
-_web3_cache_source: dict[int, str] = {}
-
 
 def get_web3_connection(
     chain_id: int,
@@ -136,17 +133,17 @@ def get_web3_connection(
             block_number = w3.eth.block_number
             actual_chain_id = w3.eth.chain_id
 
-            # Verify chain ID matches (safety check)
+            # A wrong-chain endpoint is not a usable provider for this request.
+            # Do not cache it and do not return it; try the next URL.
             if actual_chain_id != chain_id:
                 logger.warning(
                     f"Chain ID mismatch for {url_label} RPC: expected {chain_id}, got {actual_chain_id}. "
-                    f"Caching under actual chain ID {actual_chain_id}"
+                    "Trying next URL."
                 )
-                chain_id = actual_chain_id
+                continue
 
             # Cache the connection
             _web3_cache[chain_id] = w3
-            _web3_cache_source[chain_id] = rpc_url
 
             # Log success with indication if using backup
             if idx == 0:
@@ -297,13 +294,12 @@ def validate_rpc_connection(
 
 
 def invalidate_web3_connection(chain_id: int) -> None:
-    """Drop the cached Web3 connection (and its source URL) for a chain.
+    """Drop the cached Web3 connection for a chain.
 
     Fixes the "dead primary latches until restart" problem: call this when a
     *per-call* RPC error occurs so the next connection rebuild fails over.
     """
     _web3_cache.pop(chain_id, None)
-    _web3_cache_source.pop(chain_id, None)
     logger.info(f"Invalidated cached Web3 connection for chain {chain_id}")
 
 
@@ -314,7 +310,6 @@ def clear_cache() -> None:
     """
     global _web3_cache
     _web3_cache.clear()
-    _web3_cache_source.clear()
     logger.info("Cleared all cached Web3 connections")
 
 

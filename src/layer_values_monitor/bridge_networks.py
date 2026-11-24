@@ -11,6 +11,10 @@ Verified against Etherscan (2026-11-23, getsourcecode ContractName):
   chain 1        0x6ec401744008f4B018Ed9A36f76e6629799Ee50E  TokenBridgeV2 (only bridge on mainnet)
   chain 11155111 0x62733e63499a25E35844c91275d4c3bdb159D29d  TokenBridge   (v1)
   chain 11155111 0x55355157703A44f7516FBB831333317E98944e32  TokenBridgeV2
+
+tellor-1 bakes in only the V2 address. The V1 env name stays unset so a TRBBridge
+query is not pointed at TokenBridgeV2 (that would build a V1 query id for a V2 contract).
+layertest-5 keeps the Sepolia pair.
 """
 
 import logging
@@ -30,7 +34,6 @@ _SEPOLIA_BRIDGE_V2 = "0x55355157703A44f7516FBB831333317E98944e32"
 # expected to point at their own bridge deployments via the env vars.
 _BUILTIN_DEFAULTS = {
     "tellor-1": {
-        "TRBBRIDGE_CONTRACT_ADDRESS": _MAINNET_BRIDGE,
         "TRBBRIDGEV2_CONTRACT_ADDRESS": _MAINNET_BRIDGE,
         "evm_chain_id": 1,
     },
@@ -102,8 +105,9 @@ def validate_bridge_rpc(logger: Any = None) -> None:
 
     A wrong-chain endpoint is not a performance problem, it is a correctness one: a contract
     with a compatible deposits() signature at the same address on the wrong chain would yield
-    a wrong trusted value and could dispute a correct report. Runtime detection
-    (get_web3_connection) only warns, so gate it here while startup can still refuse.
+    a wrong trusted value and could dispute a correct report. Runtime connection setup
+    skips a URL that answers the wrong chain; this gate refuses to start when a configured
+    endpoint does, while startup can still refuse.
 
     Semantics:
       - detected chain ID != resolved bridge chain ID -> ValueError (fatal)
@@ -141,6 +145,15 @@ def validate_bridge_rpc(logger: Any = None) -> None:
 
     # One clear success line; the per-URL probe successes are already in the log.
     logger.info(f"🌉 Bridge RPC validation passed: all {len(urls)} endpoint(s) on chain {chain_id}")
+
+
+def bridge_chain_id_source() -> str:
+    """Return how the bridge EVM chain id was chosen: env override, built-in default, or fallback chain 1."""
+    if os.getenv("TRBBRIDGE_CHAIN_ID"):
+        return "env override"
+    if _builtin_for_layer_chain() is not None:
+        return "built-in default"
+    return "fallback chain 1"
 
 
 def resolve_bridge_chain_id(logger: Any = None) -> int:
