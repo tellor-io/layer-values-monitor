@@ -398,3 +398,32 @@ async def test_inspect_reports_does_not_skip_non_deprecated(config_file):
 
     # Normal bridge inspection should have been called
     mock_bridge.assert_called_once()
+
+
+def test_query_type_defaults_merge_precedence(tmp_path):
+    """Merge precedence: global_defaults <- [queries.X.defaults] <- [queries.X.<qid>] (later wins)."""
+    cfg = tmp_path / "tiered.toml"
+    cfg.write_text("""
+[global_defaults.percentage]
+alert_threshold = 0.2
+warning_threshold = 0.3
+minor_threshold = 0.9
+major_threshold = 0.95
+
+[query_types]
+spotprice = { metric = "percentage", handler = "telliot_feeds" }
+
+[queries.spotprice.defaults]
+warning_threshold = 0.5
+minor_threshold = 0.8
+
+[queries.spotprice."0xdead"]
+minor_threshold = 0.7
+""")
+    cw = ConfigWatcher(cfg)
+    metrics = cw.get_metrics_for_query("0xdead", "spotprice")
+    assert metrics is not None
+    assert metrics.warning_threshold == 0.5  # query-type defaults beat global defaults
+    assert metrics.minor_threshold == 0.7  # qid table beats query-type defaults
+    assert metrics.alert_threshold == 0.2  # inherited through both layers
+    assert metrics.major_threshold == 0.95  # untouched value survives the three-way merge

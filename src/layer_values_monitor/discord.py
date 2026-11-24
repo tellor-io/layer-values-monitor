@@ -116,6 +116,18 @@ def deprecated_query_type_alert(
     send_discord_msg(alert_msg, description=description)
 
 
+def bridge_ledger_alert(description: str, details: dict) -> None:
+    """Send a bridge verification alert (unverified / deadline / resolved).
+
+    Args:
+        description: Discord description line, e.g. "🌉 **BRIDGE REPORT UNVERIFIED**"
+        details: field-name -> value pairs rendered as bold markdown lines
+
+    """
+    msg = "\n".join(f"**{k}:** {v}" for k, v in details.items())
+    generic_alert(msg, description=description)
+
+
 def format_difference(diff: float, metric: str) -> str:
     """Format difference value based on metric type."""
     if metric.lower() == "percentage":

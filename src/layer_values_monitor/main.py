@@ -8,6 +8,14 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from layer_values_monitor.bridge_networks import (
+    BRIDGE_CONTRACT_ENVS,
+    bridge_chain_id_source,
+    resolve_bridge_chain_id,
+    resolve_contract_address,
+    validate_bridge_rpc,
+)
+from layer_values_monitor.bridge_reconciler import bridge_reconcile_loop
 from layer_values_monitor.catchup import HeightTracker
 from layer_values_monitor.config_watcher import ConfigWatcher, watch_config
 from layer_values_monitor.custom_types import PowerThresholds
@@ -208,6 +216,18 @@ async def start() -> None:
     supported_types = list(config_watcher.query_types.keys())
     console_logger.info(f"✅ Monitoring {len(supported_types)} query types: {', '.join(supported_types)}")
 
+    # Bridge config summary: env override or built-in default per query version (bridge_networks)
+    if any(config_watcher.is_supported_query_type(t) for t in ("TRBBridge", "TRBBridgeV2")):
+        for env_name in BRIDGE_CONTRACT_ENVS:
+            resolved = resolve_contract_address(env_name, logger=logger)
+            source = "env override" if os.getenv(env_name) else ("built-in default" if resolved else "MISSING")
+            console_logger.info(f"🌉 Bridge contract {env_name}: {resolved} ({source})")
+        evm_chain = resolve_bridge_chain_id(logger=logger)
+        console_logger.info(f"🌉 Bridge EVM chain ID: {evm_chain} ({bridge_chain_id_source()})")
+        # Fatal if a configured bridge RPC answers a different chain: wrong-chain reads
+        # could produce a wrong trusted value (startup is the last cheap place to refuse).
+        validate_bridge_rpc(logger=logger)
+
     # Bounded queues to prevent memory exhaustion
     raw_data_queue = asyncio.Queue(maxsize=1000)  # Raw WebSocket events
     agg_reports_queue = asyncio.Queue(maxsize=500)  # Aggregate reports for Saga Guard
@@ -234,7 +254,10 @@ async def start() -> None:
     # TODO: validate user options to check if they conflict
     try:
         # Build list of queries to subscribe to
-        queries = ["new_report.reporter_power > 0"]
+        # The NewBlock subscription is a per-block heartbeat: the stall watchdog
+        # in listen_to_websocket_events uses message silence plus chain height
+        # to detect a wedged event bus that never closes the socket.
+        queries = ["new_report.reporter_power > 0", "tm.event='NewBlock'"]
 
         # Add aggregate report query if Saga guard is enabled
         if args.enable_saga_guard:
@@ -266,6 +289,7 @@ async def start() -> None:
             ),
             watch_config(config_watcher),
             run_cache_refresh_loop(get_price_cache(), logger),
+            bridge_reconcile_loop(disputes_queue, config_watcher, logger),
         ]
 
         # Only add Saga-related tasks if enabled

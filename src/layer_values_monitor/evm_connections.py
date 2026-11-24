@@ -19,6 +19,7 @@ def get_web3_connection(
     chain_id: int,
     custom_rpc_url: str | None = None,
     required: bool = True,
+    attempt: int = 0,
 ) -> Web3 | None:
     """Get cached Web3 connection for any EVM chain with automatic failover.
 
@@ -27,14 +28,19 @@ def get_web3_connection(
 
     Lookup order:
     1. custom_rpc_url parameter (if provided, bypasses cache)
-    2. Cached connection for chain_id (if exists)
+    2. Cached connection for chain_id (if exists, skipped when attempt > 0)
     3. EVM_RPC_URLS_{chain_id} - comma-separated list (tries each in order)
-    4. INFURA_API_KEY fallback (for chains 1, 11155111)
+    4. EVM_RPC_URLS - plain fallback (the Layer CHAIN_ID fixes the bridge chain, so one
+       URL list per process is enough; the suffixed var still wins where both are set)
+    5. INFURA_API_KEY fallback (for chains 1, 11155111)
 
     Args:
         chain_id: Target chain ID (e.g., 1 for Ethereum mainnet, 11155111 for Sepolia)
         custom_rpc_url: Optional override RPC URL (bypasses cache and env vars)
         required: If True, log error when connection fails. Set to False for optional connections.
+        attempt: Retry hint. attempt=0 uses the cached connection. attempt>0 skips the cache
+            and starts the URL rotation at index attempt % len(urls), so per-call retries can
+            fail over to a different provider even after a connection was cached.
 
     Returns:
         Web3 instance with active connection, or None if connection fails
@@ -60,17 +66,19 @@ def get_web3_connection(
                 logger.error(f"Failed to connect to chain {chain_id} via custom URL {custom_rpc_url}: {e}")
             return None
 
-    # Return cached connection if available
-    if chain_id in _web3_cache:
+    # Return cached connection if available (retry attempts skip the stale cache)
+    if attempt == 0 and chain_id in _web3_cache:
         logger.debug(f"Using cached Web3 connection for chain {chain_id}")
         return _web3_cache[chain_id]
 
     # Build list of RPC URLs to try
     rpc_urls_to_try = []
 
-    # Check for explicit chain-specific config first (takes precedence)
-    urls_key = f"EVM_RPC_URLS_{chain_id}"
-    urls_value = os.getenv(urls_key)
+    # Check for explicit chain-specific config first; plain EVM_RPC_URLS is the fallback
+    # because the Layer CHAIN_ID already determines the bridge chain (bridge_networks.py).
+    suffixed_value = os.getenv(f"EVM_RPC_URLS_{chain_id}")
+    urls_value = suffixed_value or os.getenv("EVM_RPC_URLS")
+    urls_key = f"EVM_RPC_URLS_{chain_id}" if suffixed_value else "EVM_RPC_URLS"
 
     if urls_value:
         # Parse comma-separated URLs
@@ -98,16 +106,21 @@ def get_web3_connection(
                 logger.error(
                     f"No RPC URL configured for chain {chain_id}. "
                     f"INFURA_API_KEY only supports chains: {list(infura_rpc_urls.keys())}. "
-                    f"Set EVM_RPC_URLS_{chain_id} for other chains."
+                    f"Set EVM_RPC_URLS (or EVM_RPC_URLS_{chain_id}) for other chains."
                 )
                 return None
         else:
             if required:
                 logger.error(
                     f"No RPC URL configured for chain {chain_id}. "
-                    f"Set INFURA_API_KEY (for chains 1, 11155111) or EVM_RPC_URLS_{chain_id} (comma-separated URLs)"
+                    f"Set INFURA_API_KEY (for chains 1, 11155111) or EVM_RPC_URLS[_<chain_id>] (comma-separated URLs)"
                 )
             return None
+
+    # Retry attempts rotate the starting URL so per-call failover reaches a different provider
+    if attempt > 0 and len(rpc_urls_to_try) > 1:
+        offset = attempt % len(rpc_urls_to_try)
+        rpc_urls_to_try = rpc_urls_to_try[offset:] + rpc_urls_to_try[:offset]
 
     # Try each RPC URL in order until one works
     last_error = None
@@ -120,13 +133,14 @@ def get_web3_connection(
             block_number = w3.eth.block_number
             actual_chain_id = w3.eth.chain_id
 
-            # Verify chain ID matches (safety check)
+            # A wrong-chain endpoint is not a usable provider for this request.
+            # Do not cache it and do not return it; try the next URL.
             if actual_chain_id != chain_id:
                 logger.warning(
                     f"Chain ID mismatch for {url_label} RPC: expected {chain_id}, got {actual_chain_id}. "
-                    f"Caching under actual chain ID {actual_chain_id}"
+                    "Trying next URL."
                 )
-                chain_id = actual_chain_id
+                continue
 
             # Cache the connection
             _web3_cache[chain_id] = w3
@@ -277,6 +291,16 @@ def validate_rpc_connection(
     except Exception as e:
         error_msg = f"Failed to connect to {network_name} RPC at {rpc_url}: {e}"
         return False, error_msg, None
+
+
+def invalidate_web3_connection(chain_id: int) -> None:
+    """Drop the cached Web3 connection for a chain.
+
+    Fixes the "dead primary latches until restart" problem: call this when a
+    *per-call* RPC error occurs so the next connection rebuild fails over.
+    """
+    _web3_cache.pop(chain_id, None)
+    logger.info(f"Invalidated cached Web3 connection for chain {chain_id}")
 
 
 def clear_cache() -> None:

@@ -11,7 +11,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from layer_values_monitor.alert_state import get_alert_state_tracker
-from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks
+from layer_values_monitor.bridge_ledger import (
+    DEFAULT_RECONCILE_INTERVAL,
+    STATUS_BAD,
+    STATUS_GOOD,
+    STATUS_UNVERIFIED,
+    get_bridge_ledger,
+)
+from layer_values_monitor.bridge_networks import resolve_bridge_chain_id, resolve_contract_address
+from layer_values_monitor.catchup import HeightTracker, get_current_height, process_missed_blocks, query_block_events
 from layer_values_monitor.config_watcher import ConfigWatcher
 from layer_values_monitor.constants import DENOM
 from layer_values_monitor.custom_types import (
@@ -24,10 +32,11 @@ from layer_values_monitor.custom_types import (
     Reporter,
     ReporterQueryResponse,
 )
-from layer_values_monitor.discord import deprecated_query_type_alert, generic_alert
+from layer_values_monitor.discord import bridge_ledger_alert, deprecated_query_type_alert, generic_alert
 from layer_values_monitor.dispute import (
     determine_dispute_category,
     determine_dispute_fee,
+    equality_dispute_category,
     is_disputable,
 )
 from layer_values_monitor.logger import console_logger
@@ -40,11 +49,17 @@ from layer_values_monitor.telliot_feeds import (
     get_price_cache,
     get_query,
 )
-from layer_values_monitor.trb_bridge import decode_report_value, get_trb_bridge_trusted_value
+from layer_values_monitor.trb_bridge import (
+    decode_query_data,
+    decode_report_value,
+    get_bridge_verdict,
+    make_provider_builder,
+)
 from layer_values_monitor.utils import add_to_table, decode_hex_value
 
 import aiohttp
 import websockets
+from web3 import Web3
 
 DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS = 300.0
 SUBSCRIPTION_MAX_ATTEMPTS = 3
@@ -59,12 +74,13 @@ SUBSCRIPTION_RETRY_DELAY_SECONDS = 1.0
 # These values are independent of Layer block time.
 WS_PING_INTERVAL_SECONDS = 20.0
 WS_PING_TIMEOUT_SECONDS = 60.0
-# Height-advance is the real flush trigger. This timeout only splits a
-# same-height burst if wall-clock processing is delayed. It must be greater
-# than one reporting cycle at slow block times (~2 * 10.4s) so a 20s idle gap
-# does not flush the first reports of a new height. At <2s blocks, the next
-# reporting height still arrives in ~3.2s and flushes via height-advance, so
-# this timeout never delays those batches.
+# Height-advance is the primary flush trigger. This timeout has two jobs: it
+# splits a same-height burst if wall-clock processing is delayed, and it bounds
+# how long the last batch of a quiet period waits without a next event to
+# trigger the flush. It must be greater than one reporting cycle at slow block
+# times (~2 * 10.4s) so a 20s idle gap does not flush the first reports of a
+# new height. At <2s blocks, the next reporting height still arrives in ~3.2s
+# and flushes via height-advance, so this timeout never delays those batches.
 BATCH_TIMEOUT_SECONDS = 30.0
 MAX_BATCH_SIZE = 25
 
@@ -89,6 +105,15 @@ OPERATIONAL_SUMMARY_INTERVAL_SECONDS = _get_float_env(
     "LVM_OPERATIONAL_SUMMARY_INTERVAL_SECONDS",
     DEFAULT_OPERATIONAL_SUMMARY_INTERVAL_SECONDS,
 )
+
+# CometBFT can stop delivering events to an established subscription while the
+# socket stays open and pings keep answering (observed as an event-bus wedge on
+# lab chains). The tm.event='NewBlock' heartbeat makes silence meaningful: if
+# no message of any kind arrives for this many seconds AND the chain height
+# advanced past the last block we actually delivered, the stream is wedged and
+# the socket is force-reconnected (catch-up replays the gap). A chain that
+# genuinely halted stays reconnected instead of churning. 0 disables.
+WS_STALL_TIMEOUT_SECONDS = _get_float_env("WS_STALL_TIMEOUT_SECONDS", 60.0)
 
 
 def _format_report_group_label(report: NewReport) -> str:
@@ -421,8 +446,19 @@ def parse_reporters_response(data: dict[str, Any], logger: logging.Logger) -> Re
         return None
 
 
+def _block_has_new_report(block_events: dict[str, Any] | None) -> bool:
+    """Return whether a block_results payload contains a new_report event."""
+    if not block_events:
+        return False
+    for tx_result in block_events.get("txs_results") or []:
+        for event in tx_result.get("events") or []:
+            if event.get("type") == "new_report":
+                return True
+    return False
+
+
 async def listen_to_websocket_events(
-    uri: str, queries: list[str], q: asyncio.Queue, logger: logging, height_tracker: HeightTracker
+    uri: str, queries: list[str], q: asyncio.Queue, logger: logging.Logger, height_tracker: HeightTracker
 ) -> None:
     """Connect to a layer websocket and fetch events, adding them to queue for monitoring.
 
@@ -453,13 +489,88 @@ async def listen_to_websocket_events(
                 # Only report success after every subscription is confirmed.
                 retry_count = 0
                 console_logger.info("✅ Monitoring active")
-                while True:
-                    response = await websocket.recv()
-                    parsed_response = json.loads(response)
 
-                    logger.debug(f"Raw WebSocket response: {json.dumps(parsed_response)[:500]}")
+                # Stall watchdog state. Any inbound message (including the
+                # per-block NewBlock heartbeat) proves the stream is alive.
+                last_message_time = time.monotonic()
 
-                    await q.put(parsed_response)
+                async def _stall_watchdog() -> None:
+                    """Force a reconnect when the socket is silent or the attribute stream is wedged.
+
+                    Silence alone is ambiguous (a quiet period has no reports, a
+                    halted chain has no blocks), so the silence is only judged a
+                    wedge when an RPC height probe shows blocks past the last
+                    NewBlock heartbeat. A stream that still delivers NewBlock can
+                    hide a dead attribute subscription: if the tip is more than
+                    two blocks ahead of the catch-up cursor, one older block in
+                    that gap with a new_report means the subscription missed it.
+                    The two-block cushion keeps the current height from looking
+                    missed while its txs are still in the queue.
+                    """
+                    probe_interval = max(1.0, WS_STALL_TIMEOUT_SECONDS / 4)
+                    while True:
+                        await asyncio.sleep(probe_interval)
+                        # Late binding is intended: the watchdog must see every
+                        # update the recv loop makes to last_message_time.
+                        idle_for = time.monotonic() - last_message_time  # noqa: B023
+                        if idle_for < WS_STALL_TIMEOUT_SECONDS:
+                            observed = height_tracker.last_observed_height
+                            if observed > height_tracker.last_height + 2:
+                                check_height = observed - 2
+                                block_events = await query_block_events(uri, check_height, logger)
+                                if _block_has_new_report(block_events):
+                                    logger.warning(
+                                        f"⚠️ Block {check_height} has a new_report the attribute subscription "
+                                        f"missed (observed {observed}, catch-up cursor {height_tracker.last_height}); "
+                                        "forcing reconnect"
+                                    )
+                                    await websocket.close()
+                                    return
+                            continue
+                        current_height = await get_current_height(uri)
+                        if current_height is None:
+                            logger.warning(
+                                f"WebSocket silent for {idle_for:.0f}s but height probe failed; keeping connection"
+                            )
+                            continue
+                        if current_height > height_tracker.last_observed_height:
+                            logger.warning(
+                                f"⚠️ WebSocket silent for {idle_for:.0f}s while chain advanced to "
+                                f"{current_height} (last observed block {height_tracker.last_observed_height}); "
+                                "treating subscription as wedged and forcing reconnect"
+                            )
+                            await websocket.close()
+                            return
+
+                watchdog = asyncio.create_task(_stall_watchdog()) if WS_STALL_TIMEOUT_SECONDS > 0 else None
+                try:
+                    while True:
+                        response = await websocket.recv()
+                        parsed_response = json.loads(response)
+                        last_message_time = time.monotonic()
+
+                        result = parsed_response.get("result") or {}
+                        if (result.get("data") or {}).get("type") == "tendermint/event/NewBlock":
+                            # Heartbeat only: record the tip for the stall watchdog.
+                            # The catch-up cursor stays where reports were actually queued.
+                            block_heights = (result.get("events") or {}).get("block.height")
+                            if block_heights:
+                                try:
+                                    height_tracker.observe(int(block_heights[0]))
+                                except (ValueError, TypeError):
+                                    pass
+                            continue
+
+                        logger.debug(f"Raw WebSocket response: {json.dumps(parsed_response)[:500]}")
+
+                        await q.put(parsed_response)
+                finally:
+                    if watchdog is not None:
+                        watchdog.cancel()
+                        try:
+                            await watchdog
+                        except asyncio.CancelledError:
+                            pass
 
         except WebSocketSubscriptionError as e:
             logger.critical(f"Fatal WebSocket subscription failure: {e}", exc_info=True)
@@ -515,7 +626,7 @@ async def raw_data_queue_handler(
     raw_data_q: asyncio.Queue,
     new_reports_q: asyncio.Queue,
     agg_reports_q: asyncio.Queue | None,
-    logger: logging,
+    logger: logging.Logger,
     height_tracker: HeightTracker,
     max_iterations: float = float("inf"),  # use iterations var for testing purposes instead of using a while loop
 ) -> None:
@@ -533,8 +644,28 @@ async def raw_data_queue_handler(
     last_batch_time = time.time()
     operational_summary = OperationalSummary()
     while iterations < max_iterations:
+        # Bound the wait when a batch is pending: the timeout expiring is itself
+        # the flush trigger, so the last report of a quiet period is inspected
+        # within BATCH_TIMEOUT_SECONDS instead of waiting for the next event.
+        batch_deadline = None
+        if reports_collections:
+            batch_deadline = max(0.0, last_batch_time + BATCH_TIMEOUT_SECONDS - time.time())
+        try:
+            raw_data: dict[str, Any] = await asyncio.wait_for(raw_data_q.get(), timeout=batch_deadline)
+        except TimeoutError:
+            if reports_collections:
+                await _flush_new_report_batch(
+                    reports_collections,
+                    current_height,
+                    new_reports_q,
+                    operational_summary,
+                    logger,
+                    reason="idle timeout",
+                )
+                seen_new_report_events.clear()
+                last_batch_time = time.time()
+            continue
         iterations += 1
-        raw_data: dict[str, Any] = await raw_data_q.get()
         raw_data_q.task_done()
 
         result: dict[str, Any] = raw_data.get("result")
@@ -1754,16 +1885,28 @@ async def inspect_trbbridge_reports(
     logger: the logger object
     contract_address_env: env var name for the bridge contract address
     """
-    contract_address = os.getenv(contract_address_env)
-    chain_id = int(os.getenv("TRBBRIDGE_CHAIN_ID", "1"))
-    rpc_url = None  # Let trb_bridge.py handle RPC URL lookup via unified manager
+    # Env override first, then built-in defaults keyed by the Layer chain (bridge_networks).
+    raw_contract = resolve_contract_address(contract_address_env, logger=logger)
+    chain_id = resolve_bridge_chain_id(logger=logger)
 
-    if not contract_address:
-        logger.error(f"{contract_address_env} environment variable is not set")
+    if not raw_contract:
+        logger.error(
+            f"{contract_address_env} not set (and no built-in default for Layer chain '{os.getenv('CHAIN_ID', '')}')"
+        )
+        return None
+
+    # Store the checksummed form so later contract reads use one canonical address.
+    try:
+        contract_address = Web3.to_checksum_address(raw_contract)
+    except ValueError:
+        logger.error(f"{contract_address_env} is not a valid ETH address: {raw_contract}")
         return None
 
     logger.info(f"TRBBridge contract address: {contract_address}")
     logger.info(f"chain ID: {chain_id}")
+
+    ledger = get_bridge_ledger()
+    provider_builder = make_provider_builder(chain_id, logger=logger)
 
     for r in reports:
         # Decode the reported value
@@ -1774,40 +1917,120 @@ async def inspect_trbbridge_reports(
 
         reported_eth_addr, reported_layer_addr, reported_amount, reported_tip = reported_details
 
-        # Get trusted value from contract
-        trusted_details = await get_trb_bridge_trusted_value(r.query_data, contract_address, chain_id, rpc_url, logger)
-
-        if trusted_details is None:
-            logger.error(f"Unable to fetch trusted value for TRBBridge query {query_id}")
+        # Deposit ID drives both the eth read and the persistent ledger row
+        deposit_id = decode_query_data(r.query_data)
+        if deposit_id is None:
+            logger.error(f"Failed to decode deposit ID for TRBBridge query {query_id}")
             continue
 
-        trusted_eth_addr, trusted_layer_addr, trusted_amount, trusted_tip = trusted_details
-
-        # Create comparison structures for inspection
         reported_value = {
             "eth_address": reported_eth_addr,
             "layer_address": reported_layer_addr,
             "amount": reported_amount,
             "tip": reported_tip,
         }
+        report_ts = (int(r.timestamp) / 1000.0) if r.timestamp else time.time()
 
-        trusted_value = {
-            "eth_address": trusted_eth_addr,
-            "layer_address": trusted_layer_addr,
-            "amount": trusted_amount,
-            "tip": trusted_tip,
-        }
+        # A catch-up replay of a finished row must not re-inspect or dispute.
+        existing = ledger.get(r.tx_hash)
+        if existing is not None and existing["status"] in (STATUS_GOOD, STATUS_BAD):
+            continue
+
+        # Tier 1 does not wait on the confirm read. A match is good; a zero struct or a
+        # mismatch is pending and the reconciler confirms it on the next cycle.
+        verdict, trusted = await get_bridge_verdict(
+            provider_builder, contract_address, deposit_id, reported_value, confirm=False, logger=logger
+        )
+
+        if verdict == "unavailable":
+            # A failed eth read becomes a persisted `unverified` row + alert, never a silent
+            # skip indistinguishable from a verified-good report. The reconciler retries forever.
+            newly_recorded = ledger.upsert_report(
+                tx_hash=r.tx_hash,
+                query_id=query_id,
+                query_type=r.query_type,
+                contract_address=contract_address,
+                deposit_id=deposit_id,
+                reported_value=reported_value,
+                status=STATUS_UNVERIFIED,
+                report_ts=report_ts,
+                reporter=r.reporter,
+                power=r.power,
+                meta_id=r.meta_id,
+                last_error="rpc_error",
+            )
+            if newly_recorded:  # catch-up replays must not re-alert
+                bridge_ledger_alert(
+                    "🌉 NO FUNCTIONAL RPC AVAILABLE TO CHECK BRIDGE REPORT!",
+                    {
+                        "QueryId": query_id,
+                        "QueryType": r.query_type,
+                        "Deposit ID": deposit_id,
+                        "Reporter": r.reporter,
+                        "Tx Hash": r.tx_hash,
+                        "Reason": "all RPC providers failed; reconciler will retry until a verdict",
+                    },
+                )
+            continue
+
+        if verdict == "pending":
+            # Due on the next reconciler cycle, which runs the 60s confirm. No dispute
+            # and no Discord alert on this path — the new-report queue is not held.
+            interval = float(os.getenv("BRIDGE_RECONCILE_INTERVAL", str(DEFAULT_RECONCILE_INTERVAL)))
+            ledger.upsert_report(
+                tx_hash=r.tx_hash,
+                query_id=query_id,
+                query_type=r.query_type,
+                contract_address=contract_address,
+                deposit_id=deposit_id,
+                reported_value=reported_value,
+                status=STATUS_UNVERIFIED,
+                report_ts=report_ts,
+                reporter=r.reporter,
+                power=r.power,
+                meta_id=r.meta_id,
+                last_error="waiting for the confirm read",
+                state_ts=time.time() - interval,
+            )
+            continue
+
+        status = STATUS_GOOD if verdict == "ok" else STATUS_BAD
+        last_error = None if verdict == "ok" else "tier1_confirmed_bad"
+        if existing is not None and existing["status"] == STATUS_UNVERIFIED:
+            ledger.set_status(r.tx_hash, status, error=last_error)
+        else:
+            ledger.upsert_report(
+                tx_hash=r.tx_hash,
+                query_id=query_id,
+                query_type=r.query_type,
+                contract_address=contract_address,
+                deposit_id=deposit_id,
+                reported_value=reported_value,
+                status=status,
+                report_ts=report_ts,
+                reporter=r.reporter,
+                power=r.power,
+                meta_id=r.meta_id,
+                last_error=last_error,
+            )
+
+        trusted_value = trusted
 
         logger.info(f"TRBBridge Reported: {reported_value}")
         logger.info(f"TRBBridge Trusted: {trusted_value}")
+        logger.info(f"TRBBridge verdict: {verdict}")
 
-        # Use string comparison for equality check (addresses and layer address)
-        # and exact value comparison for amounts
-        # Note: We don't need to store the matches result since we use exact equality for TRBBridge
-
-        # For TRBBridge, we expect exact equality
-        # Note: TRBBridge doesn't have a standard query object, pass None
-        await inspect(r, reported_value, trusted_value, disputes_q, metrics, logger, query=None)
+        # Dispute only when this pass is the one that records bad (first sight, or the
+        # transition out of unverified). A later replay hits the good/bad skip above.
+        await inspect(
+            r,
+            reported_value,
+            trusted_value,
+            disputes_q,
+            metrics,
+            logger,
+            query=None,
+        )
 
     return None
 
@@ -1963,12 +2186,7 @@ async def perform_dispute_verification(
 
                 # Determine dispute category
                 if metrics.metric.lower() == "equality":
-                    if metrics.warning_threshold == 1.0:
-                        result["dispute_category"] = "warning"
-                    elif metrics.minor_threshold == 1.0:
-                        result["dispute_category"] = "minor"
-                    elif metrics.major_threshold == 1.0:
-                        result["dispute_category"] = "major"
+                    result["dispute_category"] = equality_dispute_category(metrics)
                 else:
                     category = determine_dispute_category(
                         diff=final_diff,
@@ -1992,20 +2210,13 @@ async def perform_dispute_verification(
         # Single-check logic for TRBBridge queries (no fetcher available)
         logger.info(f"disputable: true, diff: {diff} (single-check mode)")
 
-        # For equality metrics, determine dispute level based on which threshold is set to 1.0
+        # For equality metrics, the dispute level is whichever threshold is set to 1.0
         if metrics.metric.lower() == "equality":
-            if metrics.warning_threshold == 1.0:
-                result["dispute_category"] = "warning"
+            category = equality_dispute_category(metrics)
+            if category is not None:
+                result["dispute_category"] = category
                 result["should_dispute"] = True
-                logger.info("Auto-disputing equality mismatch at warning level")
-            elif metrics.minor_threshold == 1.0:
-                result["dispute_category"] = "minor"
-                result["should_dispute"] = True
-                logger.info("Auto-disputing equality mismatch at minor level")
-            elif metrics.major_threshold == 1.0:
-                result["dispute_category"] = "major"
-                result["should_dispute"] = True
-                logger.info("Auto-disputing equality mismatch at major level")
+                logger.info(f"Auto-disputing equality mismatch at {category} level")
             else:
                 logger.debug("No dispute level configured for equality metric (no threshold set to 1.0)")
         else:
@@ -2116,12 +2327,7 @@ async def inspect(
 
     if disputable:
         if metrics.metric.lower() == "equality":
-            if metrics.warning_threshold == 1.0:
-                dispute_level = "warning"
-            elif metrics.minor_threshold == 1.0:
-                dispute_level = "minor"
-            elif metrics.major_threshold == 1.0:
-                dispute_level = "major"
+            dispute_level = equality_dispute_category(metrics)
         else:
             category = determine_dispute_category(
                 diff=diff,

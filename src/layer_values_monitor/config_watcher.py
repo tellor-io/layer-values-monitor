@@ -202,10 +202,11 @@ class ConfigWatcher:
             logger.error(f"Query type '{query_type}' missing 'metric' field")
             return None
 
-        # Merge: global defaults + query-specific overrides
+        # Merge: global defaults + query-type [defaults] table + query-specific overrides
         base_config = self.global_defaults.get(metric_type, {})
+        type_defaults = self.query_configs.get(query_type.lower(), {}).get("defaults", {})
         specific_config = self.get_query_config(query_id, query_type)
-        merged = {**base_config, **specific_config}
+        merged = {**base_config, **type_defaults, **specific_config}
 
         return Metrics(
             metric=metric_type,

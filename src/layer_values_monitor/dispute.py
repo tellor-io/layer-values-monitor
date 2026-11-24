@@ -6,7 +6,7 @@ import logging
 import subprocess
 from typing import Any
 
-from layer_values_monitor.custom_types import DisputeCategory, Msg
+from layer_values_monitor.custom_types import DisputeCategory, Metrics, Msg
 from layer_values_monitor.logger import console_logger, logger
 from layer_values_monitor.utils import remove_0x_prefix
 
@@ -162,6 +162,21 @@ async def propose_msg(
     except Exception as e:
         logger.error(f"failed to execute dispute msg: {e.__str__()}")
         return None
+
+
+def equality_dispute_category(metrics: Metrics) -> DisputeCategory | None:
+    """Return the equality dispute category named by whichever threshold is 1.0.
+
+    Equality disputes are not sized by a numeric diff. The configured level is the
+    threshold set to 1.0 (warning, then minor, then major). None when none is.
+    """
+    if metrics.warning_threshold == 1.0:
+        return "warning"
+    if metrics.minor_threshold == 1.0:
+        return "minor"
+    if metrics.major_threshold == 1.0:
+        return "major"
+    return None
 
 
 def determine_dispute_category(

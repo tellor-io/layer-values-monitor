@@ -59,9 +59,11 @@ These can be set in `.env` or passed as positional CLI arguments.
 **Simple (Infura):**
 - `INFURA_API_KEY` - Auto-configures mainnet (chain 1) and Sepolia (chain 11155111)
 
-**Advanced (Custom/Backup):**
-- `EVM_RPC_URLS_<CHAIN_ID>` - Comma-separated RPC URLs per chain
-  - Example: `EVM_RPC_URLS_1="https://ethrpc1.com,https://ethrpc2.com"`
+**Recommended (Custom/Backup):**
+- `EVM_RPC_URLS` - Comma-separated RPC URLs; applies to the EVM chain implied by `CHAIN_ID`
+  (tellor-1 -> chain 1, layertest-5 -> chain 11155111)
+  - Example: `EVM_RPC_URLS="https://ethrpc1.com,https://ethrpc2.com"`
+- `EVM_RPC_URLS_<chain_id>` - Optional per-chain override; wins over the plain var
   - Example: `EVM_RPC_URLS_11155111="https://sepolia1.com,https://sepolia2.com"`
 
 ### TRB Bridge Monitoring
@@ -69,6 +71,53 @@ Required only when monitoring TRBBridge/TRBBridgeV2 query types.
 - `TRBBRIDGE_CONTRACT_ADDRESS` - Bridge contract address for TRBBridge
 - `TRBBRIDGEV2_CONTRACT_ADDRESS` - Bridge contract address for TRBBridgeV2
 - `TRBBRIDGE_CHAIN_ID` - Bridge chain ID, shared by both versions (code default: `1`; set `11155111` for Sepolia)
+
+Built-in defaults are selected by the monitored Layer chain (`CHAIN_ID`);
+the env vars above are overrides, required only on chains without a built-in default
+(e.g. local devnets):
+- `tellor-1` -> mainnet TokenBridgeV2 `0x6ec401744008f4B018Ed9A36f76e6629799Ee50E`
+  (`TRBBRIDGEV2_CONTRACT_ADDRESS` only; `TRBBRIDGE_CONTRACT_ADDRESS` stays unset unless
+  you set it), `TRBBRIDGE_CHAIN_ID=1`
+- `layertest-5` -> Sepolia TokenBridge `0x62733e63499a25E35844c91275d4c3bdb159D29d` (v1) and
+  TokenBridgeV2 `0x55355157703A44f7516FBB831333317E98944e32`, `TRBBRIDGE_CHAIN_ID=11155111`
+  (exact match only — layertest-8 and other testnets do NOT inherit these; set the env vars)
+
+For `tellor-1`, `CHAIN_ID` + `EVM_RPC_URLS` covers TokenBridgeV2. `layertest-5` also
+bakes in the Sepolia v1 address. On any other chain the env vars are required. A shared
+address (both env vars checksum-equal) is queried as TRBBridgeV2.
+
+Startup gate: every configured bridge RPC (`EVM_RPC_URLS[_<chain>]` / Infura) is probed once at
+boot; an endpoint answering a different chain ID than the resolved `TRBBRIDGE_CHAIN_ID` is
+FATAL (the monitor refuses to start — a wrong-chain endpoint could otherwise produce wrong
+trusted values). A startup RPC outage only warns; runtime retries still apply.
+
+### TRB Bridge Verification Ledger (two-tier)
+Every bridge report is journaled to a SQLite ledger (`data/bridge_ledger.db` by default).
+Row statuses are exactly three — `good`, `bad`, `unverified` — and nothing is terminal but
+good/bad. Both tiers share one verdict helper (`get_bridge_verdict`). Tier 1 reads once
+and does not wait: a match is `good`; a zero-struct or a mismatch is left `unverified`
+for the reconciler. Tier 2 keeps the confirm read — a zero-struct or a mismatch waits
+`BRIDGE_CONFIRM_SECONDS` and re-reads, and that confirm read decides `good` or `bad`.
+
+- **Tier 1** (stream) does not hold the new-report queue for the confirm delay. A match is
+  recorded `good` and inspected immediately, with nothing queued. A zero-struct or a mismatch
+  is recorded `unverified` ("waiting for the confirm read") with `state_ts` already old enough
+  for the next reconciler cycle; no dispute and no Discord alert on that path. A full RPC
+  outage records `unverified` + a "NO FUNCTIONAL RPC AVAILABLE" alert. A replay of a row
+  already `good` or `bad` is skipped.
+- **Tier 2** (reconciler task) runs a cycle at startup, then every `BRIDGE_RECONCILE_INTERVAL`
+  seconds: it re-reads every `unverified` row **forever** with the confirm read (no retry cap,
+  no expiry — a late `bad` inside the 12h window disputes, one after the window alerts
+  "LATE VERDICT"). Dispute latency for a stream mismatch is one reconcile interval plus the
+  confirm delay. It escalates once per row ~10h in with an "RPCs DOWN — ABOUT TO BE UNDISPUTABLE" alert.
+- `BRIDGE_LEDGER_PATH` - Ledger SQLite path (default: `./data/bridge_ledger.db`)
+- `BRIDGE_RECONCILE_INTERVAL` - Seconds between reconciler cycles (default: `120`)
+- `BRIDGE_CONFIRM_SECONDS` - Confirm re-read delay before a zero/mismatch goes `bad` (default: `60`)
+
+Note: bridge **auto-dispute** requires the equality dispute threshold to be enabled
+(`warning_threshold = 1.0` in `[queries.trbbridgev2.defaults]`, per LVM threshold semantics —
+`0.0` disables disputes; alert-only mode still records `bad`). The example config ships with
+this enabled for trbbridgev2; trbbridge and evmcall stay alert-only.
 
 ### Saga Guardian (Contract Pausing)
 Required only when starting with `--enable-saga-guard`.
@@ -112,7 +161,11 @@ Required only when starting with `--enable-saga-guard`.
 
 [queries.trbbridge]
     [queries.trbbridge.defaults]
-    # Uses global equality defaults
+    # Uses global equality defaults (alert on mismatch, no disputes)
+
+[queries.trbbridgev2]
+    [queries.trbbridgev2.defaults]
+    warning_threshold = 1.0  # Auto-dispute double-confirmed mismatches (reconciler)
 
 [queries.evmcall]
     [queries.evmcall.defaults]
